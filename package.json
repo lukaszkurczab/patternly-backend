@@ -1,0 +1,37 @@
+{
+  "name": "patternly-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "node scripts/lint.mjs",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "openapi:generate": "node --import tsx scripts/generate-openapi.ts",
+    "openapi:check": "npm run openapi:generate && git diff --exit-code -- openapi/patternly-v1.json",
+    "frontend:client:check": "node scripts/check-frontend-client.mjs",
+    "db:check": "drizzle-kit check",
+    "db:migrate": "drizzle-kit migrate",
+    "db:generate": "drizzle-kit generate",
+    "ci": "npm run lint && npm run typecheck && npm run db:check && npm test && npm run openapi:check && npm run build"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2",
+    "fastify": "^5.12.1",
+    "firebase-admin": "^14.2.0",
+    "pg": "^8.23.0",
+    "pino": "^9.7.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "@types/pg": "^8.15.6",
+    "drizzle-kit": "^0.31.4",
+    "tsx": "^4.21.0",
+    "typescript": "~6.0.3"
+  }
+}

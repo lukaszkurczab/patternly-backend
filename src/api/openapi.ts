@@ -1,0 +1,44 @@
+export const OPENAPI_DOCUMENT = Object.freeze({
+  openapi: "3.1.0",
+  info: { title: "Patternly Backend API", version: "1.0.0" },
+  servers: [{ url: "/" }],
+  security: [{ bearerAuth: [] }],
+  paths: {
+    "/health": { get: { security: [], responses: { "200": { description: "Process is alive" } } } },
+    "/ready": { get: { security: [], responses: { "200": { description: "Dependencies are ready" }, "503": { description: "Dependency unavailable" } } } },
+    "/openapi.json": { get: { security: [], responses: { "200": { description: "OpenAPI document" } } } },
+    "/v1/me": { get: { responses: { "200": { description: "Canonical account identity" }, "401": { description: "Authentication required" } } } },
+    "/v1/entitlements": { get: { responses: { "200": { description: "Account entitlement projection" } } } },
+    "/v1/progress": { get: { responses: { "200": { description: "Canonical progress state" } } } },
+    "/v1/progress/sync": { post: { requestBody: { required: true, content: { "application/json": { schema: { "$ref": "#/components/schemas/SyncRequest" } } } }, responses: { "200": { description: "Applied or duplicate mutations" }, "409": { description: "Progress version conflict" } } } },
+    "/v1/tracks": { get: { responses: { "200": { description: "Account track access" } } } },
+    "/v1/content/versions": { get: { responses: { "200": { description: "Current immutable content metadata" } } } },
+  },
+  components: {
+    securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "Firebase ID token" } },
+    schemas: {
+      ProgressMutation: {
+        type: "object",
+        required: ["mutationId", "kind", "trackId", "targetId", "expectedVersion", "state"],
+        properties: {
+          mutationId: { type: "string", minLength: 16, maxLength: 128 },
+          kind: { type: "string", enum: ["node", "item"] },
+          trackId: { type: "string" },
+          targetId: { type: "string" },
+          expectedVersion: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
+          state: { type: "object", additionalProperties: true },
+        },
+      },
+      SyncRequest: {
+        type: "object",
+        required: ["mutations"],
+        properties: {
+          deviceId: { anyOf: [{ type: "string", format: "uuid" }, { type: "null" }] },
+          mutations: { type: "array", minItems: 1, maxItems: 100, items: { "$ref": "#/components/schemas/ProgressMutation" } },
+        },
+      },
+    },
+  },
+});
+
+export type OpenApiDocument = typeof OPENAPI_DOCUMENT;

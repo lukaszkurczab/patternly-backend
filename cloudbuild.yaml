@@ -1,0 +1,14 @@
+steps:
+  - name: node:22
+    entrypoint: npm
+    args: ["ci"]
+  - name: node:22
+    entrypoint: npm
+    args: ["run", "ci"]
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-t", "${_IMAGE}", "."]
+images: ["${_IMAGE}"]
+substitutions:
+  _IMAGE: "${LOCATION}-docker.pkg.dev/${PROJECT_ID}/patternly/patternly-backend:${COMMIT_SHA}"
+options:
+  logging: CLOUD_LOGGING_ONLY
