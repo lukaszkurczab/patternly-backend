@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { buildApplication } from "../src/api/app.js";
 import { identityDocumentId } from "../src/infrastructure/firestore/paths.js";
 import { createContentReportSchema } from "../src/modules/content-reports/contracts.js";
-import { clearFirestore, createAuthUser, createEmulatorContext, firestore, type EmulatorContext } from "./support.js";
+import { clearFirestore, createAuthUser, createEmulatorContext, firestore, testEnvironment, type EmulatorContext } from "./support.js";
 
 const reportBody = (clientSubmissionId: string) => createContentReportSchema.parse({
   clientSubmissionId,
@@ -49,6 +50,28 @@ test("Firebase Auth identity is mapped to one Firestore account in a transaction
   assert.equal(users.size, 1);
   assert.equal(identities.size, 1);
   assert.equal(identities.docs[0]?.data().userId, first.json().user.id);
+  assert.equal(identities.docs[0]?.data().provider, "firebase");
+  assert.equal(identities.docs[0]?.data().subject, auth.localId);
+});
+
+test("invalid Firebase bearer tokens fail closed without exposing identity details", async () => {
+  const response = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: "Bearer invalid-emulator-bearer" } });
+  assert.equal(response.statusCode, 401);
+  assert.deepEqual(response.json(), { error: { code: "authentication_required" } });
+});
+
+test("revoked Firebase verifier results fail closed at the backend boundary", async () => {
+  const revokedApp = buildApplication({
+    environment: testEnvironment,
+    firestore: null,
+    verifier: { verify: async () => { throw new Error("firebase_token_invalid"); } },
+    appCheckVerifier: null,
+    stores: context.stores,
+  });
+  const response = await revokedApp.inject({ method: "GET", url: "/v1/me", headers: { authorization: "Bearer revoked-session" } });
+  await revokedApp.close();
+  assert.equal(response.statusCode, 401);
+  assert.deepEqual(response.json(), { error: { code: "authentication_required" } });
 });
 
 test("Firestore transaction preserves sync CAS and idempotency under concurrent retries", async () => {

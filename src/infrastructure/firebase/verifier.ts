@@ -19,7 +19,12 @@ export function createFirebaseTokenVerifier(environment: Environment): IdentityT
   const auth = getAuth(app);
   return Object.freeze({
     async verify(idToken: string): Promise<VerifiedIdentity> {
-      const claims = await auth.verifyIdToken(idToken, true);
+      let claims: Awaited<ReturnType<typeof auth.verifyIdToken>>;
+      try {
+        claims = await auth.verifyIdToken(idToken, true);
+      } catch {
+        throw new Error("firebase_token_invalid");
+      }
       if (claims.aud !== environment.firebaseProjectId) throw new Error("firebase_project_mismatch");
       if (claims.iss !== (environment.firebaseAuthIssuer ?? `https://securetoken.google.com/${environment.firebaseProjectId}`)) throw new Error("firebase_issuer_mismatch");
       if (!claims.uid || typeof claims.uid !== "string") throw new Error("firebase_subject_missing");
