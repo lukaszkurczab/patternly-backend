@@ -1,72 +1,67 @@
-import type { BackendStores } from "../src/infrastructure/database/stores.js";
-import type { ContentVersionStore, ContentVersionView } from "../src/modules/content/store.js";
-import type { ContentReportStore, ContentReportView, CreateContentReport } from "../src/modules/content-reports/contracts.js";
-import type { DeviceStore } from "../src/modules/devices/store.js";
-import type { EntitlementStore, EntitlementView } from "../src/modules/entitlements/store.js";
-import type { AuthenticatedIdentity } from "../src/modules/auth/contracts.js";
-import type { ProgressMutation, ProgressRecord, ProgressStore, SyncBatchResult } from "../src/modules/progress/contracts.js";
-import type { TrackAccessView, TrackStore } from "../src/modules/tracks/store.js";
-import type { UserProfile, UserStore } from "../src/modules/users/store.js";
+import { randomUUID } from "node:crypto";
+import { getFirestore } from "firebase-admin/firestore";
+import { buildApplication } from "../src/api/app.js";
+import { loadEnvironment, type Environment } from "../src/config/environment.js";
+import { createFirebaseAppCheckVerifier } from "../src/infrastructure/firebase/appCheckVerifier.js";
+import { createFirestoreRuntime } from "../src/infrastructure/firestore/client.js";
+import { createFirestoreStores, type BackendStores } from "../src/infrastructure/firestore/stores.js";
+import { createFirebaseTokenVerifier } from "../src/infrastructure/firebase/verifier.js";
 
-export function createMemoryStores(): BackendStores {
-  const userId = "3f7b5b37-9e9a-4f4f-9db1-2bcbbaea3e29";
-  const profile: UserProfile = { id: userId, createdAt: "2026-08-21T00:00:00.000Z", identity: { provider: "firebase", subject: "firebase-subject", email: "learner@example.com", emailVerified: true } };
-  const records = new Map<string, ProgressRecord>();
-  const mutationIds = new Set<string>();
+const projectId = "patternly-app-sandbox";
+const firestoreHost = process.env.FIRESTORE_EMULATOR_HOST;
+const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST;
+if (!firestoreHost || !authHost) throw new Error("firebase_emulator_suite_required");
 
-  const users: UserStore = {
-    async ensureUser(identity: AuthenticatedIdentity) { if (identity.subject !== profile.identity.subject) throw new Error("unexpected_identity"); return { userId }; },
-    async readProfile(requestedUserId: string) { return requestedUserId === userId ? profile : null; },
-  };
-  const progress: ProgressStore = {
-    async read(requestedUserId) { return requestedUserId === userId ? [...records.values()] : []; },
-    async applyBatch(requestedUserId, _deviceId, mutations: readonly ProgressMutation[]): Promise<SyncBatchResult> {
-      if (requestedUserId !== userId) throw new Error("unexpected_user");
-      const applied: ProgressRecord[] = [];
-      const duplicates: string[] = [];
-      const conflicts: SyncBatchResult["conflicts"][number][] = [];
-      for (const mutation of mutations) {
-        if (mutationIds.has(mutation.mutationId)) { duplicates.push(mutation.mutationId); continue; }
-        const key = `${mutation.kind}:${mutation.trackId}:${mutation.targetId}`;
-        const current = records.get(key) ?? null;
-        if ((current?.version ?? null) !== mutation.expectedVersion) { conflicts.push({ mutationId: mutation.mutationId, code: "version_conflict", current }); continue; }
-        const next: ProgressRecord = { kind: mutation.kind, trackId: mutation.trackId, targetId: mutation.targetId, version: (current?.version ?? 0) + 1, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt: "2026-08-21T00:00:00.000Z" };
-        records.set(key, next);
-        mutationIds.add(mutation.mutationId);
-        applied.push(next);
-      }
-      return { applied, duplicates, conflicts };
-    },
-  };
-  const entitlements: EntitlementStore = { async read() { return [] as readonly EntitlementView[]; } };
-  const tracks: TrackStore = { async readAccess() { return [] as readonly TrackAccessView[]; } };
-  const content: ContentVersionStore = { async readCurrent() { return [] as readonly ContentVersionView[]; } };
-  const devices: DeviceStore = { async touch() { return "device-id"; } };
-  const reports = new Map<string, ContentReportView>();
-  const contentReports: ContentReportStore = {
-    async create(requestedUserId: string, input: CreateContentReport) {
-      if (requestedUserId !== userId) throw new Error("unexpected_user");
-      const existing = reports.get(input.clientSubmissionId);
-      if (existing) return { report: existing, duplicate: true };
-      const report: ContentReportView = { id: `report-${reports.size + 1}`, clientSubmissionId: input.clientSubmissionId, trackId: input.trackId, contentVersion: input.contentVersion, itemId: input.itemId, reason: input.reason, description: input.description, status: "open", createdAt: "2026-08-25T00:00:00.000Z", updatedAt: "2026-08-25T00:00:00.000Z" };
-      reports.set(input.clientSubmissionId, report);
-      return { report, duplicate: false };
-    },
-    async listOpen() { return [...reports.values()]; },
-  };
-  return { users, devices, progress, entitlements, tracks, content, contentReports };
+export const testEnvironment: Environment = loadEnvironment({
+  NODE_ENV: "test",
+  HOST: "127.0.0.1",
+  PORT: "8080",
+  LOG_LEVEL: "silent",
+  FIREBASE_PROJECT_ID: projectId,
+  FIREBASE_AUTH_ISSUER: `https://securetoken.google.com/${projectId}`,
+  ADMINISTRATOR_EMAIL: "lukasz.kurczab@gmail.com",
+  REPORT_RATE_LIMIT_HASH_SECRET: "test-only-report-rate-limit-secret-0123456789",
+  REPORT_RATE_LIMIT_MAX: "2",
+  REPORT_RATE_LIMIT_WINDOW_SECONDS: "3600",
+});
+
+export type EmulatorContext = Readonly<{
+  app: ReturnType<typeof buildApplication>;
+  stores: BackendStores;
+  close: () => Promise<void>;
+}>;
+
+export function createEmulatorContext(): EmulatorContext {
+  const runtime = createFirestoreRuntime(testEnvironment);
+  const stores = createFirestoreStores(runtime, testEnvironment);
+  const app = buildApplication({
+    environment: testEnvironment,
+    firestore: runtime,
+    verifier: createFirebaseTokenVerifier(testEnvironment),
+    appCheckVerifier: createFirebaseAppCheckVerifier(testEnvironment),
+    stores,
+  });
+  return Object.freeze({ app, stores, close: async () => { await app.close(); await runtime.close(); } });
 }
 
-export const testEnvironment = {
-  nodeEnv: "test" as const,
-  port: 8080,
-  host: "127.0.0.1",
-  logLevel: "silent",
-  databaseUrl: undefined,
-  firebaseProjectId: "patternly-app-sandbox",
-  firebaseAuthIssuer: "https://securetoken.google.com/patternly-app-sandbox",
-  administratorEmail: "lukasz.kurczab@gmail.com",
-  revenueCatApiBaseUrl: "https://api.revenuecat.com",
-  revenueCatSecretName: undefined,
-  contentCatalogOrigin: undefined,
-};
+export async function clearFirestore(): Promise<void> {
+  const response = await fetch(`http://${firestoreHost}/emulator/v1/projects/${projectId}/databases/(default)/documents`, { method: "DELETE" });
+  if (!response.ok && response.status !== 404) throw new Error(`firestore_clear_failed:${response.status}`);
+}
+
+export async function createAuthUser(): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
+  const email = `emulator-${randomUUID()}@example.com`;
+  const response = await fetch(`http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=patternly-emulator`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email, password: "Patternly-test-123!", returnSecureToken: true }),
+  });
+  if (!response.ok) throw new Error(`auth_emulator_signup_failed:${response.status}:${await response.text()}`);
+  const payload = await response.json() as { email: string; idToken: string; localId: string };
+  if (!payload.email || !payload.idToken || !payload.localId) throw new Error("auth_emulator_signup_invalid");
+  return Object.freeze(payload);
+}
+
+export function firestore() {
+  return getFirestore();
+}

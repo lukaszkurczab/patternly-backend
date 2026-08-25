@@ -1,6 +1,7 @@
-import { and, eq } from "drizzle-orm";
-import type { Database } from "../../infrastructure/database/client.js";
-import { identities, users } from "../../infrastructure/database/schema.js";
+import { randomUUID } from "node:crypto";
+import type { Firestore } from "firebase-admin/firestore";
+import { COLLECTIONS, identityDocumentId } from "../../infrastructure/firestore/paths.js";
+import { asIsoString, asRecord, now } from "../../infrastructure/firestore/values.js";
 import type { AuthenticatedIdentity } from "../auth/contracts.js";
 
 export type UserProfile = Readonly<{
@@ -12,51 +13,87 @@ export type UserProfile = Readonly<{
 export interface UserStore {
   ensureUser(identity: AuthenticatedIdentity): Promise<Readonly<{ userId: string }>>;
   readProfile(userId: string): Promise<UserProfile | null>;
+  deleteAccount(userId: string): Promise<void>;
 }
 
-export class DrizzleUserStore implements UserStore {
-  public constructor(private readonly db: Database) {}
+export class FirestoreUserStore implements UserStore {
+  public constructor(private readonly db: Firestore) {}
 
   public async ensureUser(identity: AuthenticatedIdentity): Promise<Readonly<{ userId: string }>> {
-    const existing = await this.db.select({ userId: identities.userId })
-      .from(identities)
-      .where(and(eq(identities.provider, identity.provider), eq(identities.subject, identity.subject)))
-      .limit(1);
-    const found = existing[0];
-    if (found) return Object.freeze({ userId: found.userId });
-    const created = await this.db.transaction(async (tx) => {
-      const [user] = await tx.insert(users).values({}).returning({ id: users.id });
-      if (!user) throw new Error("user_insert_failed");
-      const [linked] = await tx.insert(identities).values({
-        userId: user.id,
+    const identityId = identityDocumentId(identity.provider, identity.subject);
+    const identityRef = this.db.collection(COLLECTIONS.identityMappings).doc(identityId);
+    const deletedIdentityRef = this.db.collection(COLLECTIONS.deletedIdentities).doc(identityId);
+    const userId = randomUUID();
+    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+    const createdAt = now();
+    const result = await this.db.runTransaction(async (transaction) => {
+      const [identitySnapshot, deletedSnapshot] = await transaction.getAll(identityRef, deletedIdentityRef);
+      if (deletedSnapshot?.exists) throw new Error("account_deleted");
+      if (identitySnapshot?.exists) {
+        const data = asRecord(identitySnapshot.data(), "identity_mapping");
+        const existingUserId = data.userId;
+        if (typeof existingUserId !== "string") throw new Error("identity_mapping_invalid");
+        const existingUserRef = this.db.collection(COLLECTIONS.users).doc(existingUserId);
+        const userSnapshot = await transaction.get(existingUserRef);
+        if (!userSnapshot.exists || asRecord(userSnapshot.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
+        transaction.update(identityRef, {
+          ...(identity.email === undefined ? {} : { email: identity.email }),
+          emailVerified: identity.emailVerified,
+          updatedAt: createdAt,
+        });
+        return existingUserId;
+      }
+      transaction.create(userRef, { createdAt, updatedAt: createdAt });
+      transaction.create(identityRef, {
         provider: identity.provider,
         subject: identity.subject,
+        userId,
         ...(identity.email === undefined ? {} : { email: identity.email }),
         emailVerified: identity.emailVerified,
-      }).returning({ userId: identities.userId });
-      if (!linked) throw new Error("identity_insert_failed");
-      return linked;
+        createdAt,
+        updatedAt: createdAt,
+      });
+      return userId;
     });
-    return Object.freeze({ userId: created.userId });
+    return Object.freeze({ userId: result });
   }
 
   public async readProfile(userId: string): Promise<UserProfile | null> {
-    const rows = await this.db.select({ user: users, identity: identities })
-      .from(users)
-      .innerJoin(identities, eq(identities.userId, users.id))
-      .where(eq(users.id, userId))
-      .limit(1);
-    const row = rows[0];
-    if (!row || row.user.deletedAt) return null;
+    const userSnapshot = await this.db.collection(COLLECTIONS.users).doc(userId).get();
+    if (!userSnapshot.exists) return null;
+    const user = asRecord(userSnapshot.data(), "user");
+    if (user.deletedAt !== undefined) return null;
+    const identities = await this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId).limit(1).get();
+    const identitySnapshot = identities.docs[0];
+    if (!identitySnapshot) return null;
+    const identity = asRecord(identitySnapshot.data(), "identity_mapping");
+    if (typeof identity.provider !== "string" || typeof identity.subject !== "string" || typeof identity.emailVerified !== "boolean") throw new Error("identity_mapping_invalid");
     return Object.freeze({
-      id: row.user.id,
-      createdAt: row.user.createdAt.toISOString(),
+      id: userId,
+      createdAt: asIsoString(user.createdAt, "user_created_at"),
       identity: Object.freeze({
-        provider: row.identity.provider,
-        subject: row.identity.subject,
-        email: row.identity.email,
-        emailVerified: row.identity.emailVerified,
+        provider: identity.provider,
+        subject: identity.subject,
+        email: typeof identity.email === "string" ? identity.email : null,
+        emailVerified: identity.emailVerified,
       }),
     });
+  }
+
+  public async deleteAccount(userId: string): Promise<void> {
+    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+    const identitySnapshot = await this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId).get();
+    const recordedAt = now();
+    await this.db.runTransaction(async (transaction) => {
+      const userSnapshot = await transaction.get(userRef);
+      if (!userSnapshot.exists) return;
+      for (const identity of identitySnapshot.docs) {
+        const tombstoneRef = this.db.collection(COLLECTIONS.deletedIdentities).doc(identity.id);
+        transaction.create(tombstoneRef, { deletedAt: recordedAt, provider: asRecord(identity.data(), "identity_mapping").provider });
+        transaction.delete(identity.ref);
+      }
+      transaction.update(userRef, { deletedAt: recordedAt, updatedAt: recordedAt });
+    });
+    await this.db.recursiveDelete(userRef);
   }
 }

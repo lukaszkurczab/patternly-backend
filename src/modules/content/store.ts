@@ -1,6 +1,6 @@
-import { and, eq } from "drizzle-orm";
-import type { Database } from "../../infrastructure/database/client.js";
-import { contentVersions } from "../../infrastructure/database/schema.js";
+import type { Firestore } from "firebase-admin/firestore";
+import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
+import { asIsoString, asRecord } from "../../infrastructure/firestore/values.js";
 
 export type ContentVersionView = Readonly<{
   trackId: string;
@@ -14,11 +14,15 @@ export interface ContentVersionStore {
   readCurrent(): Promise<readonly ContentVersionView[]>;
 }
 
-export class DrizzleContentVersionStore implements ContentVersionStore {
-  public constructor(private readonly db: Database) {}
+export class FirestoreContentVersionStore implements ContentVersionStore {
+  public constructor(private readonly db: Firestore) {}
 
   public async readCurrent(): Promise<readonly ContentVersionView[]> {
-    const rows = await this.db.select().from(contentVersions).where(eq(contentVersions.isCurrent, true));
-    return Object.freeze(rows.map((row) => Object.freeze({ trackId: row.trackId, version: row.version, checksumSha256: row.checksumSha256, packageUri: row.packageUri, publishedAt: row.publishedAt.toISOString() })));
+    const snapshot = await this.db.collection(COLLECTIONS.contentVersions).where("isCurrent", "==", true).get();
+    return Object.freeze(snapshot.docs.map((document) => {
+      const row = asRecord(document.data(), "content_version");
+      if (typeof row.trackId !== "string" || typeof row.version !== "string" || typeof row.checksumSha256 !== "string" || typeof row.packageUri !== "string") throw new Error("content_version_record_invalid");
+      return Object.freeze({ trackId: row.trackId, version: row.version, checksumSha256: row.checksumSha256, packageUri: row.packageUri, publishedAt: asIsoString(row.publishedAt, "content_version_published_at") });
+    }));
   }
 }

@@ -120,6 +120,17 @@
     },
     "/v1/content/reports": {
       "post": {
+        "security": [
+          {
+            "appCheckAuth": []
+          }
+        ],
+        "description": "App Check is required. Account and contact linkage are stored only when explicitly requested; account linkage additionally requires an optional Firebase bearer token.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FirebaseAppCheck"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -139,6 +150,12 @@
           },
           "400": {
             "description": "Invalid report"
+          },
+          "401": {
+            "description": "Valid App Check required or account linkage authentication required"
+          },
+          "429": {
+            "description": "Anonymous report rate limit exceeded"
           }
         }
       }
@@ -162,6 +179,22 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "Firebase ID token"
+      },
+      "appCheckAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Firebase-AppCheck"
+      }
+    },
+    "parameters": {
+      "FirebaseAppCheck": {
+        "name": "X-Firebase-AppCheck",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "schemas": {
@@ -276,6 +309,16 @@
             "type": "string",
             "minLength": 10,
             "maxLength": 2000
+          },
+          "linkAccount": {
+            "type": "boolean",
+            "default": false,
+            "description": "Explicit opt-in to attach the authenticated Patternly account identifier."
+          },
+          "contactEmail": {
+            "type": "string",
+            "format": "email",
+            "description": "Explicit opt-in contact address; never inferred from authentication."
           }
         }
       }

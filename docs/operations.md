@@ -13,10 +13,13 @@ deterministic OpenAPI check and production build.
 ## Cloud Run contract
 
 Builds produce an image tagged with the immutable Cloud Build commit SHA.
-Cloud Run must provide `DATABASE_URL`, `FIREBASE_PROJECT_ID`,
-`FIREBASE_AUTH_ISSUER` and the RevenueCat Secret Manager reference through
-runtime configuration. Production startup fails if the required private
-configuration is absent.
+Cloud Run must provide `FIREBASE_PROJECT_ID`, `FIREBASE_AUTH_ISSUER`,
+`REPORT_RATE_LIMIT_HASH_SECRET` and the RevenueCat Secret Manager reference
+through runtime configuration. Production startup fails if the required
+private configuration is absent. Firebase Admin SDK uses the Cloud Run
+runtime identity for Firestore; no client or external database credentials are
+configured.
 
-Database migration is an explicit deployment operation. The application does
-not silently create or repair schema at request time.
+Firestore collection fields, TTL settings and the seven-day PITR target are
+operational configuration, not request-time schema creation. The application
+does not silently create or repair provider configuration at request time.

@@ -1,58 +1,63 @@
-import { and, eq } from "drizzle-orm";
-import type { Database } from "../../infrastructure/database/client.js";
-import { itemProgress, nodeProgress, syncMutations } from "../../infrastructure/database/schema.js";
+import type { Firestore } from "firebase-admin/firestore";
+import { COLLECTIONS, progressDocumentId } from "../../infrastructure/firestore/paths.js";
+import { asIsoString, asRecord, now } from "../../infrastructure/firestore/values.js";
 import type { ProgressMutation, ProgressRecord, ProgressStore, SyncBatchResult } from "./contracts.js";
 
-const asProgressRecord = (row: typeof nodeProgress.$inferSelect | typeof itemProgress.$inferSelect): ProgressRecord => ({
-  kind: "nodeId" in row ? "node" : "item",
-  trackId: row.trackId,
-  targetId: "nodeId" in row ? row.nodeId : row.itemId,
-  version: row.version,
-  state: row.state,
-  lastMutationId: row.lastMutationId,
-  updatedAt: row.updatedAt.toISOString(),
-});
+const toView = (data: Record<string, unknown>): ProgressRecord => {
+  if (data.kind !== "node" && data.kind !== "item" || typeof data.trackId !== "string" || typeof data.targetId !== "string" || typeof data.version !== "number" || typeof data.lastMutationId !== "string") throw new Error("progress_record_invalid");
+  return Object.freeze({ kind: data.kind, trackId: data.trackId, targetId: data.targetId, version: data.version, state: asRecord(data.state, "progress_state"), lastMutationId: data.lastMutationId, updatedAt: asIsoString(data.updatedAt, "progress_updated_at") });
+};
 
-export class DrizzleProgressStore implements ProgressStore {
-  public constructor(private readonly db: Database) {}
+export class FirestoreProgressStore implements ProgressStore {
+  public constructor(private readonly db: Firestore) {}
 
   public async read(userId: string): Promise<readonly ProgressRecord[]> {
-    const [nodes, items] = await Promise.all([
-      this.db.select().from(nodeProgress).where(eq(nodeProgress.userId, userId)),
-      this.db.select().from(itemProgress).where(eq(itemProgress.userId, userId)),
-    ]);
-    return Object.freeze([...nodes.map(asProgressRecord), ...items.map(asProgressRecord)]);
+    const snapshot = await this.db.collection(COLLECTIONS.users).doc(userId).collection("progress").get();
+    return Object.freeze(snapshot.docs.map((document) => toView(asRecord(document.data(), "progress"))));
   }
 
   public async applyBatch(userId: string, deviceId: string | null, mutations: readonly ProgressMutation[]): Promise<SyncBatchResult> {
-    return this.db.transaction(async (tx) => {
+    return this.db.runTransaction(async (transaction) => {
+      const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+      const progressRefs = mutations.map((mutation) => userRef.collection("progress").doc(progressDocumentId(mutation)));
+      const mutationRefs = mutations.map((mutation) => userRef.collection("syncMutations").doc(mutation.mutationId));
+      const snapshots = await transaction.getAll(...progressRefs, ...mutationRefs);
+      const progressSnapshots = snapshots.slice(0, mutations.length);
+      const mutationSnapshots = snapshots.slice(mutations.length);
       const applied: ProgressRecord[] = [];
       const duplicates: string[] = [];
       const conflicts: Array<SyncBatchResult["conflicts"][number]> = [];
-      for (const mutation of mutations) {
-        const duplicate = await tx.select({ mutationId: syncMutations.mutationId })
-          .from(syncMutations)
-          .where(and(eq(syncMutations.userId, userId), eq(syncMutations.mutationId, mutation.mutationId)))
-          .limit(1);
-        if (duplicate[0]) {
+      const currentByKey = new Map<string, ProgressRecord | null>();
+      const appliedMutationIds = new Set<string>();
+      for (let index = 0; index < mutations.length; index += 1) {
+        const mutation = mutations[index]!;
+        currentByKey.set(progressKey(mutation), progressSnapshots[index]!.exists ? toView(asRecord(progressSnapshots[index]!.data(), "progress")) : null);
+      }
+      for (let mutationIndex = 0; mutationIndex < mutations.length; mutationIndex += 1) {
+        const mutation = mutations[mutationIndex]!;
+        if (mutationSnapshots[mutationIndex]!.exists || appliedMutationIds.has(mutation.mutationId)) {
           duplicates.push(mutation.mutationId);
           continue;
         }
-        const current = await readCurrent(tx, userId, mutation);
+        const key = progressKey(mutation);
+        const current = currentByKey.get(key) ?? null;
         if ((current?.version ?? null) !== mutation.expectedVersion) {
           conflicts.push({ mutationId: mutation.mutationId, code: "version_conflict", current });
           continue;
         }
         const nextVersion = (current?.version ?? 0) + 1;
-        const updated = await writeCurrent(tx, userId, mutation, nextVersion);
-        await tx.insert(syncMutations).values({
-          userId,
+        const updatedAt = now();
+        const updated: ProgressRecord = Object.freeze({ kind: mutation.kind, trackId: mutation.trackId, targetId: mutation.targetId, version: nextVersion, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt: updatedAt.toDate().toISOString() });
+        transaction.set(progressRefs[mutationIndex]!, { kind: mutation.kind, trackId: mutation.trackId, targetId: mutation.targetId, version: nextVersion, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt }, { merge: true });
+        transaction.create(mutationRefs[mutationIndex]!, {
           ...(deviceId === null ? {} : { deviceId }),
           mutationId: mutation.mutationId,
           kind: mutation.kind,
-          payload: mutation.state,
           appliedVersion: nextVersion,
+          createdAt: updatedAt,
         });
+        currentByKey.set(key, updated);
+        appliedMutationIds.add(mutation.mutationId);
         applied.push(updated);
       }
       return Object.freeze({ applied: Object.freeze(applied), duplicates: Object.freeze(duplicates), conflicts: Object.freeze(conflicts) });
@@ -60,24 +65,6 @@ export class DrizzleProgressStore implements ProgressStore {
   }
 }
 
-type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
-
-async function readCurrent(tx: Transaction, userId: string, mutation: ProgressMutation): Promise<ProgressRecord | null> {
-  if (mutation.kind === "node") {
-    const rows = await tx.select().from(nodeProgress).where(and(eq(nodeProgress.userId, userId), eq(nodeProgress.trackId, mutation.trackId), eq(nodeProgress.nodeId, mutation.targetId))).limit(1);
-    return rows[0] ? asProgressRecord(rows[0]) : null;
-  }
-  const rows = await tx.select().from(itemProgress).where(and(eq(itemProgress.userId, userId), eq(itemProgress.trackId, mutation.trackId), eq(itemProgress.itemId, mutation.targetId))).limit(1);
-  return rows[0] ? asProgressRecord(rows[0]) : null;
-}
-
-async function writeCurrent(tx: Transaction, userId: string, mutation: ProgressMutation, version: number): Promise<ProgressRecord> {
-  if (mutation.kind === "node") {
-    const [row] = await tx.insert(nodeProgress).values({ userId, trackId: mutation.trackId, nodeId: mutation.targetId, version, state: mutation.state, lastMutationId: mutation.mutationId }).onConflictDoUpdate({ target: [nodeProgress.userId, nodeProgress.trackId, nodeProgress.nodeId], set: { version, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt: new Date() } }).returning();
-    if (!row) throw new Error("node_progress_write_failed");
-    return asProgressRecord(row);
-  }
-  const [row] = await tx.insert(itemProgress).values({ userId, trackId: mutation.trackId, itemId: mutation.targetId, version, state: mutation.state, lastMutationId: mutation.mutationId }).onConflictDoUpdate({ target: [itemProgress.userId, itemProgress.trackId, itemProgress.itemId], set: { version, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt: new Date() } }).returning();
-  if (!row) throw new Error("item_progress_write_failed");
-  return asProgressRecord(row);
+function progressKey(mutation: Pick<ProgressMutation, "kind" | "trackId" | "targetId">): string {
+  return `${mutation.kind}:${mutation.trackId}:${mutation.targetId}`;
 }

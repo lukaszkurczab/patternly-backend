@@ -9,6 +9,8 @@ export const createContentReportSchema = z.object({
   itemId: contentIdentifier,
   reason: z.enum(["incorrect_answer", "unclear_explanation", "outdated_content", "technical_issue", "other"]),
   description: z.string().trim().min(10).max(2_000),
+  linkAccount: z.boolean().default(false),
+  contactEmail: z.string().email().optional(),
 }).strict();
 
 export type CreateContentReport = z.infer<typeof createContentReportSchema>;
@@ -21,12 +23,14 @@ export type ContentReportView = Readonly<{
   itemId: string;
   reason: CreateContentReport["reason"];
   description: string;
+  linkage: "unlinked" | "account" | "contact" | "account_and_contact";
   status: "open" | "in_review" | "resolved" | "closed";
   createdAt: string;
   updatedAt: string;
 }>;
 
 export interface ContentReportStore {
-  create(userId: string, input: CreateContentReport): Promise<Readonly<{ report: ContentReportView; duplicate: boolean }>>;
+  create(userId: string | undefined, input: CreateContentReport, context: Readonly<{ rateLimitKey: string }>): Promise<Readonly<{ report: ContentReportView; duplicate: boolean }>>;
   listOpen(): Promise<readonly ContentReportView[]>;
+  unlinkAccount(userId: string): Promise<void>;
 }

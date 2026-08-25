@@ -13,7 +13,7 @@ the learning engine or own active practice sessions.
 Firebase ID token
         |
         v
-Fastify auth boundary -> PostgreSQL user/identity mapping
+Fastify auth boundary -> Firestore user/identity mapping
         |
         +--> /v1/me
         +--> /v1/progress
@@ -31,11 +31,13 @@ version conflicts.
 ## Infrastructure contract
 
 - Runtime: Node.js 22, Fastify, structured Pino logging and correlation IDs.
-- Persistence: PostgreSQL on Cloud SQL, Drizzle schema and SQL migrations.
-- Identity: Firebase Admin token verification; PostgreSQL is canonical for
-  users and identities.
+- Persistence: Cloud Firestore through the Firebase Admin SDK. Firestore is
+  the only backend data authority.
+- Identity: Firebase Admin token verification; Firestore is canonical for
+  users and identity mappings.
 - Billing: RevenueCat is represented by an injected reconciliation boundary;
   provider credentials are not committed to the repository.
 - Deployment: containerized for Cloud Run with Cloud Build configuration.
-- Readiness: `/ready` is 503 until database and identity verification wiring
-  are available. There is no silent production fallback.
+- Readiness: `/ready` is 503 until Firestore, Firebase ID-token verification
+  and App Check verification wiring are available. There is no silent
+  production fallback.

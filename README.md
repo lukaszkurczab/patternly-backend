@@ -17,9 +17,9 @@ npm run dev
 ```
 
 The API exposes `/health`, `/ready`, `/openapi.json` and versioned REST routes
-under `/v1`. Production configuration is fail-closed: without PostgreSQL and
-Firebase verifier configuration, readiness is unavailable and production
-startup rejects the environment.
+under `/v1`. Production configuration is fail-closed: without Firestore,
+Firebase verifier, App Check and rate-limit configuration, readiness is
+unavailable and production startup rejects the environment.
 
 The generated frontend client is checked with:
 
@@ -32,27 +32,17 @@ Guest-to-account migration has an explicit preview/confirmation contract in
 preview fingerprint and resolving every conflict; unresolved conflicts are
 reported explicitly instead of selecting a client or server winner.
 
-## iOS Simulator backend check
+## Firebase Emulator Suite
 
-The repeatable local acceptance flow uses PostgreSQL, the Firebase Auth
-Emulator and the tracked Maestro flow in the frontend repository:
-
-```sh
-firebase emulators:start --only auth --project patternly-app-sandbox --config firebase.json
-DATABASE_URL=postgresql://lukaszkurczab@127.0.0.1:5432/patternly \
-PATTERNLY_BACKEND_ORIGIN=http://127.0.0.1:8080 \
-PATTERNLY_FIREBASE_EMULATOR_ORIGIN=http://127.0.0.1:9099 \
-npm run e2e:ios:seed
-```
-
-Start the backend with the seeded database and emulator configuration, source
-`/private/tmp/patternly-ios-e2e.env` before starting the Expo iOS app, then run:
+The repeatable local backend acceptance flow uses the Firebase Auth and
+Firestore emulators:
 
 ```sh
-maestro test --udid <simulator-udid> --no-reinstall-driver \
-  ../patternly/.maestro/backend-ios-simulator-e2e.yaml
+REPORT_RATE_LIMIT_HASH_SECRET=test-only-report-rate-limit-secret-0123456789 \
+npm run test:emulator
 ```
 
-The flow verifies health, readiness, OpenAPI route inventory, Firebase
-identity mapping, all authenticated read routes, mutation application,
-idempotent retry, stale-version conflict and the post-sync projection.
+The emulator suite verifies Firebase identity mapping, transactional sync CAS,
+idempotency, App Check rejection, report redaction and account-owned document
+deletion. The mobile app continues to reach backend data only through the
+versioned HTTPS API.

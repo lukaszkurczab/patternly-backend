@@ -13,11 +13,12 @@ export const OPENAPI_DOCUMENT = Object.freeze({
     "/v1/progress/sync": { post: { requestBody: { required: true, content: { "application/json": { schema: { "$ref": "#/components/schemas/SyncRequest" } } } }, responses: { "200": { description: "Applied or duplicate mutations" }, "409": { description: "Progress version conflict" } } } },
     "/v1/tracks": { get: { responses: { "200": { description: "Account track access" } } } },
     "/v1/content/versions": { get: { responses: { "200": { description: "Current immutable content metadata" } } } },
-    "/v1/content/reports": { post: { requestBody: { required: true, content: { "application/json": { schema: { "$ref": "#/components/schemas/CreateContentReport" } } } }, responses: { "201": { description: "Content report accepted" }, "200": { description: "Duplicate client submission" }, "400": { description: "Invalid report" } } } },
+    "/v1/content/reports": { post: { security: [{ appCheckAuth: [] }], description: "App Check is required. Account and contact linkage are stored only when explicitly requested; account linkage additionally requires an optional Firebase bearer token.", parameters: [{ "$ref": "#/components/parameters/FirebaseAppCheck" }], requestBody: { required: true, content: { "application/json": { schema: { "$ref": "#/components/schemas/CreateContentReport" } } } }, responses: { "201": { description: "Content report accepted" }, "200": { description: "Duplicate client submission" }, "400": { description: "Invalid report" }, "401": { description: "Valid App Check required or account linkage authentication required" }, "429": { description: "Anonymous report rate limit exceeded" } } } },
     "/v1/admin/content-reports": { get: { responses: { "200": { description: "Open content reports for the configured administrator" }, "403": { description: "Administrator required" } } } },
   },
   components: {
-    securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "Firebase ID token" } },
+    securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "Firebase ID token" }, appCheckAuth: { type: "apiKey", in: "header", name: "X-Firebase-AppCheck" } },
+    parameters: { FirebaseAppCheck: { name: "X-Firebase-AppCheck", in: "header", required: true, schema: { type: "string", minLength: 1 } } },
     schemas: {
       ProgressMutation: {
         type: "object",
@@ -49,6 +50,8 @@ export const OPENAPI_DOCUMENT = Object.freeze({
           itemId: { type: "string" },
           reason: { type: "string", enum: ["incorrect_answer", "unclear_explanation", "outdated_content", "technical_issue", "other"] },
           description: { type: "string", minLength: 10, maxLength: 2000 },
+          linkAccount: { type: "boolean", default: false, description: "Explicit opt-in to attach the authenticated Patternly account identifier." },
+          contactEmail: { type: "string", format: "email", description: "Explicit opt-in contact address; never inferred from authentication." },
         },
       },
     },
