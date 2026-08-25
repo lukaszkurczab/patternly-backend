@@ -7,7 +7,7 @@ const frontendRoot = process.env.PATTERNLY_FRONTEND_ROOT
 const spec = JSON.parse(await readFile(resolve(process.cwd(), "openapi/patternly-v1.json"), "utf8"));
 const clientPath = join(frontendRoot, "src/infrastructure/clients/PatternlyApiClientAdapter.ts");
 const client = await readFile(clientPath, "utf8");
-if (!client.includes("Generated from patternly-backend/openapi/patternly-v1.json")) throw new Error("frontend_generated_client_header_missing");
+if (!client.includes("Synchronized with patternly-backend/openapi/patternly-v1.json")) throw new Error("frontend_api_client_header_missing");
 for (const path of Object.keys(spec.paths).filter((path) => path.startsWith("/v1/"))) {
   if (!client.includes(`\"${path}\"`)) throw new Error(`frontend_generated_client_missing_path:${path}`);
 }

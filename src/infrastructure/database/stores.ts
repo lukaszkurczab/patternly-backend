@@ -1,5 +1,7 @@
 import type { DatabaseRuntime } from "./client.js";
 import { DrizzleContentVersionStore, type ContentVersionStore } from "../../modules/content/store.js";
+import { DrizzleContentReportStore } from "../../modules/content-reports/store.js";
+import type { ContentReportStore } from "../../modules/content-reports/contracts.js";
 import { DrizzleDeviceStore, type DeviceStore } from "../../modules/devices/store.js";
 import { DrizzleEntitlementStore, type EntitlementStore } from "../../modules/entitlements/store.js";
 import { DrizzleProgressStore } from "../../modules/progress/store.js";
@@ -14,6 +16,7 @@ export type BackendStores = Readonly<{
   entitlements: EntitlementStore;
   tracks: TrackStore;
   content: ContentVersionStore;
+  contentReports: ContentReportStore;
 }>;
 
 export function createStores(runtime: DatabaseRuntime): BackendStores {
@@ -25,5 +28,6 @@ export function createStores(runtime: DatabaseRuntime): BackendStores {
     entitlements: new DrizzleEntitlementStore(db),
     tracks: new DrizzleTrackStore(db),
     content: new DrizzleContentVersionStore(db),
+    contentReports: new DrizzleContentReportStore(db),
   });
 }

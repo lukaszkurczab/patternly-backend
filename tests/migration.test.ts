@@ -11,3 +11,10 @@ test("initial migration contains the canonical persistence domains and constrain
   assert.match(sql, /PRIMARY KEY \(user_id, track_id, node_id\)/u);
   assert.match(sql, /PRIMARY KEY \(user_id, track_id, item_id\)/u);
 });
+
+test("content-report migration preserves report identity and client-side deduplication", async () => {
+  const sql = await readFile(resolve(process.cwd(), "migrations/0001_content_reports.sql"), "utf8");
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS content_reports\b/u);
+  assert.match(sql, /content_reports_user_submission_unique/u);
+  assert.match(sql, /content_reports_status_created_idx/u);
+});

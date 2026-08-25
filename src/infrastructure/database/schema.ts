@@ -22,6 +22,8 @@ export const identityProvider = pgEnum("identity_provider", ["firebase", "apple"
 export const subscriptionProvider = pgEnum("subscription_provider", ["revenuecat", "app_store", "play_store"]);
 export const subscriptionStatus = pgEnum("subscription_status", ["active", "grace_period", "paused", "expired", "revoked"]);
 export const progressKind = pgEnum("progress_kind", ["node", "item"]);
+export const contentReportReason = pgEnum("content_report_reason", ["incorrect_answer", "unclear_explanation", "outdated_content", "technical_issue", "other"]);
+export const contentReportStatus = pgEnum("content_report_status", ["open", "in_review", "resolved", "closed"]);
 
 export const users = pgTable("users", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -120,6 +122,19 @@ export const contentVersions = pgTable("content_versions", {
   ...timestamps,
 }, (table) => [uniqueIndex("content_versions_track_version_unique").on(table.trackId, table.version)]);
 
+export const contentReports = pgTable("content_reports", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  clientSubmissionId: uuid("client_submission_id").notNull(),
+  trackId: text("track_id").notNull(),
+  contentVersion: text("content_version").notNull(),
+  itemId: text("item_id").notNull(),
+  reason: contentReportReason("reason").notNull(),
+  description: text("description").notNull(),
+  status: contentReportStatus("status").default("open").notNull(),
+  ...timestamps,
+}, (table) => [uniqueIndex("content_reports_user_submission_unique").on(table.userId, table.clientSubmissionId), uniqueIndex("content_reports_status_created_idx").on(table.status, table.createdAt)]);
+
 export const usersRelations = relations(users, ({ many }) => ({
   identities: many(identities),
   devices: many(devices),
@@ -138,6 +153,7 @@ export const databaseSchema = {
   itemProgress,
   syncMutations,
   contentVersions,
+  contentReports,
 };
 
 export const utcNow = () => sql`now()`;

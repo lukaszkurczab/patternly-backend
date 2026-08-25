@@ -117,6 +117,43 @@
           }
         }
       }
+    },
+    "/v1/content/reports": {
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateContentReport"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Duplicate client submission"
+          },
+          "201": {
+            "description": "Content report accepted"
+          },
+          "400": {
+            "description": "Invalid report"
+          }
+        }
+      }
+    },
+    "/v1/admin/content-reports": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Open content reports for the configured administrator"
+          },
+          "403": {
+            "description": "Administrator required"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -198,6 +235,47 @@
             "items": {
               "$ref": "#/components/schemas/ProgressMutation"
             }
+          }
+        }
+      },
+      "CreateContentReport": {
+        "type": "object",
+        "required": [
+          "clientSubmissionId",
+          "trackId",
+          "contentVersion",
+          "itemId",
+          "reason",
+          "description"
+        ],
+        "properties": {
+          "clientSubmissionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "trackId": {
+            "type": "string"
+          },
+          "contentVersion": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "incorrect_answer",
+              "unclear_explanation",
+              "outdated_content",
+              "technical_issue",
+              "other"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 2000
           }
         }
       }

@@ -1,5 +1,6 @@
 import type { BackendStores } from "../src/infrastructure/database/stores.js";
 import type { ContentVersionStore, ContentVersionView } from "../src/modules/content/store.js";
+import type { ContentReportStore, ContentReportView, CreateContentReport } from "../src/modules/content-reports/contracts.js";
 import type { DeviceStore } from "../src/modules/devices/store.js";
 import type { EntitlementStore, EntitlementView } from "../src/modules/entitlements/store.js";
 import type { AuthenticatedIdentity } from "../src/modules/auth/contracts.js";
@@ -41,7 +42,19 @@ export function createMemoryStores(): BackendStores {
   const tracks: TrackStore = { async readAccess() { return [] as readonly TrackAccessView[]; } };
   const content: ContentVersionStore = { async readCurrent() { return [] as readonly ContentVersionView[]; } };
   const devices: DeviceStore = { async touch() { return "device-id"; } };
-  return { users, devices, progress, entitlements, tracks, content };
+  const reports = new Map<string, ContentReportView>();
+  const contentReports: ContentReportStore = {
+    async create(requestedUserId: string, input: CreateContentReport) {
+      if (requestedUserId !== userId) throw new Error("unexpected_user");
+      const existing = reports.get(input.clientSubmissionId);
+      if (existing) return { report: existing, duplicate: true };
+      const report: ContentReportView = { id: `report-${reports.size + 1}`, clientSubmissionId: input.clientSubmissionId, trackId: input.trackId, contentVersion: input.contentVersion, itemId: input.itemId, reason: input.reason, description: input.description, status: "open", createdAt: "2026-08-25T00:00:00.000Z", updatedAt: "2026-08-25T00:00:00.000Z" };
+      reports.set(input.clientSubmissionId, report);
+      return { report, duplicate: false };
+    },
+    async listOpen() { return [...reports.values()]; },
+  };
+  return { users, devices, progress, entitlements, tracks, content, contentReports };
 }
 
 export const testEnvironment = {
@@ -52,6 +65,7 @@ export const testEnvironment = {
   databaseUrl: undefined,
   firebaseProjectId: "patternly-app-sandbox",
   firebaseAuthIssuer: "https://securetoken.google.com/patternly-app-sandbox",
+  administratorEmail: "lukasz.kurczab@gmail.com",
   revenueCatApiBaseUrl: "https://api.revenuecat.com",
   revenueCatSecretName: undefined,
   contentCatalogOrigin: undefined,

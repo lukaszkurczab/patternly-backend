@@ -13,6 +13,8 @@ export const OPENAPI_DOCUMENT = Object.freeze({
     "/v1/progress/sync": { post: { requestBody: { required: true, content: { "application/json": { schema: { "$ref": "#/components/schemas/SyncRequest" } } } }, responses: { "200": { description: "Applied or duplicate mutations" }, "409": { description: "Progress version conflict" } } } },
     "/v1/tracks": { get: { responses: { "200": { description: "Account track access" } } } },
     "/v1/content/versions": { get: { responses: { "200": { description: "Current immutable content metadata" } } } },
+    "/v1/content/reports": { post: { requestBody: { required: true, content: { "application/json": { schema: { "$ref": "#/components/schemas/CreateContentReport" } } } }, responses: { "201": { description: "Content report accepted" }, "200": { description: "Duplicate client submission" }, "400": { description: "Invalid report" } } } },
+    "/v1/admin/content-reports": { get: { responses: { "200": { description: "Open content reports for the configured administrator" }, "403": { description: "Administrator required" } } } },
   },
   components: {
     securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "Firebase ID token" } },
@@ -35,6 +37,18 @@ export const OPENAPI_DOCUMENT = Object.freeze({
         properties: {
           deviceId: { anyOf: [{ type: "string", format: "uuid" }, { type: "null" }] },
           mutations: { type: "array", minItems: 1, maxItems: 100, items: { "$ref": "#/components/schemas/ProgressMutation" } },
+        },
+      },
+      CreateContentReport: {
+        type: "object",
+        required: ["clientSubmissionId", "trackId", "contentVersion", "itemId", "reason", "description"],
+        properties: {
+          clientSubmissionId: { type: "string", format: "uuid" },
+          trackId: { type: "string" },
+          contentVersion: { type: "string" },
+          itemId: { type: "string" },
+          reason: { type: "string", enum: ["incorrect_answer", "unclear_explanation", "outdated_content", "technical_issue", "other"] },
+          description: { type: "string", minLength: 10, maxLength: 2000 },
         },
       },
     },

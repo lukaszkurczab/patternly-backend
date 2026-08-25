@@ -8,6 +8,7 @@ const environmentSchema = z.object({
   DATABASE_URL: z.string().url().optional(),
   FIREBASE_PROJECT_ID: z.string().regex(/^[a-z0-9-]+$/u).optional(),
   FIREBASE_AUTH_ISSUER: z.string().url().optional(),
+  ADMINISTRATOR_EMAIL: z.string().email().optional(),
   REVENUECAT_API_BASE_URL: z.string().url().default("https://api.revenuecat.com"),
   REVENUECAT_SECRET_NAME: z.string().min(1).optional(),
   CONTENT_CATALOG_ORIGIN: z.string().url().optional(),
@@ -21,6 +22,7 @@ export type Environment = Readonly<{
   databaseUrl: string | undefined;
   firebaseProjectId: string | undefined;
   firebaseAuthIssuer: string | undefined;
+  administratorEmail: string | undefined;
   revenueCatApiBaseUrl: string;
   revenueCatSecretName: string | undefined;
   contentCatalogOrigin: string | undefined;
@@ -33,6 +35,7 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
   if (value.NODE_ENV === "production") {
     if (!value.DATABASE_URL) throw new Error("production_database_url_required");
     if (!value.FIREBASE_PROJECT_ID || !value.FIREBASE_AUTH_ISSUER) throw new Error("production_firebase_config_required");
+    if (!value.ADMINISTRATOR_EMAIL) throw new Error("production_administrator_email_required");
     if (!value.REVENUECAT_SECRET_NAME) throw new Error("production_revenuecat_secret_required");
   }
   return Object.freeze({
@@ -43,6 +46,7 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     databaseUrl: value.DATABASE_URL,
     firebaseProjectId: value.FIREBASE_PROJECT_ID,
     firebaseAuthIssuer: value.FIREBASE_AUTH_ISSUER,
+    administratorEmail: value.ADMINISTRATOR_EMAIL?.toLowerCase(),
     revenueCatApiBaseUrl: value.REVENUECAT_API_BASE_URL,
     revenueCatSecretName: value.REVENUECAT_SECRET_NAME,
     contentCatalogOrigin: value.CONTENT_CATALOG_ORIGIN,

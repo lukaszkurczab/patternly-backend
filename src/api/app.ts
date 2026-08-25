@@ -6,11 +6,13 @@ import { OPENAPI_DOCUMENT } from "./openapi.js";
 import { authenticateRequest } from "../modules/auth/request.js";
 import type { BackendStores } from "../infrastructure/database/stores.js";
 import { syncRequestSchema } from "../modules/progress/contracts.js";
+import { createContentReportSchema } from "../modules/content-reports/contracts.js";
 
 declare module "fastify" {
   interface FastifyRequest {
     correlationId: string;
     userId: string | undefined;
+    authenticatedEmail: string | undefined;
   }
 }
 
@@ -46,16 +48,27 @@ async function protect(request: FastifyRequest, reply: FastifyReply, dependencie
     const stores = requireStores(dependencies);
     const authenticated = await authenticateRequest(request, dependencies.verifier, stores.users);
     request.userId = authenticated.userId;
+    request.authenticatedEmail = authenticated.identity.email;
   } catch (error) {
     const status = authErrorStatus(error);
     reply.code(status).send({ error: { code: status === 401 ? "authentication_required" : errorCode(error) } });
   }
 }
 
+function requireAdministrator(request: FastifyRequest, reply: FastifyReply, dependencies: ApplicationDependencies): boolean {
+  const administratorEmail = dependencies.environment.administratorEmail;
+  if (!administratorEmail || request.authenticatedEmail?.toLowerCase() !== administratorEmail) {
+    reply.code(403).send({ error: { code: "administrator_required" } });
+    return false;
+  }
+  return true;
+}
+
 export function buildApplication(dependencies: ApplicationDependencies): FastifyInstance {
   const app = Fastify({ logger: { level: dependencies.environment.logLevel as "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent" } });
   app.decorateRequest("correlationId", "");
   app.decorateRequest("userId", undefined);
+  app.decorateRequest("authenticatedEmail", undefined);
   app.addHook("onRequest", async (request, reply) => {
     const supplied = request.headers["x-correlation-id"];
     const correlationId = typeof supplied === "string" && /^[A-Za-z0-9._-]{1,128}$/u.test(supplied) ? supplied : request.id;
@@ -100,6 +113,16 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
 
   app.get("/v1/tracks", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => ({ tracks: await requireStores(dependencies).tracks.readAccess(request.userId!) }));
   app.get("/v1/content/versions", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async () => ({ versions: await requireStores(dependencies).content.readCurrent() }));
+  app.post("/v1/content/reports", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const parsed = createContentReportSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });
+    const result = await requireStores(dependencies).contentReports.create(request.userId!, parsed.data);
+    return reply.code(result.duplicate ? 200 : 201).send(result);
+  });
+  app.get("/v1/admin/content-reports", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireAdministrator(request, reply, dependencies)) return;
+    return { reports: await requireStores(dependencies).contentReports.listOpen() };
+  });
   app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: { code: "not_found" } }));
   return app;
 }
