@@ -20,6 +20,7 @@ export const testEnvironment: Environment = loadEnvironment({
   FIREBASE_PROJECT_ID: projectId,
   FIREBASE_AUTH_ISSUER: `https://securetoken.google.com/${projectId}`,
   ADMINISTRATOR_EMAIL: "lukasz.kurczab@gmail.com",
+  ADMIN_WEB_ORIGIN: "http://127.0.0.1:4173",
   REPORT_RATE_LIMIT_HASH_SECRET: "test-only-report-rate-limit-secret-0123456789",
   REPORT_RATE_LIMIT_MAX: "2",
   REPORT_RATE_LIMIT_WINDOW_SECONDS: "3600",
@@ -49,8 +50,7 @@ export async function clearFirestore(): Promise<void> {
   if (!response.ok && response.status !== 404) throw new Error(`firestore_clear_failed:${response.status}`);
 }
 
-export async function createAuthUser(): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
-  const email = `emulator-${randomUUID()}@example.com`;
+export async function createAuthUser(email = `emulator-${randomUUID()}@example.com`): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
   const response = await fetch(`http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=patternly-emulator`, {
     method: "POST",
     headers: { "content-type": "application/json" },

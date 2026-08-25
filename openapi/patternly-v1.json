@@ -162,12 +162,56 @@
     },
     "/v1/admin/content-reports": {
       "get": {
+        "description": "Open and in-review content reports for the configured administrator",
         "responses": {
           "200": {
-            "description": "Open content reports for the configured administrator"
+            "description": "Content report triage queue"
           },
           "403": {
             "description": "Administrator required"
+          }
+        }
+      }
+    },
+    "/v1/admin/content-reports/{clientSubmissionId}": {
+      "patch": {
+        "description": "Advance one report through the server-owned triage state machine; Firebase administrator authentication is required.",
+        "parameters": [
+          {
+            "name": "clientSubmissionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransitionContentReport"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Status transition applied or repeated idempotently"
+          },
+          "400": {
+            "description": "Invalid status transition request"
+          },
+          "403": {
+            "description": "Administrator required"
+          },
+          "404": {
+            "description": "Report not found"
+          },
+          "409": {
+            "description": "Status transition is not allowed"
           }
         }
       }
@@ -310,6 +354,9 @@
             "minLength": 10,
             "maxLength": 2000
           },
+          "context": {
+            "$ref": "#/components/schemas/ContentReportContext"
+          },
           "linkAccount": {
             "type": "boolean",
             "default": false,
@@ -319,6 +366,86 @@
             "type": "string",
             "format": "email",
             "description": "Explicit opt-in contact address; never inferred from authentication."
+          }
+        }
+      },
+      "ContentReportContext": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "releasePackageId",
+          "trackNode",
+          "modeRoute",
+          "locale",
+          "appBuild",
+          "platform",
+          "occurredAt"
+        ],
+        "properties": {
+          "releasePackageId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "trackNode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "modeRoute": {
+            "type": "string",
+            "enum": [
+              "practice_feedback_details",
+              "answer_review"
+            ]
+          },
+          "locale": {
+            "type": "string",
+            "enum": [
+              "en",
+              "pl"
+            ]
+          },
+          "appBuild": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "ios",
+              "android"
+            ]
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TransitionContentReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "in_review",
+              "resolved",
+              "closed"
+            ]
           }
         }
       }

@@ -3,17 +3,19 @@ import type { Firestore } from "firebase-admin/firestore";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
 import { asIsoString, asRecord, now } from "../../infrastructure/firestore/values.js";
-import type { ContentReportStore, ContentReportView, CreateContentReport } from "./contracts.js";
+import type { ContentReportContext, ContentReportStatus, ContentReportStore, ContentReportView, CreateContentReport } from "./contracts.js";
 
 const REPORT_RETENTION_DAYS = 30;
 const IDENTIFIABLE_RETENTION_DAYS = 180;
 
 function toView(row: Record<string, unknown>): ContentReportView {
-  if (typeof row.id !== "string" || typeof row.clientSubmissionId !== "string" || typeof row.trackId !== "string" || typeof row.contentVersion !== "string" || typeof row.itemId !== "string" || typeof row.reason !== "string" || typeof row.description !== "string" || typeof row.status !== "string") throw new Error("content_report_record_invalid");
+  if (typeof row.id !== "string" || typeof row.clientSubmissionId !== "string" || typeof row.trackId !== "string" || typeof row.contentVersion !== "string" || typeof row.itemId !== "string" || typeof row.reason !== "string" || typeof row.description !== "string" || typeof row.status !== "string" || typeof row.context !== "object" || row.context === null || Array.isArray(row.context)) throw new Error("content_report_record_invalid");
   const hasAccountLink = typeof row.accountId === "string";
   const hasContactLink = typeof row.contactEmail === "string";
   const linkage = hasAccountLink && hasContactLink ? "account_and_contact" : hasAccountLink ? "account" : hasContactLink ? "contact" : "unlinked";
   if (!["open", "in_review", "resolved", "closed"].includes(row.status)) throw new Error("content_report_status_invalid");
+  const context = row.context as Record<string, unknown>;
+  if (typeof context.releasePackageId !== "string" || (typeof context.trackNode !== "string" && context.trackNode !== null) || typeof context.modeRoute !== "string" || typeof context.locale !== "string" || typeof context.appBuild !== "string" || typeof context.platform !== "string" || typeof context.occurredAt !== "string") throw new Error("content_report_context_invalid");
   return Object.freeze({
     id: row.id,
     clientSubmissionId: row.clientSubmissionId,
@@ -22,6 +24,15 @@ function toView(row: Record<string, unknown>): ContentReportView {
     itemId: row.itemId,
     reason: row.reason as CreateContentReport["reason"],
     description: row.description,
+    context: Object.freeze({
+      releasePackageId: context.releasePackageId,
+      trackNode: context.trackNode,
+      modeRoute: context.modeRoute,
+      locale: context.locale,
+      appBuild: context.appBuild,
+      platform: context.platform,
+      occurredAt: context.occurredAt,
+    }) as ContentReportContext,
     linkage,
     status: row.status as ContentReportView["status"],
     createdAt: asIsoString(row.createdAt, "content_report_created_at"),
@@ -61,6 +72,7 @@ export class FirestoreContentReportStore implements ContentReportStore {
         itemId: input.itemId,
         reason: input.reason,
         description: input.description,
+        context: input.context,
         status: "open",
         createdAt,
         updatedAt: createdAt,
@@ -73,9 +85,26 @@ export class FirestoreContentReportStore implements ContentReportStore {
     return Object.freeze(report);
   }
 
-  public async listOpen(): Promise<readonly ContentReportView[]> {
-    const rows = await this.db.collection(COLLECTIONS.contentReports).where("status", "==", "open").get();
+  public async listQueue(): Promise<readonly ContentReportView[]> {
+    const rows = await this.db.collection(COLLECTIONS.contentReports).where("status", "in", ["open", "in_review"]).get();
     return Object.freeze(rows.docs.map((row) => toView(asRecord(row.data(), "content_report"))).sort((left, right) => right.createdAt.localeCompare(left.createdAt)));
+  }
+
+  public async transitionStatus(clientSubmissionId: string, actorId: string, nextStatus: ContentReportStatus): Promise<Readonly<{ report: ContentReportView; duplicate: boolean }>> {
+    const reportRef = this.db.collection(COLLECTIONS.contentReports).doc(clientSubmissionId);
+    const auditRef = reportRef.collection(COLLECTIONS.contentReportAudit).doc(randomUUID());
+    const changedAt = now();
+    return Object.freeze(await this.db.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(reportRef);
+      if (!snapshot.exists) throw new Error("content_report_not_found");
+      const row = asRecord(snapshot.data(), "content_report");
+      const current = toView(row);
+      if (current.status === nextStatus) return { report: current, duplicate: true };
+      if (!isAllowedTransition(current.status, nextStatus)) throw new Error("content_report_transition_invalid");
+      transaction.update(reportRef, { status: nextStatus, updatedAt: changedAt });
+      transaction.create(auditRef, { id: auditRef.id, fromStatus: current.status, toStatus: nextStatus, actorId, changedAt });
+      return { report: toView({ ...row, status: nextStatus, updatedAt: changedAt }), duplicate: false };
+    }));
   }
 
   public async unlinkAccount(userId: string): Promise<void> {
@@ -89,4 +118,8 @@ export class FirestoreContentReportStore implements ContentReportStore {
   private rateLimitDocumentId(rateLimitKey: string): string {
     return createHash("sha256").update(`${this.options.rateLimitHashSecret}:${rateLimitKey}`, "utf8").digest("hex");
   }
+}
+
+function isAllowedTransition(current: ContentReportStatus, next: ContentReportStatus): boolean {
+  return (current === "open" && next === "in_review") || (current === "in_review" && next === "resolved") || (current === "resolved" && next === "closed");
 }

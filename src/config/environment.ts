@@ -8,6 +8,7 @@ const environmentSchema = z.object({
   FIREBASE_PROJECT_ID: z.string().regex(/^[a-z0-9-]+$/u).optional(),
   FIREBASE_AUTH_ISSUER: z.string().url().optional(),
   ADMINISTRATOR_EMAIL: z.string().email().optional(),
+  ADMIN_WEB_ORIGIN: z.string().url().optional(),
   REPORT_RATE_LIMIT_HASH_SECRET: z.string().min(32),
   REPORT_RATE_LIMIT_MAX: z.coerce.number().int().positive().max(100).default(5),
   REPORT_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().max(86_400).default(3_600),
@@ -24,6 +25,7 @@ export type Environment = Readonly<{
   firebaseProjectId: string | undefined;
   firebaseAuthIssuer: string | undefined;
   administratorEmail: string | undefined;
+  adminWebOrigin: string | undefined;
   reportRateLimitHashSecret: string;
   reportRateLimitMax: number;
   reportRateLimitWindowSeconds: number;
@@ -49,6 +51,7 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     firebaseProjectId: value.FIREBASE_PROJECT_ID,
     firebaseAuthIssuer: value.FIREBASE_AUTH_ISSUER,
     administratorEmail: value.ADMINISTRATOR_EMAIL?.toLowerCase(),
+    adminWebOrigin: value.ADMIN_WEB_ORIGIN,
     reportRateLimitHashSecret: value.REPORT_RATE_LIMIT_HASH_SECRET,
     reportRateLimitMax: value.REPORT_RATE_LIMIT_MAX,
     reportRateLimitWindowSeconds: value.REPORT_RATE_LIMIT_WINDOW_SECONDS,

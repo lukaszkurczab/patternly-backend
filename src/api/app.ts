@@ -7,7 +7,7 @@ import { OPENAPI_DOCUMENT } from "./openapi.js";
 import { authenticateRequest } from "../modules/auth/request.js";
 import type { BackendStores } from "../infrastructure/firestore/stores.js";
 import { syncRequestSchema } from "../modules/progress/contracts.js";
-import { createContentReportSchema } from "../modules/content-reports/contracts.js";
+import { createContentReportSchema, transitionContentReportSchema } from "../modules/content-reports/contracts.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -41,6 +41,8 @@ const errorCode = (error: unknown): string => {
   if (message === "account_deleted") return "account_deleted";
   if (message === "app_check_required") return "app_check_required";
   if (message === "app_check_invalid") return "app_check_invalid";
+  if (message === "content_report_not_found") return "content_report_not_found";
+  if (message === "content_report_transition_invalid") return "content_report_transition_invalid";
   return "internal_error";
 };
 
@@ -99,6 +101,18 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
     const correlationId = typeof supplied === "string" && /^[A-Za-z0-9._-]{1,128}$/u.test(supplied) ? supplied : request.id;
     request.correlationId = correlationId;
     reply.header("x-correlation-id", correlationId);
+    const origin = request.headers.origin;
+    const isAdminReportRoute = request.url.startsWith("/v1/admin/content-reports");
+    if (isAdminReportRoute && typeof origin === "string" && origin === dependencies.environment.adminWebOrigin) {
+      reply.header("access-control-allow-origin", origin);
+      reply.header("access-control-allow-headers", "authorization, content-type");
+      reply.header("access-control-allow-methods", "GET, PATCH, OPTIONS");
+      reply.header("vary", "Origin");
+    }
+    if (isAdminReportRoute && request.method === "OPTIONS") {
+      if (typeof origin !== "string" || origin !== dependencies.environment.adminWebOrigin) return reply.code(403).send({ error: { code: "origin_not_allowed" } });
+      return reply.code(204).send();
+    }
   });
   app.setErrorHandler((error, request, reply) => {
     request.log.error({ err: error, correlationId: request.correlationId }, "request_failed");
@@ -153,7 +167,22 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
   });
   app.get("/v1/admin/content-reports", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
-    return { reports: await requireStores(dependencies).contentReports.listOpen() };
+    return { reports: await requireStores(dependencies).contentReports.listQueue() };
+  });
+  app.patch("/v1/admin/content-reports/:clientSubmissionId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireAdministrator(request, reply, dependencies)) return;
+    const params = request.params as { clientSubmissionId?: unknown };
+    const clientSubmissionId = typeof params.clientSubmissionId === "string" ? params.clientSubmissionId : "";
+    const parsed = transitionContentReportSchema.safeParse(request.body);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(clientSubmissionId) || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      return reply.code(200).send(await requireStores(dependencies).contentReports.transitionStatus(clientSubmissionId, request.userId!, parsed.data.status));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "internal_error";
+      if (message === "content_report_not_found") return reply.code(404).send({ error: { code: "content_report_not_found" } });
+      if (message === "content_report_transition_invalid") return reply.code(409).send({ error: { code: "content_report_transition_invalid" } });
+      throw error;
+    }
   });
   app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: { code: "not_found" } }));
   return app;

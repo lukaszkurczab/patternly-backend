@@ -11,6 +11,15 @@ const reportBody = (clientSubmissionId: string) => createContentReportSchema.par
   itemId: "two-sum-001",
   reason: "unclear_explanation",
   description: "The explanation does not identify why the invariant is safe.",
+  context: {
+    releasePackageId: "patternly-launch-2026-08-25-01",
+    trackNode: "complexity_and_constraints",
+    modeRoute: "practice_feedback_details",
+    locale: "en",
+    appBuild: "0.1.0",
+    platform: "ios",
+    occurredAt: "2026-08-25T10:00:00.000Z",
+  },
 });
 
 let context: EmulatorContext;
@@ -84,7 +93,60 @@ test("report persistence keeps default submissions unlinked and excludes respons
   for (const forbiddenField of ["accountId", "contactEmail", "email", "learnerResponse", "prompt", "feedback"]) assert.equal(forbiddenField in stored, false, forbiddenField);
   assert.equal(stored.description, input.description);
   assert.equal(stored.itemId, input.itemId);
+  assert.deepEqual(stored.context, input.context);
   assert.ok(stored.expiresAt);
+});
+
+test("administrator report triage uses an idempotent monotonic state machine and records an audit event", async () => {
+  const input = reportBody("4f61e3f3-f23e-467c-b92a-9b8fd0514f25");
+  await context.stores.contentReports.create(undefined, input, { rateLimitKey: "triage-test-client" });
+  const first = await context.stores.contentReports.transitionStatus(input.clientSubmissionId, "admin-user-id", "in_review");
+  const duplicate = await context.stores.contentReports.transitionStatus(input.clientSubmissionId, "admin-user-id", "in_review");
+  assert.equal(first.report.status, "in_review");
+  assert.equal(first.duplicate, false);
+  assert.equal(duplicate.duplicate, true);
+  await assert.rejects(context.stores.contentReports.transitionStatus(input.clientSubmissionId, "admin-user-id", "closed"), { message: "content_report_transition_invalid" });
+  const audit = await firestore().collection("contentReports").doc(input.clientSubmissionId).collection("audit").get();
+  assert.equal(audit.size, 1);
+  assert.deepEqual(audit.docs[0]?.data().toStatus, "in_review");
+  assert.equal(audit.docs[0]?.data().actorId, "admin-user-id");
+  const queue = await context.stores.contentReports.listQueue();
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0]?.status, "in_review");
+});
+
+test("administrator queue access is server-authorized and origin-bound", async () => {
+  const nonAdmin = await createAuthUser();
+  const denied = await context.app.inject({
+    method: "GET",
+    url: "/v1/admin/content-reports",
+    headers: { authorization: `Bearer ${nonAdmin.idToken}` },
+  });
+  assert.equal(denied.statusCode, 403);
+
+  const admin = await createAuthUser("lukasz.kurczab@gmail.com");
+  const accepted = await context.app.inject({
+    method: "GET",
+    url: "/v1/admin/content-reports",
+    headers: { authorization: `Bearer ${admin.idToken}` },
+  });
+  assert.equal(accepted.statusCode, 200);
+
+  const preflight = await context.app.inject({
+    method: "OPTIONS",
+    url: "/v1/admin/content-reports",
+    headers: { origin: "http://127.0.0.1:4173" },
+  });
+  assert.equal(preflight.statusCode, 204);
+  assert.equal(preflight.headers["access-control-allow-origin"], "http://127.0.0.1:4173");
+
+  const wrongOrigin = await context.app.inject({
+    method: "OPTIONS",
+    url: "/v1/admin/content-reports",
+    headers: { origin: "http://malicious.example" },
+  });
+  assert.equal(wrongOrigin.statusCode, 403);
+  assert.deepEqual(wrongOrigin.json(), { error: { code: "origin_not_allowed" } });
 });
 
 test("anonymous report rate limiting is transactionally enforced without storing the client key", async () => {

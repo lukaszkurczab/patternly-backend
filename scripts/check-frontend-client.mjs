@@ -9,6 +9,7 @@ const clientPath = join(frontendRoot, "src/infrastructure/clients/PatternlyApiCl
 const client = await readFile(clientPath, "utf8");
 if (!client.includes("Synchronized with patternly-backend/openapi/patternly-v1.json")) throw new Error("frontend_api_client_header_missing");
 for (const path of Object.keys(spec.paths).filter((path) => path.startsWith("/v1/"))) {
-  if (!client.includes(`\"${path}\"`)) throw new Error(`frontend_generated_client_missing_path:${path}`);
+  const templatePath = path.replace(/\{([^}]+)\}/gu, "\${$1}");
+  if (!client.includes(`\"${path}\"`) && !client.includes(`\`${templatePath}\``)) throw new Error(`frontend_generated_client_missing_path:${path}`);
 }
 console.log(`frontend client matches ${Object.keys(spec.paths).filter((path) => path.startsWith("/v1/")).length} versioned paths`);

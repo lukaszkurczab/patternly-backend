@@ -3,6 +3,7 @@ import type { ProgressMutation } from "../../modules/progress/contracts.js";
 
 export const COLLECTIONS = Object.freeze({
   contentReports: "contentReports",
+  contentReportAudit: "audit",
   contentVersions: "contentVersions",
   deletedIdentities: "deletedIdentities",
   identityMappings: "identityMappings",
