@@ -5,9 +5,14 @@ export const COLLECTIONS = Object.freeze({
   contentReports: "contentReports",
   contentReportAudit: "audit",
   contentVersions: "contentVersions",
+  accountDeletionOperations: "accountDeletionOperations",
+  deletionProofs: "deletionProofs",
+  deletionRequests: "deletionRequests",
   deletedIdentities: "deletedIdentities",
   identityMappings: "identityMappings",
   rateLimitBuckets: "rateLimitBuckets",
+  recoveryCodeIndex: "recoveryCodeIndex",
+  sessionRevocationOperations: "sessionRevocationOperations",
   users: "users",
 });
 

@@ -7,6 +7,7 @@ export type VerifiedIdentity = Readonly<{
   subject: string;
   email?: string;
   emailVerified: boolean;
+  authTime: number;
 }>;
 
 export interface IdentityTokenVerifier {
@@ -27,12 +28,13 @@ export function createFirebaseTokenVerifier(environment: Environment): IdentityT
       }
       if (claims.aud !== environment.firebaseProjectId) throw new Error("firebase_project_mismatch");
       if (claims.iss !== (environment.firebaseAuthIssuer ?? `https://securetoken.google.com/${environment.firebaseProjectId}`)) throw new Error("firebase_issuer_mismatch");
-      if (!claims.uid || typeof claims.uid !== "string") throw new Error("firebase_subject_missing");
+      if (!claims.uid || typeof claims.uid !== "string" || typeof claims.auth_time !== "number" || !Number.isSafeInteger(claims.auth_time)) throw new Error("firebase_subject_missing");
       return Object.freeze({
         provider: "firebase",
         subject: claims.uid,
         ...(typeof claims.email === "string" ? { email: claims.email } : {}),
         emailVerified: claims.email_verified === true,
+        authTime: claims.auth_time,
       });
     },
   });

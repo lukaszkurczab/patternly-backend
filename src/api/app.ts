@@ -9,12 +9,14 @@ import type { BackendStores } from "../infrastructure/firestore/stores.js";
 import { syncRequestSchema } from "../modules/progress/contracts.js";
 import { guestMergeConfirmationSchema, guestMergeSnapshotSchema } from "../modules/users/merge.js";
 import { createContentReportSchema, transitionContentReportSchema } from "../modules/content-reports/contracts.js";
+import { accountRecoveryCodeConsumeSchema, accountRecoveryCodeIssueSchema, accountSessionRevokeSchema, accountDeletionRequestSchema, publicDeletionConfirmSchema, publicDeletionRequestSchema, publicDeletionStatusSchema } from "../modules/account-lifecycle/contracts.js";
 
 declare module "fastify" {
   interface FastifyRequest {
     correlationId: string;
     userId: string | undefined;
     authenticatedEmail: string | undefined;
+    authTime: number | undefined;
   }
 }
 
@@ -24,7 +26,10 @@ export type ApplicationDependencies = Readonly<{
   verifier: IdentityTokenVerifier | null;
   appCheckVerifier: AppCheckTokenVerifier | null;
   stores: BackendStores | null;
+  deletionEmailSender?: import("../modules/account-lifecycle/store.js").DeletionEmailSender | null;
 }>;
+
+const RECENT_AUTH_SECONDS = 300;
 
 const authErrorStatus = (error: unknown): number => {
   const message = error instanceof Error ? error.message : "";
@@ -48,7 +53,16 @@ const errorCode = (error: unknown): string => {
   if (message === "progress_fingerprint_mismatch") return "progress_fingerprint_mismatch";
   if (message === "firestore_not_ready") return "firestore_not_ready";
   if (message === "authentication_required") return "authentication_required";
+  if (message === "recent_reauthentication_required") return "recent_reauthentication_required";
+  if (message === "recovery_code_invalid") return "recovery_code_invalid";
+  if (message === "recovery_code_used") return "recovery_code_used";
   if (message === "account_deleted") return "account_deleted";
+  if (message === "deletion_email_unavailable") return "deletion_email_unavailable";
+  if (message === "deletion_request_invalid") return "deletion_request_invalid";
+  if (message === "remote_deletion_pending") return "remote_deletion_pending";
+  if (message === "session_revocation_failed") return "session_revocation_failed";
+  if (message === "session_revocation_operation_conflict") return "session_revocation_operation_conflict";
+  if (message === "recovery_session_revocation_failed") return "recovery_session_revocation_failed";
   if (message === "app_check_required") return "app_check_required";
   if (message === "app_check_invalid") return "app_check_invalid";
   if (message === "content_report_not_found") return "content_report_not_found";
@@ -86,10 +100,19 @@ async function protect(request: FastifyRequest, reply: FastifyReply, dependencie
     const authenticated = await authenticateRequest(request, dependencies.verifier, stores.users);
     request.userId = authenticated.userId;
     request.authenticatedEmail = authenticated.identity.email;
+    request.authTime = authenticated.authTime;
   } catch (error) {
     const status = authErrorStatus(error);
     reply.code(status).send({ error: { code: status === 401 ? "authentication_required" : errorCode(error) } });
   }
+}
+
+function requireRecentReauthentication(request: FastifyRequest, reply: FastifyReply): boolean {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const authTime = request.authTime;
+  if (typeof authTime === "number" && nowSeconds - authTime <= RECENT_AUTH_SECONDS && authTime <= nowSeconds + 30) return true;
+  reply.code(401).send({ error: { code: "recent_reauthentication_required" } });
+  return false;
 }
 
 function requireAdministrator(request: FastifyRequest, reply: FastifyReply, dependencies: ApplicationDependencies): boolean {
@@ -106,6 +129,7 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
   app.decorateRequest("correlationId", "");
   app.decorateRequest("userId", undefined);
   app.decorateRequest("authenticatedEmail", undefined);
+  app.decorateRequest("authTime", undefined);
   app.addHook("onRequest", async (request, reply) => {
     const supplied = request.headers["x-correlation-id"];
     const correlationId = typeof supplied === "string" && /^[A-Za-z0-9._-]{1,128}$/u.test(supplied) ? supplied : request.id;
@@ -113,14 +137,25 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
     reply.header("x-correlation-id", correlationId);
     const origin = request.headers.origin;
     const isAdminReportRoute = request.url.startsWith("/v1/admin/content-reports");
+    const isPublicDeletionRoute = request.url.startsWith("/v1/public/deletion-");
     if (isAdminReportRoute && typeof origin === "string" && origin === dependencies.environment.adminWebOrigin) {
       reply.header("access-control-allow-origin", origin);
       reply.header("access-control-allow-headers", "authorization, content-type");
       reply.header("access-control-allow-methods", "GET, PATCH, OPTIONS");
       reply.header("vary", "Origin");
     }
+    if (isPublicDeletionRoute && typeof origin === "string" && origin === dependencies.environment.publicDeletionOrigin) {
+      reply.header("access-control-allow-origin", origin);
+      reply.header("access-control-allow-headers", "content-type");
+      reply.header("access-control-allow-methods", "GET, POST, OPTIONS");
+      reply.header("vary", "Origin");
+    }
     if (isAdminReportRoute && request.method === "OPTIONS") {
       if (typeof origin !== "string" || origin !== dependencies.environment.adminWebOrigin) return reply.code(403).send({ error: { code: "origin_not_allowed" } });
+      return reply.code(204).send();
+    }
+    if (isPublicDeletionRoute && request.method === "OPTIONS") {
+      if (typeof origin !== "string" || origin !== dependencies.environment.publicDeletionOrigin) return reply.code(403).send({ error: { code: "origin_not_allowed" } });
       return reply.code(204).send();
     }
   });
@@ -190,6 +225,116 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
       if (message === "progress_fingerprint_mismatch") return reply.code(400).send({ error: { code: errorCode(error) } });
       throw error;
     }
+  });
+
+  app.post("/v1/account/recovery-codes", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireRecentReauthentication(request, reply)) return;
+    const parsed = accountRecoveryCodeIssueSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      return reply.code(200).send(await requireStores(dependencies).accountLifecycle.issueRecoveryCodes(request.userId!));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "account_deleted";
+      if (message === "account_deleted") return reply.code(409).send({ error: { code: "account_deleted" } });
+      throw error;
+    }
+  });
+
+  app.post("/v1/public/recovery-codes/consume", async (request, reply) => {
+    const parsed = accountRecoveryCodeConsumeSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      return reply.code(200).send(await requireStores(dependencies).accountLifecycle.consumeRecoveryCode(parsed.data.code));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "recovery_code_invalid";
+      if (message === "recovery_code_used") return reply.code(409).send({ error: { code: "recovery_code_used" } });
+      if (message === "recovery_session_revocation_failed") return reply.code(503).send({ error: { code: "recovery_session_revocation_pending" } });
+      if (message === "recovery_code_invalid" || message === "account_deleted") return reply.code(401).send({ error: { code: "recovery_code_invalid" } });
+      throw error;
+    }
+  });
+
+  app.post("/v1/account/session/revoke", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const parsed = accountSessionRevokeSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      return reply.code(200).send(await requireStores(dependencies).accountLifecycle.revokeSessions(request.userId!, parsed.data.operationId));
+    } catch (error) {
+      if (error instanceof Error && error.message === "session_revocation_failed") return reply.code(503).send({ error: { code: "session_revocation_pending" } });
+      if (error instanceof Error && error.message === "session_revocation_operation_conflict") return reply.code(409).send({ error: { code: "session_revocation_operation_conflict" } });
+      throw error;
+    }
+  });
+
+  app.post("/v1/account/deletion", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireRecentReauthentication(request, reply)) return;
+    const parsed = accountDeletionRequestSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      const lifecycle = requireStores(dependencies).accountLifecycle;
+      const result = await lifecycle.deleteAccount(request.userId!, parsed.data.operationId);
+      try {
+        await requireStores(dependencies).contentReports.unlinkAccount(request.userId!);
+      } catch {
+        throw new Error("remote_deletion_pending");
+      }
+      return reply.code(200).send(await lifecycle.completeDeletion(result.operationId, result.proofId));
+    } catch (error) {
+      if (error instanceof Error && ["remote_deletion_pending", "session_revocation_failed"].includes(error.message)) return reply.code(503).send({ error: { code: "remote_deletion_pending" } });
+      throw error;
+    }
+  });
+
+  app.post("/v1/public/deletion-requests", async (request, reply) => {
+    const parsed = publicDeletionRequestSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!dependencies.deletionEmailSender) return reply.code(503).send({ error: { code: "deletion_email_unavailable" } });
+    try {
+      await requireStores(dependencies).accountLifecycle.createPublicDeletionRequest(parsed.data.email.trim().toLowerCase(), dependencies.environment.publicDeletionOrigin ?? "", dependencies.deletionEmailSender);
+    } catch (error) {
+      if (error instanceof Error && error.message === "deletion_rate_limited") return reply.code(429).send({ error: { code: "deletion_rate_limited" } });
+      if (error instanceof Error && error.message === "deletion_email_unavailable") return reply.code(503).send({ error: { code: "deletion_email_unavailable" } });
+      throw error;
+    }
+    return reply.code(202).send({ status: "accepted" });
+  });
+
+  app.post("/v1/public/deletion-requests/:requestId/confirm", async (request, reply) => {
+    const params = request.params as { requestId?: unknown };
+    const parsed = publicDeletionConfirmSchema.safeParse(request.body);
+    if (typeof params.requestId !== "string" || !parsed.success) return reply.code(400).send({ error: { code: "deletion_request_invalid" } });
+    try {
+      const lifecycle = requireStores(dependencies).accountLifecycle;
+      const possession = await lifecycle.confirmPublicDeletion(params.requestId, parsed.data.token);
+      if (possession.status === "complete") return reply.code(200).send({ status: "deleted", operationId: possession.operationId, proofId: possession.proofId });
+      const result = await lifecycle.deleteAccount(possession.userId, possession.operationId);
+      try {
+        await requireStores(dependencies).contentReports.unlinkAccount(possession.userId);
+      } catch {
+        throw new Error("remote_deletion_pending");
+      }
+      return reply.code(200).send(await lifecycle.completeDeletion(result.operationId, result.proofId));
+    } catch (error) {
+      if (error instanceof Error && ["deletion_request_invalid", "deletion_request_expired"].includes(error.message)) return reply.code(400).send({ error: { code: "deletion_request_invalid" } });
+      if (error instanceof Error && ["remote_deletion_pending", "session_revocation_failed"].includes(error.message)) return reply.code(503).send({ error: { code: "remote_deletion_pending" } });
+      throw error;
+    }
+  });
+
+  app.get("/v1/public/deletion-proofs/:proofId", async (request, reply) => {
+    const params = request.params as { proofId?: unknown };
+    if (typeof params.proofId !== "string" || !/^proof_[A-Za-z0-9_-]{20,128}$/u.test(params.proofId)) return reply.code(404).send({ error: { code: "not_found" } });
+    const proof = await requireStores(dependencies).accountLifecycle.readDeletionProof(params.proofId);
+    if (!proof) return reply.code(404).send({ error: { code: "not_found" } });
+    return reply.code(200).send(proof);
+  });
+
+  app.post("/v1/public/deletion-operations/status", async (request, reply) => {
+    const parsed = publicDeletionStatusSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(404).send({ error: { code: "not_found" } });
+    const status = await requireStores(dependencies).accountLifecycle.readDeletionOperationStatus(parsed.data.operationId, parsed.data.accountUidHash);
+    if (!status) return reply.code(404).send({ error: { code: "not_found" } });
+    return reply.code(200).send(status);
   });
 
   app.get("/v1/tracks", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => ({ tracks: await requireStores(dependencies).tracks.readAccess(request.userId!) }));

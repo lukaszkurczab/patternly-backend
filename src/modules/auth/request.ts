@@ -10,12 +10,12 @@ export async function authenticateRequest(
   request: FastifyRequest,
   verifier: IdentityTokenVerifier | null,
   resolver: IdentityResolver,
-): Promise<Readonly<{ identity: AuthenticatedIdentity; userId: string }>> {
+): Promise<Readonly<{ identity: AuthenticatedIdentity; userId: string; authTime: number }>> {
   if (!verifier) throw new Error("authentication_not_configured");
   const header = request.headers.authorization;
   if (typeof header !== "string" || !/^Bearer\s+\S+$/u.test(header)) throw new Error("authentication_required");
   const token = header.slice("Bearer ".length).trim();
   const identity = await verifier.verify(token);
   const user = await resolver.ensureUser(identity);
-  return Object.freeze({ identity, userId: user.userId });
+  return Object.freeze({ identity, userId: user.userId, authTime: identity.authTime });
 }

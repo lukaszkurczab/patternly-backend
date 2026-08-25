@@ -21,6 +21,7 @@ export const testEnvironment: Environment = loadEnvironment({
   FIREBASE_AUTH_ISSUER: `https://securetoken.google.com/${projectId}`,
   ADMINISTRATOR_EMAIL: "lukasz.kurczab@gmail.com",
   ADMIN_WEB_ORIGIN: "http://127.0.0.1:4173",
+  PUBLIC_DELETION_ORIGIN: "http://127.0.0.1:4173",
   REPORT_RATE_LIMIT_HASH_SECRET: "test-only-report-rate-limit-secret-0123456789",
   REPORT_RATE_LIMIT_MAX: "2",
   REPORT_RATE_LIMIT_WINDOW_SECONDS: "3600",
@@ -30,19 +31,29 @@ export type EmulatorContext = Readonly<{
   app: ReturnType<typeof buildApplication>;
   stores: BackendStores;
   close: () => Promise<void>;
+  deletionLinks: readonly Readonly<{ recipient: string; requestId: string; token: string; link: string }>[];
+  customTokenSubjects: readonly string[];
+  revokedSubjects: readonly string[];
 }>;
 
 export function createEmulatorContext(): EmulatorContext {
   const runtime = createFirestoreRuntime(testEnvironment);
-  const stores = createFirestoreStores(runtime, testEnvironment);
+  const deletionLinks: Array<Readonly<{ recipient: string; requestId: string; token: string; link: string }>> = [];
+  const customTokenSubjects: string[] = [];
+  const revokedSubjects: string[] = [];
+  const stores = createFirestoreStores(runtime, testEnvironment, {
+    createCustomToken: async (subject) => { customTokenSubjects.push(subject); return "fixture-custom-token"; },
+    revokeRefreshTokens: async (subject) => { revokedSubjects.push(subject); },
+  });
   const app = buildApplication({
     environment: testEnvironment,
     firestore: runtime,
     verifier: createFirebaseTokenVerifier(testEnvironment),
     appCheckVerifier: createFirebaseAppCheckVerifier(testEnvironment),
     stores,
+    deletionEmailSender: { send: async (input) => { deletionLinks.push(input); } },
   });
-  return Object.freeze({ app, stores, close: async () => { await app.close(); await runtime.close(); } });
+  return Object.freeze({ app, stores, deletionLinks, customTokenSubjects, revokedSubjects, close: async () => { await app.close(); await runtime.close(); } });
 }
 
 export async function clearFirestore(): Promise<void> {

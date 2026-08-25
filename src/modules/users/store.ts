@@ -13,7 +13,6 @@ export type UserProfile = Readonly<{
 export interface UserStore {
   ensureUser(identity: AuthenticatedIdentity): Promise<Readonly<{ userId: string }>>;
   readProfile(userId: string): Promise<UserProfile | null>;
-  deleteAccount(userId: string): Promise<void>;
 }
 
 export class FirestoreUserStore implements UserStore {
@@ -80,20 +79,4 @@ export class FirestoreUserStore implements UserStore {
     });
   }
 
-  public async deleteAccount(userId: string): Promise<void> {
-    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
-    const identitySnapshot = await this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId).get();
-    const recordedAt = now();
-    await this.db.runTransaction(async (transaction) => {
-      const userSnapshot = await transaction.get(userRef);
-      if (!userSnapshot.exists) return;
-      for (const identity of identitySnapshot.docs) {
-        const tombstoneRef = this.db.collection(COLLECTIONS.deletedIdentities).doc(identity.id);
-        transaction.create(tombstoneRef, { deletedAt: recordedAt, provider: asRecord(identity.data(), "identity_mapping").provider });
-        transaction.delete(identity.ref);
-      }
-      transaction.update(userRef, { deletedAt: recordedAt, updatedAt: recordedAt });
-    });
-    await this.db.recursiveDelete(userRef);
-  }
 }

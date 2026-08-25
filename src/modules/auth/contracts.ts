@@ -5,6 +5,7 @@ export const authenticatedIdentitySchema = z.object({
   subject: z.string().min(1).max(256),
   email: z.string().email().optional(),
   emailVerified: z.boolean(),
+  authTime: z.number().int().nonnegative(),
 });
 
 export type AuthenticatedIdentity = z.infer<typeof authenticatedIdentitySchema>;
@@ -12,4 +13,5 @@ export type AuthenticatedIdentity = z.infer<typeof authenticatedIdentitySchema>;
 export type AuthContext = Readonly<{
   externalIdentity: AuthenticatedIdentity;
   userId: string;
+  authTime: number;
 }>;

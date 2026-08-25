@@ -236,6 +236,72 @@ test("anonymous report rate limiting is transactionally enforced without storing
   assert.equal("rateLimitKey" in (buckets.docs[0]?.data() ?? {}), false);
 });
 
+test("recovery codes are eight one-time server-hashed credentials and replay is rejected", async () => {
+  const auth = await createAuthUser();
+  const headers = { authorization: `Bearer ${auth.idToken}` };
+  const issued = await context.app.inject({ method: "POST", url: "/v1/account/recovery-codes", headers, payload: {} });
+  assert.equal(issued.statusCode, 200);
+  assert.equal(issued.json().codes.length, 8);
+  const stored = await firestore().collection("recoveryCodeIndex").get();
+  assert.equal(stored.size, 8);
+  for (const document of stored.docs) {
+    assert.equal("code" in document.data(), false);
+    assert.equal("rawCode" in document.data(), false);
+  }
+  const consumed = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", payload: { code: issued.json().codes[0] } });
+  assert.equal(consumed.statusCode, 200);
+  assert.equal(consumed.json().customToken, "fixture-custom-token");
+  assert.deepEqual(context.customTokenSubjects, [auth.localId]);
+  assert.equal(context.revokedSubjects.includes(auth.localId), true);
+  const replay = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", payload: { code: issued.json().codes[0] } });
+  assert.equal(replay.statusCode, 409);
+  assert.deepEqual(replay.json(), { error: { code: "recovery_code_used" } });
+});
+
+test("destructive deletion rejects an old authenticated session before touching Firestore", async () => {
+  const auth = await createAuthUser();
+  const staleApp = buildApplication({
+    environment: testEnvironment,
+    firestore: null,
+    verifier: { verify: async () => ({ provider: "firebase", subject: auth.localId, email: auth.email, emailVerified: true, authTime: Math.floor(Date.now() / 1000) - 301 }) },
+    appCheckVerifier: null,
+    stores: context.stores,
+  });
+  const response = await staleApp.inject({ method: "POST", url: "/v1/account/deletion", headers: { authorization: "Bearer stale-but-otherwise-valid" }, payload: { operationId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" } });
+  await staleApp.close();
+  assert.equal(response.statusCode, 401);
+  assert.deepEqual(response.json(), { error: { code: "recent_reauthentication_required" } });
+  assert.equal((await firestore().collection("accountDeletionOperations").get()).size, 0);
+});
+
+test("public deletion is non-enumerating, possession verified, tombstoned, and idempotent", async () => {
+  const auth = await createAuthUser("fixture-deletion@example.invalid");
+  await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
+  const accepted = await context.app.inject({ method: "POST", url: "/v1/public/deletion-requests", payload: { email: "fixture-deletion@example.invalid" } });
+  const unknown = await context.app.inject({ method: "POST", url: "/v1/public/deletion-requests", payload: { email: "unknown-deletion@example.invalid" } });
+  assert.equal(accepted.statusCode, 202);
+  assert.equal(unknown.statusCode, 202);
+  assert.deepEqual(accepted.json(), unknown.json());
+  const preflight = await context.app.inject({ method: "OPTIONS", url: "/v1/public/deletion-requests", headers: { origin: "http://127.0.0.1:4173" } });
+  assert.equal(preflight.statusCode, 204);
+  assert.equal(preflight.headers["access-control-allow-origin"], "http://127.0.0.1:4173");
+  const wrongOrigin = await context.app.inject({ method: "OPTIONS", url: "/v1/public/deletion-requests", headers: { origin: "http://malicious.example" } });
+  assert.equal(wrongOrigin.statusCode, 403);
+  assert.equal(context.deletionLinks.length, 1);
+  const link = context.deletionLinks[0]!;
+  const bad = await context.app.inject({ method: "POST", url: `/v1/public/deletion-requests/${link.requestId}/confirm`, payload: { token: "invalid-invalid-invalid-invalid" } });
+  assert.equal(bad.statusCode, 400);
+  const first = await context.app.inject({ method: "POST", url: `/v1/public/deletion-requests/${link.requestId}/confirm`, payload: { token: link.token } });
+  assert.equal(first.statusCode, 200);
+  assert.equal(first.json().status, "deleted");
+  const replay = await context.app.inject({ method: "POST", url: `/v1/public/deletion-requests/${link.requestId}/confirm`, payload: { token: link.token } });
+  assert.equal(replay.statusCode, 200);
+  assert.deepEqual(replay.json(), first.json());
+  const tombstone = await firestore().collection("deletedIdentities").doc(identityDocumentId("firebase", auth.localId)).get();
+  assert.equal(tombstone.exists, true);
+  assert.equal((await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } })).statusCode, 401);
+});
+
 test("account deletion removes owned Firestore documents, preserves a tombstone, and redacts report linkage", async () => {
   const auth = await createAuthUser();
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
@@ -245,8 +311,12 @@ test("account deletion removes owned Firestore documents, preserves a tombstone,
   await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers: { authorization: `Bearer ${auth.idToken}` }, payload: { expectedAccountRevision: 0, mutations: [mutation] } });
   const linked = createContentReportSchema.parse({ ...reportBody("9f61e3f3-f23e-467c-b92a-9b8fd0514f25"), linkAccount: true, contactEmail: "learner@example.com" });
   await context.stores.contentReports.create(userId, linked, { rateLimitKey: "account-test-client" });
-  await context.stores.users.deleteAccount(userId);
-  await context.stores.contentReports.unlinkAccount(userId);
+  const deleted = await context.app.inject({ method: "POST", url: "/v1/account/deletion", headers: { authorization: `Bearer ${auth.idToken}` }, payload: { operationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } });
+  assert.equal(deleted.statusCode, 200);
+  assert.equal(deleted.json().status, "deleted");
+  assert.equal(context.revokedSubjects.includes(auth.localId), true);
+  const proof = await context.app.inject({ method: "GET", url: `/v1/public/deletion-proofs/${deleted.json().proofId}` });
+  assert.equal(proof.statusCode, 200);
   assert.equal((await firestore().collection("users").doc(userId).get()).exists, false);
   assert.equal((await firestore().collection("users").doc(userId).collection("progress").get()).size, 0);
   assert.equal((await firestore().collection("identityMappings").where("userId", "==", userId).get()).size, 0);

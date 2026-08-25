@@ -9,6 +9,9 @@ import type { ProgressStore } from "../../modules/progress/contracts.js";
 import { FirestoreTrackStore, type TrackStore } from "../../modules/tracks/store.js";
 import { FirestoreUserStore, type UserStore } from "../../modules/users/store.js";
 import type { Environment } from "../../config/environment.js";
+import { createFirebaseAdminAuth } from "../firebase/adminAuth.js";
+import type { FirebaseAdminAuth } from "../firebase/adminAuth.js";
+import { FirestoreAccountLifecycleStore, type AccountLifecycleStore } from "../../modules/account-lifecycle/store.js";
 
 export type BackendStores = Readonly<{
   users: UserStore;
@@ -18,9 +21,15 @@ export type BackendStores = Readonly<{
   tracks: TrackStore;
   content: ContentVersionStore;
   contentReports: ContentReportStore;
+  accountLifecycle: AccountLifecycleStore;
 }>;
 
-export function createFirestoreStores(runtime: FirestoreRuntime, environment: Environment): BackendStores {
+export function createFirestoreStores(runtime: FirestoreRuntime, environment: Environment, authOverride?: FirebaseAdminAuth): BackendStores {
+  const contentReports = new FirestoreContentReportStore(runtime.db, {
+    rateLimitHashSecret: environment.reportRateLimitHashSecret,
+    rateLimitMax: environment.reportRateLimitMax,
+    rateLimitWindowSeconds: environment.reportRateLimitWindowSeconds,
+  });
   return Object.freeze({
     users: new FirestoreUserStore(runtime.db),
     devices: new FirestoreDeviceStore(runtime.db),
@@ -28,10 +37,7 @@ export function createFirestoreStores(runtime: FirestoreRuntime, environment: En
     entitlements: new FirestoreEntitlementStore(runtime.db),
     tracks: new FirestoreTrackStore(runtime.db),
     content: new FirestoreContentVersionStore(runtime.db),
-    contentReports: new FirestoreContentReportStore(runtime.db, {
-      rateLimitHashSecret: environment.reportRateLimitHashSecret,
-      rateLimitMax: environment.reportRateLimitMax,
-      rateLimitWindowSeconds: environment.reportRateLimitWindowSeconds,
-    }),
+    contentReports,
+    accountLifecycle: new FirestoreAccountLifecycleStore(runtime.db, authOverride ?? createFirebaseAdminAuth(runtime.app)),
   });
 }

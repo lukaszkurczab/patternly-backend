@@ -146,6 +146,218 @@
         }
       }
     },
+    "/v1/account/recovery-codes": {
+      "post": {
+        "description": "Replace the account's eight one-time recovery codes after recent reauthentication",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recovery codes returned once"
+          },
+          "401": {
+            "description": "Recent reauthentication required"
+          }
+        }
+      }
+    },
+    "/v1/public/recovery-codes/consume": {
+      "post": {
+        "security": [],
+        "description": "Consume one possession recovery code and issue a Firebase custom token",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryCodeConsumeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recovery code consumed"
+          },
+          "401": {
+            "description": "Invalid recovery code"
+          },
+          "409": {
+            "description": "Recovery code already used"
+          }
+        }
+      }
+    },
+    "/v1/account/session/revoke": {
+      "post": {
+        "description": "Revoke current and stale Firebase sessions idempotently",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sessions revoked"
+          },
+          "503": {
+            "description": "Revocation pending; account remains bound"
+          }
+        }
+      }
+    },
+    "/v1/account/deletion": {
+      "post": {
+        "description": "Delete the authenticated account after recent reauthentication and return a verified proof",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Remote deletion and proof complete"
+          },
+          "401": {
+            "description": "Recent reauthentication required"
+          },
+          "503": {
+            "description": "Remote deletion pending"
+          }
+        }
+      }
+    },
+    "/v1/public/deletion-requests": {
+      "post": {
+        "security": [],
+        "description": "Accept a non-enumerating public deletion request and send a possession link when configured",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicDeletionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Non-enumerating request accepted"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "503": {
+            "description": "Deletion email delivery unavailable"
+          }
+        }
+      }
+    },
+    "/v1/public/deletion-requests/{requestId}/confirm": {
+      "post": {
+        "security": [],
+        "description": "Verify possession with the expiring deletion token and execute deletion idempotently",
+        "parameters": [
+          {
+            "name": "requestId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicDeletionConfirm"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deletion proof complete"
+          },
+          "400": {
+            "description": "Invalid or expired possession token"
+          },
+          "503": {
+            "description": "Remote deletion pending"
+          }
+        }
+      }
+    },
+    "/v1/public/deletion-proofs/{proofId}": {
+      "get": {
+        "security": [],
+        "description": "Read an opaque server deletion proof",
+        "parameters": [
+          {
+            "name": "proofId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deletion proof"
+          },
+          "404": {
+            "description": "Proof unavailable"
+          }
+        }
+      }
+    },
+    "/v1/public/deletion-operations/status": {
+      "post": {
+        "security": [],
+        "description": "Read deletion progress only with the operation id and the local possession-bound uid hash",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicDeletionStatus"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deletion operation status"
+          },
+          "404": {
+            "description": "Operation unavailable"
+          }
+        }
+      }
+    },
     "/v1/tracks": {
       "get": {
         "responses": {
@@ -524,6 +736,82 @@
                 }
               }
             }
+          }
+        }
+      },
+      "EmptyRequest": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "OperationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operationId"
+        ],
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "RecoveryCodeConsumeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){3}$"
+          }
+        }
+      },
+      "PublicDeletionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 320
+          }
+        }
+      },
+      "PublicDeletionConfirm": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 20,
+            "maxLength": 128
+          }
+        }
+      },
+      "PublicDeletionStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operationId",
+          "accountUidHash"
+        ],
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "accountUidHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
           }
         }
       },
