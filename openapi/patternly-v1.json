@@ -73,7 +73,7 @@
       "get": {
         "responses": {
           "200": {
-            "description": "Canonical progress state"
+            "description": "Canonical progress state and account revision"
           }
         }
       }
@@ -95,7 +95,53 @@
             "description": "Applied or duplicate mutations"
           },
           "409": {
-            "description": "Progress version conflict"
+            "description": "Progress or account revision conflict"
+          }
+        }
+      }
+    },
+    "/v1/account-data/adoption/preview": {
+      "post": {
+        "description": "Preview local account-data adoption without binding or writing learning records",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GuestMergeSnapshot"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deterministic adoption preview"
+          },
+          "400": {
+            "description": "Invalid snapshot"
+          }
+        }
+      }
+    },
+    "/v1/account-data/adoption/confirm": {
+      "post": {
+        "description": "Execute an exact confirmed adoption preview idempotently",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdoptionConfirmationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Adoption executed or replayed idempotently"
+          },
+          "409": {
+            "description": "Preview, resolution, active-session or idempotency conflict"
           }
         }
       }
@@ -247,9 +293,11 @@
         "required": [
           "mutationId",
           "kind",
+          "recordType",
           "trackId",
           "targetId",
           "expectedVersion",
+          "fingerprint",
           "state"
         ],
         "properties": {
@@ -263,6 +311,16 @@
             "enum": [
               "node",
               "item"
+            ]
+          },
+          "recordType": {
+            "type": "string",
+            "enum": [
+              "active_track",
+              "training_session_summary",
+              "training_session_result",
+              "training_attempt",
+              "review_queue_entry"
             ]
           },
           "trackId": {
@@ -282,6 +340,10 @@
               }
             ]
           },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
           "state": {
             "type": "object",
             "additionalProperties": true
@@ -291,9 +353,14 @@
       "SyncRequest": {
         "type": "object",
         "required": [
+          "expectedAccountRevision",
           "mutations"
         ],
         "properties": {
+          "expectedAccountRevision": {
+            "type": "integer",
+            "minimum": 0
+          },
           "deviceId": {
             "anyOf": [
               {
@@ -311,6 +378,151 @@
             "maxItems": 100,
             "items": {
               "$ref": "#/components/schemas/ProgressMutation"
+            }
+          }
+        }
+      },
+      "GuestMergeSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "guestSnapshotVersion",
+          "guestUserId",
+          "records",
+          "activeSession",
+          "pendingJournal"
+        ],
+        "properties": {
+          "guestSnapshotVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "guestUserId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "records": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "$ref": "#/components/schemas/GuestMergeRecord"
+            }
+          },
+          "activeSession": {
+            "type": "boolean"
+          },
+          "pendingJournal": {
+            "type": "boolean"
+          }
+        }
+      },
+      "GuestMergeRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "fingerprint",
+          "recordId",
+          "recordType",
+          "state",
+          "trackId",
+          "version"
+        ],
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "recordId": {
+            "type": "string"
+          },
+          "recordType": {
+            "type": "string",
+            "enum": [
+              "active_track",
+              "training_session_summary",
+              "training_session_result",
+              "training_attempt",
+              "review_queue_entry"
+            ]
+          },
+          "state": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "trackId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AdoptionConfirmationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "deviceId",
+          "snapshot",
+          "confirmation"
+        ],
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/GuestMergeSnapshot"
+          },
+          "confirmation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "operationId",
+              "previewFingerprint",
+              "protocolVersion",
+              "resolutions"
+            ],
+            "properties": {
+              "operationId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "previewFingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "protocolVersion": {
+                "type": "integer",
+                "enum": [
+                  1
+                ]
+              },
+              "resolutions": {
+                "type": "array",
+                "maxItems": 1000,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "conflictId",
+                    "resolution"
+                  ],
+                  "properties": {
+                    "conflictId": {
+                      "type": "string"
+                    },
+                    "resolution": {
+                      "type": "string",
+                      "enum": [
+                        "keep_guest",
+                        "keep_account",
+                        "manual_required"
+                      ]
+                    }
+                  }
+                }
+              }
             }
           }
         }

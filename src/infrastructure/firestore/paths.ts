@@ -15,8 +15,8 @@ export function identityDocumentId(provider: string, subject: string): string {
   return createHash("sha256").update(`${provider}:${subject}`, "utf8").digest("hex");
 }
 
-export function progressDocumentId(mutation: Pick<ProgressMutation, "kind" | "trackId" | "targetId">): string {
-  return createHash("sha256").update(`${mutation.kind}:${mutation.trackId}:${mutation.targetId}`, "utf8").digest("hex");
+export function progressDocumentId(mutation: Pick<ProgressMutation, "kind" | "recordType" | "targetId">): string {
+  return createHash("sha256").update(`${mutation.kind}:${mutation.recordType}:${mutation.targetId}`, "utf8").digest("hex");
 }
 
 export function contentVersionDocumentId(trackId: string, version: string): string {

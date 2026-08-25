@@ -7,6 +7,7 @@ import { OPENAPI_DOCUMENT } from "./openapi.js";
 import { authenticateRequest } from "../modules/auth/request.js";
 import type { BackendStores } from "../infrastructure/firestore/stores.js";
 import { syncRequestSchema } from "../modules/progress/contracts.js";
+import { guestMergeConfirmationSchema, guestMergeSnapshotSchema } from "../modules/users/merge.js";
 import { createContentReportSchema, transitionContentReportSchema } from "../modules/content-reports/contracts.js";
 
 declare module "fastify" {
@@ -36,6 +37,15 @@ const authErrorStatus = (error: unknown): number => {
 const errorCode = (error: unknown): string => {
   const message = error instanceof Error ? error.message : "internal_error";
   if (message === "version_conflict") return "version_conflict";
+  if (message === "account_revision_conflict") return "account_revision_conflict";
+  if (message === "merge_preview_mismatch") return "merge_preview_mismatch";
+  if (message === "merge_resolution_incomplete") return "merge_resolution_incomplete";
+  if (message === "merge_resolution_mismatch") return "merge_resolution_mismatch";
+  if (message === "merge_conflict_requires_manual_resolution") return "merge_conflict_requires_manual_resolution";
+  if (message === "active_session_adoption_blocked") return "active_session_adoption_blocked";
+  if (message === "journal_recovery_required") return "journal_recovery_required";
+  if (message === "mutation_id_reuse") return "mutation_id_reuse";
+  if (message === "progress_fingerprint_mismatch") return "progress_fingerprint_mismatch";
   if (message === "firestore_not_ready") return "firestore_not_ready";
   if (message === "authentication_required") return "authentication_required";
   if (message === "account_deleted") return "account_deleted";
@@ -140,14 +150,46 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
 
   app.get("/v1/entitlements", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => ({ entitlements: await requireStores(dependencies).entitlements.read(request.userId!) }));
 
-  app.get("/v1/progress", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => ({ records: await requireStores(dependencies).progress.read(request.userId!) }));
+  app.get("/v1/progress", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => {
+    const snapshot = await requireStores(dependencies).progress.readSnapshot(request.userId!);
+    return { accountRevision: snapshot.accountRevision, records: snapshot.records };
+  });
 
   app.post("/v1/progress/sync", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
     const parsed = syncRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });
-    const result = await requireStores(dependencies).progress.applyBatch(request.userId!, parsed.data.deviceId, parsed.data.mutations);
-    if (result.conflicts.length > 0) return reply.code(409).send(result);
-    return reply.code(200).send(result);
+    try {
+      const result = await requireStores(dependencies).progress.applyBatch(request.userId!, parsed.data.deviceId, parsed.data.expectedAccountRevision, parsed.data.mutations);
+      if (result.conflicts.length > 0 || result.accountRevisionConflict) return reply.code(409).send(result.accountRevisionConflict ? { error: result.accountRevisionConflict } : result);
+      return reply.code(200).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "internal_error";
+      if (message === "progress_fingerprint_mismatch") return reply.code(400).send({ error: { code: errorCode(error) } });
+      if (message === "mutation_id_reuse") return reply.code(409).send({ error: { code: errorCode(error) } });
+      throw error;
+    }
+  });
+
+  app.post("/v1/account-data/adoption/preview", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const parsed = guestMergeSnapshotSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });
+    return reply.code(200).send(await requireStores(dependencies).progress.previewAdoption(request.userId!, parsed.data));
+  });
+
+  app.post("/v1/account-data/adoption/confirm", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+    const snapshot = guestMergeSnapshotSchema.safeParse(body?.snapshot);
+    const confirmation = guestMergeConfirmationSchema.safeParse(body?.confirmation);
+    const deviceId = typeof body?.deviceId === "string" ? body.deviceId : "";
+    if (!snapshot.success || !confirmation.success || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(deviceId)) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      return reply.code(200).send(await requireStores(dependencies).progress.confirmAdoption(request.userId!, deviceId, snapshot.data, confirmation.data));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "internal_error";
+      if (["merge_preview_mismatch", "merge_resolution_incomplete", "merge_resolution_mismatch", "merge_conflict_requires_manual_resolution", "active_session_adoption_blocked", "journal_recovery_required", "mutation_id_reuse"].includes(message)) return reply.code(409).send({ error: { code: errorCode(error) } });
+      if (message === "progress_fingerprint_mismatch") return reply.code(400).send({ error: { code: errorCode(error) } });
+      throw error;
+    }
   });
 
   app.get("/v1/tracks", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => ({ tracks: await requireStores(dependencies).tracks.readAccess(request.userId!) }));
