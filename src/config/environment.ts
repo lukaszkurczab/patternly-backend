@@ -14,7 +14,6 @@ const environmentSchema = z.object({
   REPORT_RATE_LIMIT_MAX: z.coerce.number().int().positive().max(100).default(5),
   REPORT_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().max(86_400).default(3_600),
   REVENUECAT_API_BASE_URL: z.string().url().default("https://api.revenuecat.com"),
-  REVENUECAT_SECRET_NAME: z.string().min(1).optional(),
   CONTENT_CATALOG_ORIGIN: z.string().url().optional(),
 });
 
@@ -32,7 +31,6 @@ export type Environment = Readonly<{
   reportRateLimitMax: number;
   reportRateLimitWindowSeconds: number;
   revenueCatApiBaseUrl: string;
-  revenueCatSecretName: string | undefined;
   contentCatalogOrigin: string | undefined;
 }>;
 
@@ -43,7 +41,6 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
   if (value.NODE_ENV === "production") {
     if (!value.FIREBASE_PROJECT_ID || !value.FIREBASE_AUTH_ISSUER) throw new Error("production_firebase_config_required");
     if (!value.ADMINISTRATOR_EMAIL) throw new Error("production_administrator_email_required");
-    if (!value.REVENUECAT_SECRET_NAME) throw new Error("production_revenuecat_secret_required");
   }
   return Object.freeze({
     nodeEnv: value.NODE_ENV,
@@ -59,7 +56,6 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     reportRateLimitMax: value.REPORT_RATE_LIMIT_MAX,
     reportRateLimitWindowSeconds: value.REPORT_RATE_LIMIT_WINDOW_SECONDS,
     revenueCatApiBaseUrl: value.REVENUECAT_API_BASE_URL,
-    revenueCatSecretName: value.REVENUECAT_SECRET_NAME,
     contentCatalogOrigin: value.CONTENT_CATALOG_ORIGIN,
   });
 }

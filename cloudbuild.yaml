@@ -4,7 +4,7 @@ steps:
     args: ["ci"]
   - name: node:22
     entrypoint: npm
-    args: ["run", "ci"]
+    args: ["run", "ci:cloud"]
   - name: gcr.io/cloud-builders/docker
     args: ["build", "-t", "${_IMAGE}", "."]
 images: ["${_IMAGE}"]

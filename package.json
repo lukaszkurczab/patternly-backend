@@ -11,11 +11,13 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "node scripts/lint.mjs",
     "test": "node --import tsx --test tests/*.test.ts",
+    "test:cloud": "node --import tsx --test tests/deployment.test.ts tests/merge.test.ts",
     "test:emulator": "firebase emulators:exec --project patternly-app-sandbox --only auth,firestore \"npm test\"",
     "openapi:generate": "node --import tsx scripts/generate-openapi.ts",
-    "openapi:check": "npm run openapi:generate && git diff --exit-code -- openapi/patternly-v1.json",
+    "openapi:check": "node --import tsx scripts/check-openapi.ts",
     "frontend:client:check": "node scripts/check-frontend-client.mjs",
-    "ci": "npm run lint && npm run typecheck && npm run test:emulator && npm run openapi:check && npm run frontend:client:check && npm run build"
+    "ci": "npm run lint && npm run typecheck && npm run test:emulator && npm run openapi:check && npm run frontend:client:check && npm run build",
+    "ci:cloud": "npm run lint && npm run typecheck && npm run test:cloud && npm run openapi:check && npm run build"
   },
   "dependencies": {
     "fastify": "^5.12.1",

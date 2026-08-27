@@ -9,7 +9,6 @@ Cloud Run service configuration:
 
 - `FIREBASE_PROJECT_ID` and `FIREBASE_AUTH_ISSUER`;
 - `REPORT_RATE_LIMIT_HASH_SECRET`;
-- `REVENUECAT_SECRET_NAME` for the provider boundary;
 - `LOG_LEVEL` and `NODE_ENV`.
 
 Before promotion, run `npm run ci` (including the Firebase Emulator Suite),
