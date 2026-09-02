@@ -148,7 +148,7 @@
     },
     "/v1/account/recovery-codes": {
       "post": {
-        "description": "Replace the account's eight one-time recovery codes after recent reauthentication",
+        "description": "Replace the account's ten one-time recovery codes after recent reauthentication",
         "requestBody": {
           "required": true,
           "content": {

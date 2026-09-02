@@ -7,7 +7,7 @@ import { asRecord, asTimestamp, now } from "../../infrastructure/firestore/value
 import type { AccountDeletionResult, CompletedDeletion, PublicDeletionConfirmation } from "./contracts.js";
 
 const DELETION_TOKEN_TTL_MS = 30 * 60 * 1000;
-const RECOVERY_CODE_COUNT = 8;
+const RECOVERY_CODE_COUNT = 10;
 const PUBLIC_DELETION_REQUEST_LIMIT = 3;
 const PUBLIC_DELETION_WINDOW_MS = 60 * 60 * 1000;
 

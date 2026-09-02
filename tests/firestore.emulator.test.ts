@@ -236,24 +236,47 @@ test("anonymous report rate limiting is transactionally enforced without storing
   assert.equal("rateLimitKey" in (buckets.docs[0]?.data() ?? {}), false);
 });
 
-test("recovery codes are eight one-time server-hashed credentials and replay is rejected", async () => {
+test("recovery codes are ten one-time server-hashed credentials, reissue invalidates the previous set, and replay is rejected", async () => {
   const auth = await createAuthUser();
   const headers = { authorization: `Bearer ${auth.idToken}` };
-  const issued = await context.app.inject({ method: "POST", url: "/v1/account/recovery-codes", headers, payload: {} });
-  assert.equal(issued.statusCode, 200);
-  assert.equal(issued.json().codes.length, 8);
-  const stored = await firestore().collection("recoveryCodeIndex").get();
-  assert.equal(stored.size, 8);
-  for (const document of stored.docs) {
+  const firstIssued = await context.app.inject({ method: "POST", url: "/v1/account/recovery-codes", headers, payload: {} });
+  assert.equal(firstIssued.statusCode, 200);
+  const firstCodes = firstIssued.json().codes as string[];
+  assert.equal(firstCodes.length, 10);
+  assert.equal(new Set(firstCodes).size, 10);
+  for (const code of firstCodes) assert.match(code, /^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){3}$/u);
+  const firstStored = await firestore().collection("recoveryCodeIndex").get();
+  assert.equal(firstStored.size, 10);
+  for (const document of firstStored.docs) {
+    assert.match(document.id, /^[a-f0-9]{64}$/u);
     assert.equal("code" in document.data(), false);
     assert.equal("rawCode" in document.data(), false);
   }
-  const consumed = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", payload: { code: issued.json().codes[0] } });
+
+  const secondIssued = await context.app.inject({ method: "POST", url: "/v1/account/recovery-codes", headers, payload: {} });
+  assert.equal(secondIssued.statusCode, 200);
+  const secondCodes = secondIssued.json().codes as string[];
+  assert.equal(secondCodes.length, 10);
+  assert.equal(new Set(secondCodes).size, 10);
+  assert.notDeepEqual(secondCodes, firstCodes);
+  const secondStored = await firestore().collection("recoveryCodeIndex").get();
+  assert.equal(secondStored.size, 10);
+  for (const document of secondStored.docs) {
+    assert.match(document.id, /^[a-f0-9]{64}$/u);
+    assert.equal("code" in document.data(), false);
+    assert.equal("rawCode" in document.data(), false);
+  }
+
+  const previousSet = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", payload: { code: firstCodes[0] } });
+  assert.equal(previousSet.statusCode, 401);
+  assert.deepEqual(previousSet.json(), { error: { code: "recovery_code_invalid" } });
+
+  const consumed = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", payload: { code: secondCodes[0] } });
   assert.equal(consumed.statusCode, 200);
   assert.equal(consumed.json().customToken, "fixture-custom-token");
   assert.deepEqual(context.customTokenSubjects, [auth.localId]);
   assert.equal(context.revokedSubjects.includes(auth.localId), true);
-  const replay = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", payload: { code: issued.json().codes[0] } });
+  const replay = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", payload: { code: secondCodes[0] } });
   assert.equal(replay.statusCode, 409);
   assert.deepEqual(replay.json(), { error: { code: "recovery_code_used" } });
 });
