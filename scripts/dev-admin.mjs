@@ -155,6 +155,8 @@ try {
     FIREBASE_PROJECT_ID: project, FIREBASE_AUTH_ISSUER: `https://securetoken.google.com/${project}`,
     FIREBASE_AUTH_EMULATOR_HOST: authHost, FIRESTORE_EMULATOR_HOST: firestoreHost,
     ADMINISTRATOR_EMAIL: admin.email, ADMIN_WEB_ORIGIN: webOrigin,
+    ADMIN_CONTENT_ROOT: resolve(root, "../patternly-content/artifacts"),
+    ADMIN_CONTENT_RELEASE_ID: "patternly-launch-2026-08-25-01",
     REPORT_RATE_LIMIT_HASH_SECRET: "local-admin-report-rate-limit-secret-0123456789" };
   start("API", process.execPath, ["--import", "tsx", "src/index.ts"], { cwd: root, env: environment });
   await waitFor(`${apiOrigin}/ready`);

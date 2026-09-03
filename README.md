@@ -21,6 +21,11 @@ under `/v1`. Production configuration is fail-closed: without Firestore,
 Firebase verifier, App Check and rate-limit configuration, readiness is
 unavailable and production startup rejects the environment.
 
+The administrator question browser reads only a configured immutable artifact
+release (`ADMIN_CONTENT_ROOT` and `ADMIN_CONTENT_RELEASE_ID`). It does not fetch
+content package URIs. See `docs/cloud-run-manual-deploy.md` for the required
+read-only deployment mount.
+
 The generated frontend client is checked with:
 
 ```sh

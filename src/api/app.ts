@@ -139,9 +139,9 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
     request.correlationId = correlationId;
     reply.header("x-correlation-id", correlationId);
     const origin = request.headers.origin;
-    const isAdminReportRoute = request.url.startsWith("/v1/admin/content-reports");
+    const isAdminRoute = request.url.startsWith("/v1/admin/");
     const isPublicDeletionRoute = request.url.startsWith("/v1/public/deletion-");
-    if (isAdminReportRoute && typeof origin === "string" && origin === dependencies.environment.adminWebOrigin) {
+    if (isAdminRoute && typeof origin === "string" && origin === dependencies.environment.adminWebOrigin) {
       reply.header("access-control-allow-origin", origin);
       reply.header("access-control-allow-headers", "authorization, content-type");
       reply.header("access-control-allow-methods", "GET, PATCH, OPTIONS");
@@ -153,7 +153,7 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
       reply.header("access-control-allow-methods", "GET, POST, OPTIONS");
       reply.header("vary", "Origin");
     }
-    if (isAdminReportRoute && request.method === "OPTIONS") {
+    if (isAdminRoute && request.method === "OPTIONS") {
       if (typeof origin !== "string" || origin !== dependencies.environment.adminWebOrigin) return reply.code(403).send({ error: { code: "origin_not_allowed" } });
       return reply.code(204).send();
     }
@@ -358,6 +358,22 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
   app.get("/v1/admin/content-reports", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     return { reports: await requireStores(dependencies).contentReports.listQueue() };
+  });
+  app.get("/v1/admin/overview", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireAdministrator(request, reply, dependencies)) return;
+    return requireStores(dependencies).admin.readOverview();
+  });
+  app.get("/v1/admin/questions", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireAdministrator(request, reply, dependencies)) return;
+    const query = request.query as { trackId?: unknown; q?: unknown; page?: unknown; pageSize?: unknown };
+    const trackId = typeof query.trackId === "string" && /^[A-Za-z0-9._:/-]{1,128}$/u.test(query.trackId) ? query.trackId : undefined;
+    const search = typeof query.q === "string" && query.q.trim().length <= 160 ? query.q : undefined;
+    const page = query.page === undefined ? 1 : typeof query.page === "string" && /^[1-9][0-9]{0,5}$/u.test(query.page) ? Number(query.page) : NaN;
+    const pageSize = query.pageSize === undefined ? 25 : typeof query.pageSize === "string" && /^[1-9][0-9]{0,2}$/u.test(query.pageSize) ? Number(query.pageSize) : NaN;
+    if (!Number.isSafeInteger(page) || !Number.isSafeInteger(pageSize) || pageSize > 100 || (query.trackId !== undefined && trackId === undefined) || (query.q !== undefined && search === undefined)) return reply.code(400).send({ error: { code: "invalid_request" } });
+    const questions = await requireStores(dependencies).admin.listQuestions({ ...(trackId === undefined ? {} : { trackId }), ...(search === undefined ? {} : { query: search }), page, pageSize });
+    if ("unavailable" in questions) return reply.code(503).send({ error: { code: "question_inspection_unavailable", reason: questions.reason } });
+    return questions;
   });
   app.patch("/v1/admin/content-reports/:clientSubmissionId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;

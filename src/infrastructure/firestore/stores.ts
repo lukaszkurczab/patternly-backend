@@ -12,6 +12,7 @@ import type { Environment } from "../../config/environment.js";
 import { createFirebaseAdminAuth } from "../firebase/adminAuth.js";
 import type { FirebaseAdminAuth } from "../firebase/adminAuth.js";
 import { FirestoreAccountLifecycleStore, type AccountLifecycleStore } from "../../modules/account-lifecycle/store.js";
+import { FirestoreAdminStore, type AdminStore } from "../../modules/admin/store.js";
 
 export type BackendStores = Readonly<{
   users: UserStore;
@@ -22,6 +23,7 @@ export type BackendStores = Readonly<{
   content: ContentVersionStore;
   contentReports: ContentReportStore;
   accountLifecycle: AccountLifecycleStore;
+  admin: AdminStore;
 }>;
 
 export function createFirestoreStores(runtime: FirestoreRuntime, environment: Environment, authOverride?: FirebaseAdminAuth): BackendStores {
@@ -39,5 +41,6 @@ export function createFirestoreStores(runtime: FirestoreRuntime, environment: En
     content: new FirestoreContentVersionStore(runtime.db),
     contentReports,
     accountLifecycle: new FirestoreAccountLifecycleStore(runtime.db, authOverride ?? createFirebaseAdminAuth(runtime.app)),
+    admin: new FirestoreAdminStore(runtime.db, environment.adminContentRoot, environment.adminContentReleaseId),
   });
 }

@@ -434,6 +434,82 @@
         }
       }
     },
+    "/v1/admin/overview": {
+      "get": {
+        "description": "Bounded operational metrics from Firestore and question-bank availability from the configured checksum-verified immutable content release.",
+        "responses": {
+          "200": {
+            "description": "Published-content, usage, and report statistics"
+          },
+          "401": {
+            "description": "Valid Firebase bearer token required"
+          },
+          "403": {
+            "description": "Verified configured administrator required"
+          }
+        }
+      }
+    },
+    "/v1/admin/questions": {
+      "get": {
+        "description": "Paginated inspection of checksum-verified, locally configured published artifacts. The endpoint never dereferences package URIs.",
+        "parameters": [
+          {
+            "name": "trackId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Question page from verified published artifacts"
+          },
+          "400": {
+            "description": "Invalid query parameters"
+          },
+          "401": {
+            "description": "Valid Firebase bearer token required"
+          },
+          "403": {
+            "description": "Verified configured administrator required"
+          },
+          "503": {
+            "description": "Question package inspection is not configured"
+          }
+        }
+      }
+    },
     "/v1/admin/content-reports/{clientSubmissionId}": {
       "patch": {
         "description": "Advance one report through the server-owned triage state machine; a verified Firebase token for the configured administrator is required.",

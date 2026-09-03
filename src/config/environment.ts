@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const ADMIN_CONTENT_RELEASE_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
+
 const environmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
@@ -15,6 +17,8 @@ const environmentSchema = z.object({
   REPORT_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().max(86_400).default(3_600),
   REVENUECAT_API_BASE_URL: z.string().url().default("https://api.revenuecat.com"),
   CONTENT_CATALOG_ORIGIN: z.string().url().optional(),
+  ADMIN_CONTENT_ROOT: z.string().min(1).optional(),
+  ADMIN_CONTENT_RELEASE_ID: z.string().regex(ADMIN_CONTENT_RELEASE_ID_PATTERN).optional(),
 });
 
 export type Environment = Readonly<{
@@ -32,6 +36,8 @@ export type Environment = Readonly<{
   reportRateLimitWindowSeconds: number;
   revenueCatApiBaseUrl: string;
   contentCatalogOrigin: string | undefined;
+  adminContentRoot: string | undefined;
+  adminContentReleaseId: string | undefined;
 }>;
 
 export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
@@ -59,6 +65,8 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     reportRateLimitWindowSeconds: value.REPORT_RATE_LIMIT_WINDOW_SECONDS,
     revenueCatApiBaseUrl: value.REVENUECAT_API_BASE_URL,
     contentCatalogOrigin: value.CONTENT_CATALOG_ORIGIN,
+    adminContentRoot: value.ADMIN_CONTENT_ROOT,
+    adminContentReleaseId: value.ADMIN_CONTENT_RELEASE_ID,
   });
 }
 

@@ -128,7 +128,7 @@ export class FirestoreProgressStore implements ProgressStore {
           state: write.mutation.state,
           lastMutationId: write.mutation.mutationId,
           updatedAt: write.updatedAt,
-        }, { merge: true });
+        });
         transaction.create(write.mutationRef, { deviceId, mutationId: write.mutation.mutationId, recordType: write.mutation.recordType, appliedVersion: write.nextVersion, createdAt: write.updatedAt, operationId: confirmation.operationId });
       }
       const nextAccountRevision = accountRevision + progressWrites.length;
@@ -179,7 +179,7 @@ export class FirestoreProgressStore implements ProgressStore {
         const updatedAt = now();
         const updated: ProgressRecord = Object.freeze({ kind: mutation.kind, recordType: mutation.recordType, trackId: mutation.trackId, targetId: mutation.targetId, version: nextVersion, fingerprint: mutation.fingerprint, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt: updatedAt.toDate().toISOString() });
         const progressRef = progressRefs[index]!;
-        transaction.set(progressRef, { kind: mutation.kind, recordType: mutation.recordType, trackId: mutation.trackId, targetId: mutation.targetId, version: nextVersion, fingerprint: mutation.fingerprint, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt }, { merge: true });
+        transaction.set(progressRef, { kind: mutation.kind, recordType: mutation.recordType, trackId: mutation.trackId, targetId: mutation.targetId, version: nextVersion, fingerprint: mutation.fingerprint, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt });
         transaction.create(mutationRefs[index]!, { ...(deviceId === null ? {} : { deviceId }), mutationId: mutation.mutationId, recordType: mutation.recordType, appliedVersion: nextVersion, createdAt: updatedAt });
         applied.push(updated);
       }

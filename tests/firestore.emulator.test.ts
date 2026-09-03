@@ -227,6 +227,12 @@ test("administrator report routes require a current verified administrator token
 
   const admin = await verifyAuthUser(unverifiedAdmin);
   const headers = { authorization: `Bearer ${admin.idToken}` };
+  const overview = await context.app.inject({ method: "GET", url: "/v1/admin/overview", headers });
+  assert.equal(overview.statusCode, 200);
+  assert.equal(overview.json().questionBank.status, "unavailable");
+  const unavailableQuestions = await context.app.inject({ method: "GET", url: "/v1/admin/questions?page=1&pageSize=25", headers });
+  assert.equal(unavailableQuestions.statusCode, 503);
+  assert.deepEqual(unavailableQuestions.json(), { error: { code: "question_inspection_unavailable", reason: "canonical_package_inspection_not_configured" } });
   const accepted = await context.app.inject({ method: "GET", url: "/v1/admin/content-reports", headers });
   assert.equal(accepted.statusCode, 200);
   assert.equal(accepted.json().reports[0]?.clientSubmissionId, input.clientSubmissionId);

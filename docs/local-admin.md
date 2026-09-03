@@ -16,6 +16,13 @@ Login i losowe hasło znajdują się w `.local/admin/credentials.json` (uprawnie
 konta Firebase w chmurze. Przy pierwszym starcie kolejka jest pusta. Launcher
 nie dodaje zgłoszeń ani treści.
 
+Launcher montuje logicznie lokalne `../patternly-content/artifacts` jako
+wyłącznie do odczytu źródło panelu i wybiera niezmienny release
+`patternly-launch-2026-08-25-01`. Dzięki temu katalog pytań pochodzi z
+opublikowanego release, a nie z danych emulatora Firestore. Produkcja wymaga
+odpowiednika tego montowania oraz `ADMIN_CONTENT_ROOT` i
+`ADMIN_CONTENT_RELEASE_ID`; szczegóły opisuje `cloud-run-manual-deploy.md`.
+
 Projekt `demo-patternly-admin` korzysta z prawdziwych emulatorów Auth (29199)
 i Firestore (28181). Hub, logowanie emulatorów i WebSocket używają odpowiednio
 24410, 24510 i 9152. Wszystkie usługi słuchają na loopback. Zajęcie dowolnego
