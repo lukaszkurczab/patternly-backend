@@ -8,7 +8,7 @@ const environmentSchema = z.object({
   FIREBASE_PROJECT_ID: z.string().regex(/^[a-z0-9-]+$/u).optional(),
   FIREBASE_AUTH_ISSUER: z.string().url().optional(),
   ADMINISTRATOR_EMAIL: z.string().email().optional(),
-  ADMIN_WEB_ORIGIN: z.string().url().optional(),
+  ADMIN_WEB_ORIGIN: z.string().optional(),
   PUBLIC_DELETION_ORIGIN: z.string().url().optional(),
   REPORT_RATE_LIMIT_HASH_SECRET: z.string().min(32),
   REPORT_RATE_LIMIT_MAX: z.coerce.number().int().positive().max(100).default(5),
@@ -41,7 +41,9 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
   if (value.NODE_ENV === "production") {
     if (!value.FIREBASE_PROJECT_ID || !value.FIREBASE_AUTH_ISSUER) throw new Error("production_firebase_config_required");
     if (!value.ADMINISTRATOR_EMAIL) throw new Error("production_administrator_email_required");
+    if (!value.ADMIN_WEB_ORIGIN) throw new Error("production_admin_web_origin_required");
   }
+  const adminWebOrigin = parseAdminWebOrigin(value.ADMIN_WEB_ORIGIN, value.NODE_ENV);
   return Object.freeze({
     nodeEnv: value.NODE_ENV,
     port: value.PORT,
@@ -50,7 +52,7 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     firebaseProjectId: value.FIREBASE_PROJECT_ID,
     firebaseAuthIssuer: value.FIREBASE_AUTH_ISSUER,
     administratorEmail: value.ADMINISTRATOR_EMAIL?.toLowerCase(),
-    adminWebOrigin: value.ADMIN_WEB_ORIGIN,
+    adminWebOrigin,
     publicDeletionOrigin: value.PUBLIC_DELETION_ORIGIN,
     reportRateLimitHashSecret: value.REPORT_RATE_LIMIT_HASH_SECRET,
     reportRateLimitMax: value.REPORT_RATE_LIMIT_MAX,
@@ -58,4 +60,17 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     revenueCatApiBaseUrl: value.REVENUECAT_API_BASE_URL,
     contentCatalogOrigin: value.CONTENT_CATALOG_ORIGIN,
   });
+}
+
+function parseAdminWebOrigin(value: string | undefined, nodeEnv: Environment["nodeEnv"]): string | undefined {
+  if (value === undefined) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("invalid_admin_web_origin");
+  }
+  const allowsHttp = nodeEnv !== "production" && parsed.protocol === "http:";
+  if (value !== parsed.origin || parsed.username || parsed.password || parsed.search || parsed.hash || (parsed.protocol !== "https:" && !allowsHttp)) throw new Error("invalid_admin_web_origin");
+  return parsed.origin;
 }

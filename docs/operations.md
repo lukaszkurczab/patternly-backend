@@ -21,10 +21,12 @@ suite and frontend client check remain required pre-promotion local checks.
 
 Builds produce an image tagged with the immutable Cloud Build commit SHA.
 Cloud Run must provide `FIREBASE_PROJECT_ID`, `FIREBASE_AUTH_ISSUER`,
-`REPORT_RATE_LIMIT_HASH_SECRET` through runtime configuration. Production
-startup fails if the required private configuration is absent. Firebase Admin
-SDK uses the Cloud Run runtime identity for Firestore; no client or external
-database credentials are configured.
+`ADMINISTRATOR_EMAIL`, `ADMIN_WEB_ORIGIN` and
+`REPORT_RATE_LIMIT_HASH_SECRET` through runtime configuration.
+`ADMIN_WEB_ORIGIN` is the exact HTTPS origin of the admin panel, without a
+path, query, fragment or credentials. Production startup fails if required
+configuration is absent. Firebase Admin SDK uses the Cloud Run runtime identity
+for Firestore; no client or external database credentials are configured.
 
 Firestore collection fields, TTL settings and the seven-day PITR target are
 operational configuration, not request-time schema creation. The application

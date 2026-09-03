@@ -420,20 +420,23 @@
     },
     "/v1/admin/content-reports": {
       "get": {
-        "description": "Open and in-review content reports for the configured administrator",
+        "description": "Open, in-review, and resolved content reports for the configured administrator with a verified Firebase email.",
         "responses": {
           "200": {
             "description": "Content report triage queue"
           },
+          "401": {
+            "description": "Valid Firebase bearer token required"
+          },
           "403": {
-            "description": "Administrator required"
+            "description": "Verified configured administrator required"
           }
         }
       }
     },
     "/v1/admin/content-reports/{clientSubmissionId}": {
       "patch": {
-        "description": "Advance one report through the server-owned triage state machine; Firebase administrator authentication is required.",
+        "description": "Advance one report through the server-owned triage state machine; a verified Firebase token for the configured administrator is required.",
         "parameters": [
           {
             "name": "clientSubmissionId",
@@ -462,8 +465,11 @@
           "400": {
             "description": "Invalid status transition request"
           },
+          "401": {
+            "description": "Valid Firebase bearer token required"
+          },
           "403": {
-            "description": "Administrator required"
+            "description": "Verified configured administrator required"
           },
           "404": {
             "description": "Report not found"

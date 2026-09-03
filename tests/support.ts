@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import { buildApplication } from "../src/api/app.js";
 import { loadEnvironment, type Environment } from "../src/config/environment.js";
@@ -61,16 +62,36 @@ export async function clearFirestore(): Promise<void> {
   if (!response.ok && response.status !== 404) throw new Error(`firestore_clear_failed:${response.status}`);
 }
 
+const emulatorPassword = "Patternly-test-123!";
+
 export async function createAuthUser(email = `emulator-${randomUUID()}@example.com`): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
   const response = await fetch(`http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=patternly-emulator`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, password: "Patternly-test-123!", returnSecureToken: true }),
+    body: JSON.stringify({ email, password: emulatorPassword, returnSecureToken: true }),
   });
   if (!response.ok) throw new Error(`auth_emulator_signup_failed:${response.status}:${await response.text()}`);
   const payload = await response.json() as { email: string; idToken: string; localId: string };
   if (!payload.email || !payload.idToken || !payload.localId) throw new Error("auth_emulator_signup_invalid");
   return Object.freeze(payload);
+}
+
+export async function createVerifiedAuthUser(email = `emulator-${randomUUID()}@example.com`): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
+  const user = await createAuthUser(email);
+  return verifyAuthUser(user);
+}
+
+export async function verifyAuthUser(user: Readonly<{ email: string; idToken: string; localId: string }>): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
+  await getAuth().updateUser(user.localId, { emailVerified: true });
+  const signIn = await fetch(`http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=patternly-emulator`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: user.email, password: emulatorPassword, returnSecureToken: true }),
+  });
+  if (!signIn.ok) throw new Error(`auth_emulator_signin_failed:${signIn.status}:${await signIn.text()}`);
+  const refreshed = await signIn.json() as { email: string; idToken: string; localId: string };
+  if (!refreshed.email || !refreshed.idToken || !refreshed.localId) throw new Error("auth_emulator_signin_invalid");
+  return Object.freeze(refreshed);
 }
 
 export function firestore() {

@@ -16,6 +16,7 @@ declare module "fastify" {
     correlationId: string;
     userId: string | undefined;
     authenticatedEmail: string | undefined;
+    authenticatedEmailVerified: boolean | undefined;
     authTime: number | undefined;
   }
 }
@@ -100,6 +101,7 @@ async function protect(request: FastifyRequest, reply: FastifyReply, dependencie
     const authenticated = await authenticateRequest(request, dependencies.verifier, stores.users);
     request.userId = authenticated.userId;
     request.authenticatedEmail = authenticated.identity.email;
+    request.authenticatedEmailVerified = authenticated.identity.emailVerified;
     request.authTime = authenticated.authTime;
   } catch (error) {
     const status = authErrorStatus(error);
@@ -117,7 +119,7 @@ function requireRecentReauthentication(request: FastifyRequest, reply: FastifyRe
 
 function requireAdministrator(request: FastifyRequest, reply: FastifyReply, dependencies: ApplicationDependencies): boolean {
   const administratorEmail = dependencies.environment.administratorEmail;
-  if (!administratorEmail || request.authenticatedEmail?.toLowerCase() !== administratorEmail) {
+  if (!administratorEmail || request.authenticatedEmailVerified !== true || request.authenticatedEmail?.toLowerCase() !== administratorEmail) {
     reply.code(403).send({ error: { code: "administrator_required" } });
     return false;
   }
@@ -129,6 +131,7 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
   app.decorateRequest("correlationId", "");
   app.decorateRequest("userId", undefined);
   app.decorateRequest("authenticatedEmail", undefined);
+  app.decorateRequest("authenticatedEmailVerified", undefined);
   app.decorateRequest("authTime", undefined);
   app.addHook("onRequest", async (request, reply) => {
     const supplied = request.headers["x-correlation-id"];

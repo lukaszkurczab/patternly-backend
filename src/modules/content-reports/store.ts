@@ -86,7 +86,7 @@ export class FirestoreContentReportStore implements ContentReportStore {
   }
 
   public async listQueue(): Promise<readonly ContentReportView[]> {
-    const rows = await this.db.collection(COLLECTIONS.contentReports).where("status", "in", ["open", "in_review"]).get();
+    const rows = await this.db.collection(COLLECTIONS.contentReports).where("status", "in", ["open", "in_review", "resolved"]).get();
     return Object.freeze(rows.docs.map((row) => toView(asRecord(row.data(), "content_report"))).sort((left, right) => right.createdAt.localeCompare(left.createdAt)));
   }
 

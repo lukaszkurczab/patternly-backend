@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildApplication } from "../src/api/app.js";
+import { loadEnvironment } from "../src/config/environment.js";
 import { identityDocumentId } from "../src/infrastructure/firestore/paths.js";
 import { createContentReportSchema } from "../src/modules/content-reports/contracts.js";
 import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
-import { clearFirestore, createAuthUser, createEmulatorContext, firestore, testEnvironment, type EmulatorContext } from "./support.js";
+import { clearFirestore, createAuthUser, createEmulatorContext, createVerifiedAuthUser, firestore, testEnvironment, type EmulatorContext, verifyAuthUser } from "./support.js";
 
 const reportBody = (clientSubmissionId: string) => createContentReportSchema.parse({
   clientSubmissionId,
@@ -59,6 +60,22 @@ test("invalid Firebase bearer tokens fail closed without exposing identity detai
   const response = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: "Bearer invalid-emulator-bearer" } });
   assert.equal(response.statusCode, 401);
   assert.deepEqual(response.json(), { error: { code: "authentication_required" } });
+});
+
+test("production requires a canonical HTTPS admin web origin", () => {
+  const production = {
+    NODE_ENV: "production",
+    FIREBASE_PROJECT_ID: "patternly-app-sandbox",
+    FIREBASE_AUTH_ISSUER: "https://securetoken.google.com/patternly-app-sandbox",
+    ADMINISTRATOR_EMAIL: "admin@example.com",
+    REPORT_RATE_LIMIT_HASH_SECRET: "test-only-report-rate-limit-secret-0123456789",
+  };
+  assert.throws(() => loadEnvironment(production), { message: "production_admin_web_origin_required" });
+  for (const ADMIN_WEB_ORIGIN of ["http://admin.example.com", "https://admin.example.com/", "https://admin.example.com/admin", "https://admin.example.com?query=value", "https://user:password@admin.example.com"]) {
+    assert.throws(() => loadEnvironment({ ...production, ADMIN_WEB_ORIGIN }), { message: "invalid_admin_web_origin" });
+  }
+  assert.equal(loadEnvironment({ ...production, ADMIN_WEB_ORIGIN: "https://admin.example.com" }).adminWebOrigin, "https://admin.example.com");
+  assert.equal(loadEnvironment({ ...production, NODE_ENV: "test", ADMIN_WEB_ORIGIN: "http://127.0.0.1:4173" }).adminWebOrigin, "http://127.0.0.1:4173");
 });
 
 test("revoked Firebase verifier results fail closed at the backend boundary", async () => {
@@ -190,22 +207,50 @@ test("administrator report triage uses an idempotent monotonic state machine and
   assert.equal(queue[0]?.status, "in_review");
 });
 
-test("administrator queue access is server-authorized and origin-bound", async () => {
-  const nonAdmin = await createAuthUser();
-  const denied = await context.app.inject({
-    method: "GET",
-    url: "/v1/admin/content-reports",
-    headers: { authorization: `Bearer ${nonAdmin.idToken}` },
-  });
-  assert.equal(denied.statusCode, 403);
+test("administrator report routes require a current verified administrator token and allow only the full state machine", async () => {
+  const input = reportBody("5f61e3f3-f23e-467c-b92a-9b8fd0514f25");
+  await context.stores.contentReports.create(undefined, input, { rateLimitKey: "admin-route-test-client" });
+  const patch = { method: "PATCH" as const, url: `/v1/admin/content-reports/${input.clientSubmissionId}`, payload: { status: "in_review" } };
+  const protectedRoutes = [{ method: "GET" as const, url: "/v1/admin/content-reports" }, patch];
+  const nonAdmin = await createVerifiedAuthUser();
+  const unverifiedAdmin = await createAuthUser("lukasz.kurczab@gmail.com");
+  for (const route of protectedRoutes) {
+    const missing = await context.app.inject(route);
+    assert.equal(missing.statusCode, 401);
+    const invalid = await context.app.inject({ ...route, headers: { authorization: "Bearer invalid-emulator-bearer" } });
+    assert.equal(invalid.statusCode, 401);
+    const denied = await context.app.inject({ ...route, headers: { authorization: `Bearer ${nonAdmin.idToken}` } });
+    assert.equal(denied.statusCode, 403);
+    const unverified = await context.app.inject({ ...route, headers: { authorization: `Bearer ${unverifiedAdmin.idToken}` } });
+    assert.equal(unverified.statusCode, 403);
+  }
 
-  const admin = await createAuthUser("lukasz.kurczab@gmail.com");
-  const accepted = await context.app.inject({
-    method: "GET",
-    url: "/v1/admin/content-reports",
-    headers: { authorization: `Bearer ${admin.idToken}` },
-  });
+  const admin = await verifyAuthUser(unverifiedAdmin);
+  const headers = { authorization: `Bearer ${admin.idToken}` };
+  const accepted = await context.app.inject({ method: "GET", url: "/v1/admin/content-reports", headers });
   assert.equal(accepted.statusCode, 200);
+  assert.equal(accepted.json().reports[0]?.clientSubmissionId, input.clientSubmissionId);
+
+  const inReview = await context.app.inject({ ...patch, headers });
+  assert.equal(inReview.statusCode, 200);
+  assert.equal(inReview.json().report.status, "in_review");
+  const resolved = await context.app.inject({ method: "PATCH", url: patch.url, headers, payload: { status: "resolved" } });
+  assert.equal(resolved.statusCode, 200);
+  const resolvedQueue = await context.app.inject({ method: "GET", url: "/v1/admin/content-reports", headers });
+  assert.equal(resolvedQueue.statusCode, 200);
+  assert.equal(resolvedQueue.json().reports[0]?.status, "resolved");
+  const closed = await context.app.inject({ method: "PATCH", url: patch.url, headers, payload: { status: "closed" } });
+  assert.equal(closed.statusCode, 200);
+  const repeated = await context.app.inject({ method: "PATCH", url: patch.url, headers, payload: { status: "closed" } });
+  assert.equal(repeated.statusCode, 200);
+  assert.equal(repeated.json().duplicate, true);
+  const queueAfterClose = await context.app.inject({ method: "GET", url: "/v1/admin/content-reports", headers });
+  assert.equal(queueAfterClose.statusCode, 200);
+  assert.equal(queueAfterClose.json().reports.length, 0);
+  const audit = await firestore().collection("contentReports").doc(input.clientSubmissionId).collection("audit").get();
+  assert.equal(audit.size, 3);
+  const invalidTransition = await context.app.inject({ method: "PATCH", url: patch.url, headers, payload: { status: "resolved" } });
+  assert.equal(invalidTransition.statusCode, 409);
 
   const preflight = await context.app.inject({
     method: "OPTIONS",
@@ -214,6 +259,12 @@ test("administrator queue access is server-authorized and origin-bound", async (
   });
   assert.equal(preflight.statusCode, 204);
   assert.equal(preflight.headers["access-control-allow-origin"], "http://127.0.0.1:4173");
+  assert.equal(preflight.headers["access-control-allow-methods"], "GET, PATCH, OPTIONS");
+  assert.equal(preflight.headers["access-control-allow-credentials"], undefined);
+
+  const corsGet = await context.app.inject({ method: "GET", url: "/v1/admin/content-reports", headers: { ...headers, origin: "http://127.0.0.1:4173" } });
+  assert.equal(corsGet.headers["access-control-allow-origin"], "http://127.0.0.1:4173");
+  assert.equal(corsGet.headers["access-control-allow-credentials"], undefined);
 
   const wrongOrigin = await context.app.inject({
     method: "OPTIONS",
