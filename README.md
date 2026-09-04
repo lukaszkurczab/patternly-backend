@@ -37,6 +37,9 @@ Guest-to-account migration has an explicit preview/confirmation contract in
 preview fingerprint and resolving every conflict; unresolved conflicts are
 reported explicitly instead of selecting a client or server winner.
 
+Accepted backend decisions and deferred implementation work are recorded in
+[docs/decision-register.md](docs/decision-register.md).
+
 ## Firebase Emulator Suite
 
 The repeatable local backend acceptance flow uses the Firebase Auth and
