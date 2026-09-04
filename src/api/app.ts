@@ -1,4 +1,5 @@
-import Fastify, { type FastifyInstance, type FastifyLoggerStreamDestination, type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import type { DestinationStream } from "pino";
 import type { Environment } from "../config/environment.js";
 import type { FirestoreRuntime } from "../infrastructure/firestore/client.js";
 import type { IdentityTokenVerifier } from "../infrastructure/firebase/verifier.js";
@@ -28,7 +29,7 @@ export type ApplicationDependencies = Readonly<{
   appCheckVerifier: AppCheckTokenVerifier | null;
   stores: BackendStores | null;
   deletionEmailSender?: import("../modules/account-lifecycle/store.js").DeletionEmailSender | null;
-  logStream?: FastifyLoggerStreamDestination;
+  logStream?: DestinationStream;
 }>;
 
 const RECENT_AUTH_SECONDS = 300;
