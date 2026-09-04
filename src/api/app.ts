@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyLoggerStreamDestination, type FastifyReply, type FastifyRequest } from "fastify";
 import type { Environment } from "../config/environment.js";
 import type { FirestoreRuntime } from "../infrastructure/firestore/client.js";
 import type { IdentityTokenVerifier } from "../infrastructure/firebase/verifier.js";
@@ -28,6 +28,7 @@ export type ApplicationDependencies = Readonly<{
   appCheckVerifier: AppCheckTokenVerifier | null;
   stores: BackendStores | null;
   deletionEmailSender?: import("../modules/account-lifecycle/store.js").DeletionEmailSender | null;
+  logStream?: FastifyLoggerStreamDestination;
 }>;
 
 const RECENT_AUTH_SECONDS = 300;
@@ -70,6 +71,40 @@ const errorCode = (error: unknown): string => {
   if (message === "content_report_transition_invalid") return "content_report_transition_invalid";
   return "internal_error";
 };
+
+const ACCOUNT_SYNC_REJECTED_EVENT = "account_sync_rejected" as const;
+const ACCOUNT_SYNC_REJECTION_CODES = new Set([
+  "invalid_request",
+  "version_conflict",
+  "account_revision_conflict",
+  "progress_fingerprint_mismatch",
+  "mutation_id_reuse",
+  "merge_preview_mismatch",
+  "merge_resolution_incomplete",
+  "merge_resolution_mismatch",
+  "merge_conflict_requires_manual_resolution",
+  "active_session_adoption_blocked",
+  "journal_recovery_required",
+]);
+
+type AccountSyncRejectionStage = "sync" | "preview" | "confirm";
+
+function accountSyncRejectionCode(value: unknown): string {
+  const candidate = value instanceof Error ? value.message : typeof value === "string" ? value : "";
+  return ACCOUNT_SYNC_REJECTION_CODES.has(candidate) ? candidate : "unknown";
+}
+
+function logAccountSyncRejection(request: FastifyRequest, stage: AccountSyncRejectionStage, code: unknown): void {
+  request.log.warn(
+    {
+      event: ACCOUNT_SYNC_REJECTED_EVENT,
+      stage,
+      code: accountSyncRejectionCode(code),
+      correlationId: request.correlationId,
+    },
+    ACCOUNT_SYNC_REJECTED_EVENT,
+  );
+}
 
 function requireStores(dependencies: ApplicationDependencies): BackendStores {
   if (!dependencies.stores) throw new Error("firestore_not_ready");
@@ -127,7 +162,11 @@ function requireAdministrator(request: FastifyRequest, reply: FastifyReply, depe
 }
 
 export function buildApplication(dependencies: ApplicationDependencies): FastifyInstance {
-  const app = Fastify({ logger: { level: dependencies.environment.logLevel as "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent" } });
+  const logger = {
+    level: dependencies.environment.logLevel as "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent",
+    ...(dependencies.logStream === undefined ? {} : { stream: dependencies.logStream }),
+  };
+  const app = Fastify({ logger });
   app.decorateRequest("correlationId", "");
   app.decorateRequest("userId", undefined);
   app.decorateRequest("authenticatedEmail", undefined);
@@ -195,22 +234,37 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
 
   app.post("/v1/progress/sync", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
     const parsed = syncRequestSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });
+    if (!parsed.success) {
+      logAccountSyncRejection(request, "sync", "invalid_request");
+      return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });
+    }
     try {
       const result = await requireStores(dependencies).progress.applyBatch(request.userId!, parsed.data.deviceId, parsed.data.expectedAccountRevision, parsed.data.mutations);
-      if (result.conflicts.length > 0 || result.accountRevisionConflict) return reply.code(409).send(result.accountRevisionConflict ? { error: result.accountRevisionConflict } : result);
+      if (result.conflicts.length > 0 || result.accountRevisionConflict) {
+        logAccountSyncRejection(request, "sync", result.accountRevisionConflict?.code ?? result.conflicts[0]?.code);
+        return reply.code(409).send(result.accountRevisionConflict ? { error: result.accountRevisionConflict } : result);
+      }
       return reply.code(200).send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : "internal_error";
-      if (message === "progress_fingerprint_mismatch") return reply.code(400).send({ error: { code: errorCode(error) } });
-      if (message === "mutation_id_reuse") return reply.code(409).send({ error: { code: errorCode(error) } });
+      if (message === "progress_fingerprint_mismatch") {
+        logAccountSyncRejection(request, "sync", message);
+        return reply.code(400).send({ error: { code: errorCode(error) } });
+      }
+      if (message === "mutation_id_reuse") {
+        logAccountSyncRejection(request, "sync", message);
+        return reply.code(409).send({ error: { code: errorCode(error) } });
+      }
       throw error;
     }
   });
 
   app.post("/v1/account-data/adoption/preview", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
     const parsed = guestMergeSnapshotSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });
+    if (!parsed.success) {
+      logAccountSyncRejection(request, "preview", "invalid_request");
+      return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });
+    }
     return reply.code(200).send(await requireStores(dependencies).progress.previewAdoption(request.userId!, parsed.data));
   });
 
@@ -219,13 +273,22 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
     const snapshot = guestMergeSnapshotSchema.safeParse(body?.snapshot);
     const confirmation = guestMergeConfirmationSchema.safeParse(body?.confirmation);
     const deviceId = typeof body?.deviceId === "string" ? body.deviceId : "";
-    if (!snapshot.success || !confirmation.success || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(deviceId)) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!snapshot.success || !confirmation.success || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(deviceId)) {
+      logAccountSyncRejection(request, "confirm", "invalid_request");
+      return reply.code(400).send({ error: { code: "invalid_request" } });
+    }
     try {
       return reply.code(200).send(await requireStores(dependencies).progress.confirmAdoption(request.userId!, deviceId, snapshot.data, confirmation.data));
     } catch (error) {
       const message = error instanceof Error ? error.message : "internal_error";
-      if (["merge_preview_mismatch", "merge_resolution_incomplete", "merge_resolution_mismatch", "merge_conflict_requires_manual_resolution", "active_session_adoption_blocked", "journal_recovery_required", "mutation_id_reuse"].includes(message)) return reply.code(409).send({ error: { code: errorCode(error) } });
-      if (message === "progress_fingerprint_mismatch") return reply.code(400).send({ error: { code: errorCode(error) } });
+      if (["merge_preview_mismatch", "merge_resolution_incomplete", "merge_resolution_mismatch", "merge_conflict_requires_manual_resolution", "active_session_adoption_blocked", "journal_recovery_required", "mutation_id_reuse"].includes(message)) {
+        logAccountSyncRejection(request, "confirm", message);
+        return reply.code(409).send({ error: { code: errorCode(error) } });
+      }
+      if (message === "progress_fingerprint_mismatch") {
+        logAccountSyncRejection(request, "confirm", message);
+        return reply.code(400).send({ error: { code: errorCode(error) } });
+      }
       throw error;
     }
   });
