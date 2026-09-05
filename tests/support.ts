@@ -35,6 +35,7 @@ export type EmulatorContext = Readonly<{
   deletionLinks: readonly Readonly<{ recipient: string; requestId: string; token: string; link: string }>[];
   customTokenSubjects: readonly string[];
   revokedSubjects: readonly string[];
+  deletedSubjects: readonly string[];
 }>;
 
 export function createEmulatorContext(): EmulatorContext {
@@ -42,9 +43,19 @@ export function createEmulatorContext(): EmulatorContext {
   const deletionLinks: Array<Readonly<{ recipient: string; requestId: string; token: string; link: string }>> = [];
   const customTokenSubjects: string[] = [];
   const revokedSubjects: string[] = [];
+  const deletedSubjects: string[] = [];
   const stores = createFirestoreStores(runtime, testEnvironment, {
     createCustomToken: async (subject) => { customTokenSubjects.push(subject); return "fixture-custom-token"; },
     revokeRefreshTokens: async (subject) => { revokedSubjects.push(subject); },
+    deleteUser: async (subject) => {
+      deletedSubjects.push(subject);
+      try {
+        await getAuth().deleteUser(subject);
+      } catch (error: unknown) {
+        const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: unknown }).code : undefined;
+        if (code !== "auth/user-not-found" && code !== "user-not-found") throw error;
+      }
+    },
   });
   const app = buildApplication({
     environment: testEnvironment,
@@ -54,7 +65,7 @@ export function createEmulatorContext(): EmulatorContext {
     stores,
     deletionEmailSender: { send: async (input) => { deletionLinks.push(input); } },
   });
-  return Object.freeze({ app, stores, deletionLinks, customTokenSubjects, revokedSubjects, close: async () => { await app.close(); await runtime.close(); } });
+  return Object.freeze({ app, stores, deletionLinks, customTokenSubjects, revokedSubjects, deletedSubjects, close: async () => { await app.close(); await runtime.close(); } });
 }
 
 export async function clearFirestore(): Promise<void> {

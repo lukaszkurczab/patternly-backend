@@ -78,6 +78,8 @@ export class FirestoreProgressStore implements ProgressStore {
   public async confirmAdoption(userId: string, deviceId: string, guestSnapshot: GuestMergeSnapshot, confirmation: GuestMergeConfirmation): Promise<AdoptionExecution> {
     return this.db.runTransaction(async (transaction) => {
       const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+      const user = await transaction.get(userRef);
+      if (!user.exists || asRecord(user.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
       const metaRef = accountMetadataRef(this.db, userId);
       const operation = operationRef(this.db, userId, confirmation.operationId);
       const [metaSnapshot, progressSnapshot, operationSnapshot] = await Promise.all([
@@ -145,6 +147,8 @@ export class FirestoreProgressStore implements ProgressStore {
     }
     return this.db.runTransaction(async (transaction) => {
       const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+      const user = await transaction.get(userRef);
+      if (!user.exists || asRecord(user.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
       const metaRef = accountMetadataRef(this.db, userId);
       const progressRefs = mutations.map((mutation) => userRef.collection("progress").doc(progressDocumentId(mutation)));
       const mutationRefs = mutations.map((mutation) => userRef.collection("syncMutations").doc(mutation.mutationId));

@@ -383,7 +383,11 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
       return reply.code(200).send(await lifecycle.completeDeletion(result.operationId, result.proofId));
     } catch (error) {
       if (error instanceof Error && ["deletion_request_invalid", "deletion_request_expired"].includes(error.message)) return reply.code(400).send({ error: { code: "deletion_request_invalid" } });
-      if (error instanceof Error && ["remote_deletion_pending", "session_revocation_failed"].includes(error.message)) return reply.code(503).send({ error: { code: "remote_deletion_pending" } });
+      if (error instanceof Error && ["remote_deletion_pending", "session_revocation_failed"].includes(error.message)) {
+        const reconciled = await requireStores(dependencies).accountLifecycle.confirmPublicDeletion(params.requestId, parsed.data.token);
+        if (reconciled.status === "complete") return reply.code(200).send({ status: "deleted", operationId: reconciled.operationId, proofId: reconciled.proofId });
+        return reply.code(503).send({ error: { code: "remote_deletion_pending" } });
+      }
       throw error;
     }
   });
@@ -399,7 +403,7 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
   app.post("/v1/public/deletion-operations/status", async (request, reply) => {
     const parsed = publicDeletionStatusSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(404).send({ error: { code: "not_found" } });
-    const status = await requireStores(dependencies).accountLifecycle.readDeletionOperationStatus(parsed.data.operationId, parsed.data.accountUidHash);
+    const status = await requireStores(dependencies).accountLifecycle.resumeDeletion(parsed.data.operationId, parsed.data.accountUidHash);
     if (!status) return reply.code(404).send({ error: { code: "not_found" } });
     return reply.code(200).send(status);
   });

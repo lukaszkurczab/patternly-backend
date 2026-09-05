@@ -50,6 +50,10 @@ export class FirestoreContentReportStore implements ContentReportStore {
     const reportId = randomUUID();
     const createdAt = now();
     const report = await this.db.runTransaction(async (transaction) => {
+      if (userId !== undefined) {
+        const user = await transaction.get(this.db.collection(COLLECTIONS.users).doc(userId));
+        if (!user.exists || asRecord(user.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
+      }
       const [existingSnapshot, bucketSnapshot] = await transaction.getAll(reportRef, rateLimitRef);
       if (existingSnapshot?.exists) return { report: toView(asRecord(existingSnapshot.data(), "content_report")), duplicate: true };
       const bucket = bucketSnapshot?.exists ? asRecord(bucketSnapshot.data(), "report_rate_limit") : null;
@@ -110,9 +114,13 @@ export class FirestoreContentReportStore implements ContentReportStore {
   public async unlinkAccount(userId: string): Promise<void> {
     const reports = await this.db.collection(COLLECTIONS.contentReports).where("accountId", "==", userId).get();
     if (reports.empty) return;
-    const batch = this.db.batch();
-    for (const report of reports.docs) batch.update(report.ref, { accountId: FieldValue.delete(), updatedAt: now() });
-    await batch.commit();
+    const batchSize = 450;
+    for (let offset = 0; offset < reports.docs.length; offset += batchSize) {
+      const batch = this.db.batch();
+      const updatedAt = now();
+      for (const report of reports.docs.slice(offset, offset + batchSize)) batch.update(report.ref, { accountId: FieldValue.delete(), contactEmail: FieldValue.delete(), updatedAt });
+      await batch.commit();
+    }
   }
 
   private rateLimitDocumentId(rateLimitKey: string): string {

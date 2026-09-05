@@ -337,7 +337,7 @@
     "/v1/public/deletion-operations/status": {
       "post": {
         "security": [],
-        "description": "Read deletion progress only with the operation id and the local possession-bound uid hash",
+        "description": "Resume or read deletion progress only with the operation id and the local possession-bound uid hash",
         "requestBody": {
           "required": true,
           "content": {

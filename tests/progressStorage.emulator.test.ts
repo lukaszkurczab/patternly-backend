@@ -15,9 +15,10 @@ const trackId = "coding-interview-dsa-problem-solving";
 const recordType = "review_queue_entry" as const;
 const recordId = "review-1";
 
-function account() {
+async function account() {
   const id = randomUUID();
   accounts.push(id);
+  await db.collection("users").doc(id).create({ id });
   return id;
 }
 
@@ -41,7 +42,7 @@ test.after(async () => {
 });
 
 test("sync replaces removed fields and tombstones without corrupting persisted fingerprints", async () => {
-  const userId = account();
+  const userId = await account();
   const states = [
     { status: "learning", previousAnswer: "A", scheduling: { due: 1, overdue: true } },
     { status: "mastered", scheduling: { due: 2 } },
@@ -60,7 +61,7 @@ test("sync replaces removed fields and tombstones without corrupting persisted f
 });
 
 test("adoption replaces the selected account record and remains readable on replay", async () => {
-  const userId = account();
+  const userId = await account();
   await sync(userId, 0, { status: "learning", previousAnswer: "A", scheduling: { due: 1, overdue: true } });
   const state = { status: "mastered", scheduling: { due: 2 } };
   const snapshot = {

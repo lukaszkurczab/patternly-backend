@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
+import { getAuth } from "firebase-admin/auth";
+import { Timestamp } from "firebase-admin/firestore";
 import { buildApplication } from "../src/api/app.js";
 import { loadEnvironment } from "../src/config/environment.js";
 import { identityDocumentId } from "../src/infrastructure/firestore/paths.js";
 import { createContentReportSchema } from "../src/modules/content-reports/contracts.js";
+import { FirestoreAccountLifecycleStore } from "../src/modules/account-lifecycle/store.js";
 import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
 import { clearFirestore, createAuthUser, createEmulatorContext, createVerifiedAuthUser, firestore, testEnvironment, type EmulatorContext, verifyAuthUser } from "./support.js";
 
@@ -382,7 +386,7 @@ test("public deletion is non-enumerating, possession verified, tombstoned, and i
   assert.equal((await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } })).statusCode, 401);
 });
 
-test("account deletion removes owned Firestore documents, preserves a tombstone, and redacts report linkage", async () => {
+test("account deletion removes owned Firestore documents, preserves a tombstone, and redacts report account contact fields", async () => {
   const auth = await createAuthUser();
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
   const userId = me.json().user.id as string;
@@ -395,6 +399,7 @@ test("account deletion removes owned Firestore documents, preserves a tombstone,
   assert.equal(deleted.statusCode, 200);
   assert.equal(deleted.json().status, "deleted");
   assert.equal(context.revokedSubjects.includes(auth.localId), true);
+  assert.equal(context.deletedSubjects.includes(auth.localId), true);
   const proof = await context.app.inject({ method: "GET", url: `/v1/public/deletion-proofs/${deleted.json().proofId}` });
   assert.equal(proof.statusCode, 200);
   assert.equal((await firestore().collection("users").doc(userId).get()).exists, false);
@@ -402,10 +407,236 @@ test("account deletion removes owned Firestore documents, preserves a tombstone,
   assert.equal((await firestore().collection("identityMappings").where("userId", "==", userId).get()).size, 0);
   const tombstoneId = identityDocumentId("firebase", auth.localId);
   assert.equal((await firestore().collection("deletedIdentities").doc(tombstoneId).get()).exists, true);
+  assert.equal("subject" in ((await firestore().collection("deletedIdentities").doc(tombstoneId).get()).data() ?? {}), false);
   const report = (await firestore().collection("contentReports").doc(linked.clientSubmissionId).get()).data();
   assert.ok(report);
   assert.equal("accountId" in report, false);
-  assert.equal(report.contactEmail, linked.contactEmail);
+  assert.equal("contactEmail" in report, false);
+  assert.equal(report.description, linked.description);
+  assert.deepEqual(report.context, linked.context);
   const oldTokenResponse = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
   assert.equal(oldTokenResponse.statusCode, 401);
+});
+
+test("account deletion persists subjects and phases, resumes through the bound status route, and accepts Auth user-not-found", async () => {
+  const auth = await createAuthUser();
+  const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
+  const userId = me.json().user.id as string;
+  const linked = createContentReportSchema.parse({ ...reportBody("af61e3f3-f23e-467c-b92a-9b8fd0514f25"), linkAccount: true, contactEmail: "resume@example.com" });
+  await context.stores.contentReports.create(userId, linked, { rateLimitKey: "resume-deletion-client" });
+  await firestore().collection("recoveryCodeIndex").doc("resume-recovery-code").set({ userId, usedAt: null });
+  await firestore().collection("sessionRevocationOperations").doc("resume-session-revocation").set({ userId, status: "revoked" });
+  await firestore().collection("users").doc(userId).collection("drafts").doc("resume-draft").set({ value: "private" });
+
+  let failAuthDeletion = true;
+  let deleteAttempts = 0;
+  const lifecycle = new FirestoreAccountLifecycleStore(firestore(), {
+    createCustomToken: async () => "unused-custom-token",
+    revokeRefreshTokens: async () => undefined,
+    deleteUser: async (subject) => {
+      deleteAttempts += 1;
+      if (failAuthDeletion) throw new Error("fixture_auth_delete_failed");
+      await getAuth().deleteUser(subject);
+    },
+  });
+  const operationId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  await assert.rejects(lifecycle.deleteAccount(userId, operationId), { message: "remote_deletion_pending" });
+  assert.equal(deleteAttempts, 1);
+  const pendingOperation = await firestore().collection("accountDeletionOperations").doc(operationId).get();
+  assert.equal(pendingOperation.data()?.phase, "auth_deleting");
+  assert.deepEqual(pendingOperation.data()?.authSubjects, [auth.localId]);
+  assert.equal((await firestore().collection("recoveryCodeIndex").where("userId", "==", userId).get()).size, 0);
+  assert.equal((await firestore().collection("sessionRevocationOperations").where("userId", "==", userId).get()).size, 0);
+  assert.equal((await firestore().collection("users").doc(userId).collection("drafts").get()).size, 0);
+  const report = (await firestore().collection("contentReports").doc(linked.clientSubmissionId).get()).data();
+  assert.ok(report);
+  assert.equal("accountId" in report, false);
+  assert.equal("contactEmail" in report, false);
+  assert.equal(report.description, linked.description);
+  assert.deepEqual(report.context, linked.context);
+  assert.equal((await firestore().collection("deletionProofs").get()).size, 0);
+
+  const resumeApp = buildApplication({ environment: testEnvironment, firestore: null, verifier: null, appCheckVerifier: null, stores: { ...context.stores, accountLifecycle: lifecycle } });
+  try {
+    const accountUidHash = createHash("sha256").update(auth.localId, "utf8").digest("hex");
+    const wrongBinding = await resumeApp.inject({ method: "POST", url: "/v1/public/deletion-operations/status", payload: { operationId, accountUidHash: "d".repeat(64) } });
+    assert.equal(wrongBinding.statusCode, 404);
+    assert.equal(deleteAttempts, 1);
+
+    await getAuth().deleteUser(auth.localId);
+    failAuthDeletion = false;
+    const resumed = await resumeApp.inject({ method: "POST", url: "/v1/public/deletion-operations/status", payload: { operationId, accountUidHash } });
+    assert.equal(resumed.statusCode, 200);
+    assert.equal(resumed.json().status, "complete");
+    assert.equal(deleteAttempts, 2);
+    const completedOperation = (await firestore().collection("accountDeletionOperations").doc(operationId).get()).data();
+    assert.equal(completedOperation?.phase, "complete");
+    assert.equal("authSubjects" in (completedOperation ?? {}), false);
+    const completedTombstone = (await firestore().collection("deletedIdentities").doc(identityDocumentId("firebase", auth.localId)).get()).data();
+    assert.ok(completedTombstone);
+    assert.equal("subject" in completedTombstone, false);
+    assert.equal((await firestore().collection("deletionProofs").doc(resumed.json().proofId).get()).data()?.status, "deleted");
+    await assert.rejects(getAuth().getUser(auth.localId), (error: unknown) => {
+      const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: unknown }).code : undefined;
+      return code === "auth/user-not-found";
+    });
+  } finally {
+    await resumeApp.close();
+  }
+});
+
+test("simultaneous deletion operation IDs each complete with their own proof", async () => {
+  const auth = await createAuthUser();
+  const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
+  const userId = me.json().user.id as string;
+  const firstOperationId = "11111111-1111-4111-8111-111111111111";
+  const secondOperationId = "22222222-2222-4222-8222-222222222222";
+  const lifecycle = context.stores.accountLifecycle;
+  await context.app.inject({ method: "POST", url: "/v1/public/deletion-requests", payload: { email: auth.email } });
+  const link = context.deletionLinks.at(-1)!;
+  const [first, second] = await Promise.all([
+    lifecycle.deleteAccount(userId, firstOperationId),
+    lifecycle.deleteAccount(userId, secondOperationId),
+  ]);
+  assert.equal(first.status, "remote_deleted");
+  assert.equal(second.status, "remote_deleted");
+  assert.notEqual(first.proofId, second.proofId);
+  const firstCompleted = await lifecycle.completeDeletion(first.operationId, first.proofId);
+  const firstPublic = await lifecycle.confirmPublicDeletion(link.requestId, link.token);
+  const secondCompleted = await lifecycle.completeDeletion(second.operationId, second.proofId);
+  assert.deepEqual(await lifecycle.confirmPublicDeletion(link.requestId, link.token), firstPublic);
+  assert.deepEqual(firstCompleted, { status: "deleted", operationId: firstOperationId, proofId: first.proofId });
+  assert.deepEqual(secondCompleted, { status: "deleted", operationId: secondOperationId, proofId: second.proofId });
+  for (const operation of [first, second]) {
+    const stored = (await firestore().collection("accountDeletionOperations").doc(operation.operationId).get()).data();
+    assert.equal(stored?.phase, "complete");
+    assert.equal("authSubjects" in (stored ?? {}), false);
+    assert.equal((await firestore().collection("deletionProofs").doc(operation.proofId).get()).data()?.operationId, operation.operationId);
+  }
+  const tombstone = (await firestore().collection("deletedIdentities").doc(identityDocumentId("firebase", auth.localId)).get()).data();
+  assert.ok(tombstone);
+  assert.equal(tombstone?.provider, "firebase");
+  assert.equal(tombstone?.subjectHash, createHash("sha256").update(auth.localId, "utf8").digest("hex"));
+  assert.equal("subject" in tombstone, false);
+  assert.equal("operationId" in tombstone, false);
+  assert.equal("proofId" in tombstone, false);
+});
+
+test("a redacted tombstone is never repopulated by a later operation", async () => {
+  const auth = await createAuthUser();
+  const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
+  const userId = me.json().user.id as string;
+  const operationId = "33333333-3333-4333-8333-333333333333";
+  const proofId = "proof_redacted_tombstone_fixture_123456";
+  const subjectHash = createHash("sha256").update(auth.localId, "utf8").digest("hex");
+  const identityId = identityDocumentId("firebase", auth.localId);
+  const timestamp = Timestamp.now();
+  await firestore().collection("accountDeletionOperations").doc(operationId).set({
+    operationId,
+    userId,
+    status: "remote_deleting",
+    phase: "firestore_deleting",
+    proofId,
+    authSubjects: [auth.localId],
+    subjectHashes: [subjectHash],
+    identityRefs: [{ identityId, provider: "firebase", subjectHash }],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  await firestore().collection("deletedIdentities").doc(identityId).set({ provider: "firebase", subjectHash, deletedAt: timestamp });
+  const result = await context.stores.accountLifecycle.deleteAccount(userId, operationId);
+  assert.equal(result.status, "remote_deleted");
+  await context.stores.accountLifecycle.completeDeletion(result.operationId, result.proofId);
+  const tombstone = (await firestore().collection("deletedIdentities").doc(identityId).get()).data();
+  assert.ok(tombstone);
+  assert.equal("subject" in tombstone, false);
+  assert.equal(tombstone?.provider, "firebase");
+  assert.equal(tombstone?.subjectHash, subjectHash);
+});
+
+test("private deletion completes every existing public request, including a null operation request", async () => {
+  const email = `fixture-old-request-${Date.now()}@example.invalid`;
+  const auth = await createAuthUser(email);
+  const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
+  const userId = me.json().user.id as string;
+  const links: Array<Readonly<{ requestId: string; token: string }>> = [];
+  const request = await context.stores.accountLifecycle.createPublicDeletionRequest(email, testEnvironment.publicDeletionOrigin!, { send: async ({ requestId, token }) => { links.push({ requestId, token }); } });
+  assert.ok(request.requestId);
+  assert.equal(links.length, 1);
+  const operationId = "44444444-4444-4444-8444-444444444444";
+  const deleted = await context.app.inject({ method: "POST", url: "/v1/account/deletion", headers: { authorization: `Bearer ${auth.idToken}` }, payload: { operationId } });
+  assert.equal(deleted.statusCode, 200);
+  const response = deleted.json() as { status: string; proofId: string; operationId: string };
+  const storedRequest = (await firestore().collection("deletionRequests").doc(request.requestId).get()).data();
+  assert.equal(storedRequest?.status, "complete");
+  assert.equal(storedRequest?.operationId, operationId);
+  assert.equal(storedRequest?.proofId, response.proofId);
+  const confirmed = await context.app.inject({ method: "POST", url: `/v1/public/deletion-requests/${request.requestId}/confirm`, payload: { token: links[0]!.token } });
+  assert.equal(confirmed.statusCode, 200);
+  assert.deepEqual(confirmed.json(), response);
+  assert.equal(userId.length > 0, true);
+});
+
+test("legacy terminal records without phase and auth deletion marker never report proof", async () => {
+  const auth = await createAuthUser();
+  const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
+  const userId = me.json().user.id as string;
+  const operationId = "55555555-5555-4555-8555-555555555555";
+  const proofId = "proof_legacy_terminal_fixture_123456";
+  const subjectHash = createHash("sha256").update(auth.localId, "utf8").digest("hex");
+  await firestore().collection("accountDeletionOperations").doc(operationId).set({ operationId, userId, status: "complete", proofId, subjectHashes: [subjectHash] });
+  await firestore().collection("deletionProofs").doc(proofId).set({ status: "deleted", operationId, proofId, completedAt: Timestamp.now() });
+  assert.equal(await context.stores.accountLifecycle.readDeletionProof(proofId), null);
+  assert.equal(await context.stores.accountLifecycle.readDeletionOperationStatus(operationId, subjectHash), null);
+  assert.equal(await context.stores.accountLifecycle.resumeDeletion(operationId, subjectHash), null);
+  await assert.rejects(context.stores.accountLifecycle.deleteAccount(userId, operationId), { message: "remote_deletion_pending" });
+  await firestore().collection("accountDeletionOperations").doc(operationId).update({ phase: "complete", authDeletedAt: Timestamp.now() });
+  assert.equal(await context.stores.accountLifecycle.readDeletionProof(proofId), null);
+  assert.equal(await context.stores.accountLifecycle.readDeletionOperationStatus(operationId, subjectHash), null);
+  await assert.rejects(context.stores.accountLifecycle.completeDeletion(operationId, proofId), { message: "remote_deletion_pending" });
+});
+
+test("account-owned writers reject a tombstoned or missing user after authentication", async () => {
+  const auth = await createAuthUser();
+  const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
+  const userId = me.json().user.id as string;
+  const userRef = firestore().collection("users").doc(userId);
+  const snapshot = { guestSnapshotVersion: 1, guestUserId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", records: [], activeSession: false, pendingJournal: false };
+  const preview = await context.stores.progress.previewAdoption(userId, snapshot);
+  const confirmation = { operationId: preview.preview.operationId, previewFingerprint: preview.preview.fingerprint, protocolVersion: 1 as const, resolutions: [] };
+  for (const state of ["tombstoned", "missing"]) {
+    if (state === "tombstoned") await userRef.update({ deletedAt: Timestamp.now() });
+    else await userRef.delete();
+    await assert.rejects(context.stores.progress.applyBatch(userId, null, 0, []), { message: "account_deleted" });
+    await assert.rejects(context.stores.progress.confirmAdoption(userId, "fixture-device", snapshot, confirmation), { message: "account_deleted" });
+    await assert.rejects(context.stores.devices.touch(userId, { deviceKey: "fixture-device", platform: "ios", appVersion: "test" }), { message: "account_deleted" });
+    await assert.rejects(context.stores.contentReports.create(userId, { ...reportBody("88888888-8888-4888-8888-888888888888"), linkAccount: true, contactEmail: "fixture@example.invalid" }, { rateLimitKey: "late-write" }), { message: "account_deleted" });
+    await assert.rejects(context.stores.accountLifecycle.revokeSessions(userId, `late-revoke-${state}`), { message: "account_deleted" });
+  }
+  assert.equal((await userRef.listCollections()).length, 0);
+  assert.equal((await firestore().collection("contentReports").get()).size, 0);
+  assert.equal((await firestore().collection("sessionRevocationOperations").get()).size, 0);
+});
+
+test("public confirmation reconciles a private deletion completing after token verification", async () => {
+  const auth = await createAuthUser();
+  const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
+  const userId = me.json().user.id as string;
+  await context.app.inject({ method: "POST", url: "/v1/public/deletion-requests", payload: { email: auth.email } });
+  const link = context.deletionLinks.at(-1)!;
+  const lifecycle = context.stores.accountLifecycle;
+  const original = lifecycle.deleteAccount.bind(lifecycle);
+  lifecycle.deleteAccount = async () => {
+    const result = await original(userId, "77777777-7777-4777-8777-777777777777");
+    await lifecycle.completeDeletion(result.operationId, result.proofId);
+    throw new Error("remote_deletion_pending");
+  };
+  try {
+    const response = await context.app.inject({ method: "POST", url: `/v1/public/deletion-requests/${link.requestId}/confirm`, payload: { token: link.token } });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().operationId, "77777777-7777-4777-8777-777777777777");
+    assert.equal(response.json().status, "deleted");
+  } finally {
+    lifecycle.deleteAccount = original;
+  }
 });
