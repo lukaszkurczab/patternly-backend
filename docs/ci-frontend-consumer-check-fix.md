@@ -31,4 +31,4 @@ The remaining accepted risk is that both consumer repositories use a moving `mai
 - local `npm run frontend:client:check`: PASS, 26 public versioned paths covered by the mobile and web consumers;
 - local `npm run ci`: PASS, including lint, typecheck, 22-policy TTL contract, `110/110` emulator tests, OpenAPI check, frontend client check and build;
 - workflow diff and whitespace validation: PASS;
-- post-push Backend CI run through completion: pending until the fix commit is pushed.
+- post-push Backend CI run `34142544274`: PASS in 1m34s, including both consumer checkouts and the complete `npm run ci` job.
