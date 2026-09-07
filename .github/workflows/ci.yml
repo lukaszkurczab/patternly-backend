@@ -24,6 +24,12 @@ jobs:
           repository: lukaszkurczab/gcp-ace-trainer
           ref: main
           path: patternly
+      - name: Checkout web API consumer
+        uses: actions/checkout@v4
+        with:
+          repository: lukaszkurczab/patternly-web
+          ref: main
+          path: patternly-web
       - uses: actions/setup-node@v4
         with:
           node-version: 22.13.1
