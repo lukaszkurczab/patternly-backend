@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx watch src/index.ts",
@@ -11,23 +13,28 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "node scripts/lint.mjs",
-    "test": "node --import tsx --test tests/*.test.ts",
+    "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
     "test:cloud": "node --import tsx --test tests/deployment.test.ts tests/merge.test.ts",
     "test:emulator": "firebase emulators:exec --project patternly-app-sandbox --only auth,firestore \"npm test\"",
+    "firestore:ttl:check": "node scripts/check-firestore-ttl.mjs",
+    "firestore:ttl:apply": "node scripts/apply-firestore-ttl.mjs",
+    "retention:purge": "node --import tsx scripts/retention-purge.ts",
     "openapi:generate": "node --import tsx scripts/generate-openapi.ts",
     "openapi:check": "node --import tsx scripts/check-openapi.ts",
     "frontend:client:check": "node scripts/check-frontend-client.mjs",
-    "ci": "npm run lint && npm run typecheck && npm run test:emulator && npm run openapi:check && npm run frontend:client:check && npm run build",
-    "ci:cloud": "npm run lint && npm run typecheck && npm run test:cloud && npm run openapi:check && npm run build"
+    "ci": "npm run lint && npm run typecheck && npm run firestore:ttl:check && npm run test:emulator && npm run openapi:check && npm run frontend:client:check && npm run build",
+    "ci:cloud": "npm run lint && npm run typecheck && npm run firestore:ttl:check && npm run test:cloud && npm run openapi:check && npm run build"
   },
   "dependencies": {
     "fastify": "^5.12.1",
     "firebase-admin": "^14.2.0",
+    "nodemailer": "^10.0.0",
     "pino": "^9.7.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
+    "@types/nodemailer": "^8.0.1",
     "tsx": "^4.21.0",
     "typescript": "~6.0.3"
   }

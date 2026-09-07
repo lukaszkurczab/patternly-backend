@@ -1,4 +1,4 @@
-import type { Firestore, DocumentReference } from "firebase-admin/firestore";
+import { Timestamp, type Firestore, type DocumentReference } from "firebase-admin/firestore";
 import { COLLECTIONS, progressDocumentId } from "../../infrastructure/firestore/paths.js";
 import { asIsoString, asRecord, now } from "../../infrastructure/firestore/values.js";
 import {
@@ -15,6 +15,11 @@ import {
 import { syncableRecordTypeSchema, type ProgressMutation, type ProgressRecord, type ProgressSnapshot, type ProgressStore, type SyncBatchResult } from "./contracts.js";
 
 const ACCOUNT_METADATA_ID = "account";
+const SYNC_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+
+function expiresAfterSyncRetention(createdAt: Timestamp): Timestamp {
+  return Timestamp.fromMillis(createdAt.toMillis() + SYNC_RETENTION_MS);
+}
 
 function toView(data: Record<string, unknown>): ProgressRecord {
   const kind = data.kind;
@@ -131,12 +136,30 @@ export class FirestoreProgressStore implements ProgressStore {
           lastMutationId: write.mutation.mutationId,
           updatedAt: write.updatedAt,
         });
-        transaction.create(write.mutationRef, { deviceId, mutationId: write.mutation.mutationId, recordType: write.mutation.recordType, appliedVersion: write.nextVersion, createdAt: write.updatedAt, operationId: confirmation.operationId });
+        transaction.create(write.mutationRef, {
+          deviceId,
+          mutationId: write.mutation.mutationId,
+          recordType: write.mutation.recordType,
+          appliedVersion: write.nextVersion,
+          createdAt: write.updatedAt,
+          expiresAt: expiresAfterSyncRetention(write.updatedAt),
+          operationId: confirmation.operationId,
+        });
       }
       const nextAccountRevision = accountRevision + progressWrites.length;
       if (progressWrites.length > 0) transaction.set(metaRef, { accountRevision: nextAccountRevision, updatedAt: now() }, { merge: true });
       const records = [...resolved.values()].sort((left, right) => mergeRecordKey(left).localeCompare(mergeRecordKey(right)));
-      transaction.create(operation, { accountRevision: nextAccountRevision, createdAt: now(), deviceId, guestUserId: guestSnapshot.guestUserId, mutationIds, previewFingerprint: confirmation.previewFingerprint, records });
+      const createdAt = now();
+      transaction.create(operation, {
+        accountRevision: nextAccountRevision,
+        createdAt,
+        expiresAt: expiresAfterSyncRetention(createdAt),
+        deviceId,
+        guestUserId: guestSnapshot.guestUserId,
+        mutationIds,
+        previewFingerprint: confirmation.previewFingerprint,
+        records,
+      });
       return Object.freeze({ accountRevision: nextAccountRevision, operationId: confirmation.operationId, mutationIds: Object.freeze(mutationIds), records: Object.freeze(records) });
     });
   }
@@ -184,7 +207,14 @@ export class FirestoreProgressStore implements ProgressStore {
         const updated: ProgressRecord = Object.freeze({ kind: mutation.kind, recordType: mutation.recordType, trackId: mutation.trackId, targetId: mutation.targetId, version: nextVersion, fingerprint: mutation.fingerprint, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt: updatedAt.toDate().toISOString() });
         const progressRef = progressRefs[index]!;
         transaction.set(progressRef, { kind: mutation.kind, recordType: mutation.recordType, trackId: mutation.trackId, targetId: mutation.targetId, version: nextVersion, fingerprint: mutation.fingerprint, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt });
-        transaction.create(mutationRefs[index]!, { ...(deviceId === null ? {} : { deviceId }), mutationId: mutation.mutationId, recordType: mutation.recordType, appliedVersion: nextVersion, createdAt: updatedAt });
+        transaction.create(mutationRefs[index]!, {
+          ...(deviceId === null ? {} : { deviceId }),
+          mutationId: mutation.mutationId,
+          recordType: mutation.recordType,
+          appliedVersion: nextVersion,
+          createdAt: updatedAt,
+          expiresAt: expiresAfterSyncRetention(updatedAt),
+        });
         applied.push(updated);
       }
       const nextAccountRevision = accountRevision + applied.length;

@@ -157,7 +157,10 @@ try {
     ADMINISTRATOR_EMAIL: admin.email, ADMIN_WEB_ORIGIN: webOrigin,
     ADMIN_CONTENT_ROOT: resolve(root, "../patternly-content/artifacts"),
     ADMIN_CONTENT_RELEASE_ID: "patternly-launch-2026-08-25-01",
-    REPORT_RATE_LIMIT_HASH_SECRET: "local-admin-report-rate-limit-secret-0123456789" };
+    REPORT_RATE_LIMIT_HASH_SECRET: "local-admin-report-rate-limit-secret-0123456789",
+    PRIVACY_RESPONSE_KEY_BASE64: Buffer.alloc(32, 11).toString("base64"),
+    PRIVACY_AUDIT_HMAC_SECRET: "local-admin-privacy-audit-hmac-secret-0123456789",
+    PUBLIC_PRIVACY_ORIGIN: webOrigin };
   start("API", process.execPath, ["--import", "tsx", "src/index.ts"], { cwd: root, env: environment });
   await waitFor(`${apiOrigin}/ready`);
   start("Web", process.execPath, ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "25173", "--strictPort"], {

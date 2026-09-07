@@ -48,11 +48,93 @@
         }
       }
     },
+    "/v1/webhooks/revenuecat": {
+      "post": {
+        "security": [],
+        "description": "Receive one authenticated, idempotent RevenueCat lifecycle event, bind an initial purchase to the active attempt, deliver its durable receipt, and update the canonical Premium projection.",
+        "parameters": [
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "event"
+                ],
+                "properties": {
+                  "event": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Event processed, ignored, or replayed"
+          },
+          "400": {
+            "description": "Malformed event"
+          },
+          "401": {
+            "description": "Webhook authorization failed"
+          },
+          "503": {
+            "description": "Webhook or durable receipt delivery is unavailable; sender should retry"
+          }
+        }
+      }
+    },
     "/v1/me": {
       "get": {
         "responses": {
           "200": {
             "description": "Canonical account identity"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/v1/legal-acceptances": {
+      "post": {
+        "description": "Record an immutable, versioned Terms and minimum-age acceptance for the authenticated account.",
+        "responses": {
+          "201": {
+            "description": "Acceptance recorded"
+          },
+          "400": {
+            "description": "Invalid acceptance"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/v1/purchase-confirmations": {
+      "post": {
+        "description": "Record the immutable pre-contract offer and express immediate-start request before opening App Store checkout.",
+        "responses": {
+          "201": {
+            "description": "Confirmation recorded"
+          },
+          "400": {
+            "description": "Invalid confirmation"
           },
           "401": {
             "description": "Authentication required"
@@ -74,6 +156,264 @@
         "responses": {
           "200": {
             "description": "Canonical progress state and account revision"
+          }
+        }
+      }
+    },
+    "/v1/account-data/export": {
+      "get": {
+        "description": "Download a bounded JSON account-data export after recent reauthentication. The response is an attachment and is never persisted as a payload.",
+        "responses": {
+          "200": {
+            "description": "JSON account-data attachment",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              },
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDataExport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication or recent reauthentication required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Serialized export exceeds the configured maximum"
+          },
+          "429": {
+            "description": "Per-account export rate limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/privacy-requests": {
+      "post": {
+        "description": "Create one authenticated privacy-right case",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAccountPrivacyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Privacy request created"
+          },
+          "401": {
+            "description": "Authentication or recent reauthentication required"
+          }
+        }
+      },
+      "get": {
+        "description": "List minimal metadata for the authenticated subject's own privacy requests",
+        "responses": {
+          "200": {
+            "description": "Privacy request list"
+          }
+        }
+      }
+    },
+    "/v1/privacy-requests/{requestId}": {
+      "get": {
+        "description": "Read one own privacy response after recent reauthentication",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PrivacyRequestId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Privacy response"
+          },
+          "401": {
+            "description": "Recent reauthentication required"
+          },
+          "404": {
+            "description": "Request unavailable"
+          }
+        }
+      }
+    },
+    "/v1/public/privacy-requests": {
+      "post": {
+        "security": [],
+        "description": "Accept a non-enumerating guest privacy request and send an email-possession link",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePublicPrivacyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Request accepted without disclosing matching data"
+          },
+          "429": {
+            "description": "Rate limited"
+          },
+          "503": {
+            "description": "Email delivery unavailable"
+          }
+        }
+      }
+    },
+    "/v1/public/privacy-requests/{requestId}/session": {
+      "post": {
+        "security": [],
+        "description": "Exchange a one-time fragment token for a short object-scoped session",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PrivacyRequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivacyTokenExchange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Short privacy-request session"
+          },
+          "404": {
+            "description": "Uniform unavailable response"
+          }
+        }
+      }
+    },
+    "/v1/public/privacy-requests/{requestId}/response": {
+      "post": {
+        "security": [],
+        "description": "Read guest request status and an unexpired response with an object-scoped session",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PrivacyRequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicPrivacySession"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Privacy response"
+          },
+          "404": {
+            "description": "Uniform unavailable response"
+          }
+        }
+      }
+    },
+    "/v1/legal-requests": {
+      "post": {
+        "description": "Create an authenticated consumer complaint, withdrawal, non-personal data recovery request, or suspension appeal and email a durable receipt.",
+        "responses": {
+          "201": {
+            "description": "Consumer case received"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "503": {
+            "description": "Email delivery unavailable"
+          }
+        }
+      },
+      "get": {
+        "description": "List the authenticated account's consumer cases.",
+        "responses": {
+          "200": {
+            "description": "Consumer case list"
+          }
+        }
+      }
+    },
+    "/v1/legal-requests/{requestId}": {
+      "get": {
+        "description": "Read one consumer case owned by the authenticated account.",
+        "responses": {
+          "200": {
+            "description": "Consumer case"
+          },
+          "404": {
+            "description": "Case unavailable"
+          }
+        }
+      }
+    },
+    "/v1/public/legal-requests": {
+      "post": {
+        "security": [
+          {
+            "appCheckAuth": []
+          }
+        ],
+        "description": "Create a guest consumer case with App Check, bounded rate limiting, and a durable email receipt.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FirebaseAppCheck"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Consumer case received"
+          },
+          "401": {
+            "description": "Valid App Check required"
+          },
+          "429": {
+            "description": "Rate limited"
+          },
+          "503": {
+            "description": "Email delivery unavailable"
           }
         }
       }
@@ -245,71 +585,6 @@
         }
       }
     },
-    "/v1/public/deletion-requests": {
-      "post": {
-        "security": [],
-        "description": "Accept a non-enumerating public deletion request and send a possession link when configured",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PublicDeletionRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "description": "Non-enumerating request accepted"
-          },
-          "400": {
-            "description": "Invalid request"
-          },
-          "503": {
-            "description": "Deletion email delivery unavailable"
-          }
-        }
-      }
-    },
-    "/v1/public/deletion-requests/{requestId}/confirm": {
-      "post": {
-        "security": [],
-        "description": "Verify possession with the expiring deletion token and execute deletion idempotently",
-        "parameters": [
-          {
-            "name": "requestId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PublicDeletionConfirm"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Deletion proof complete"
-          },
-          "400": {
-            "description": "Invalid or expired possession token"
-          },
-          "503": {
-            "description": "Remote deletion pending"
-          }
-        }
-      }
-    },
     "/v1/public/deletion-proofs/{proofId}": {
       "get": {
         "security": [],
@@ -337,7 +612,7 @@
     "/v1/public/deletion-operations/status": {
       "post": {
         "security": [],
-        "description": "Resume or read deletion progress only with the operation id and the local possession-bound uid hash",
+        "description": "Resume an in-app deletion after its Firebase account has been removed, using the operation-bound secret",
         "requestBody": {
           "required": true,
           "content": {
@@ -430,6 +705,269 @@
           },
           "403": {
             "description": "Verified configured administrator required"
+          }
+        }
+      }
+    },
+    "/v1/admin/privacy-requests": {
+      "get": {
+        "description": "Minimal deadline-ordered privacy request queue for the verified configured administrator",
+        "responses": {
+          "200": {
+            "description": "Privacy request queue"
+          },
+          "403": {
+            "description": "Administrator required"
+          }
+        }
+      }
+    },
+    "/v1/admin/privacy-requests/{requestId}": {
+      "get": {
+        "description": "Read audited privacy request details",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PrivacyRequestId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Privacy request details"
+          },
+          "404": {
+            "description": "Request unavailable"
+          }
+        }
+      },
+      "patch": {
+        "description": "Apply one revision-guarded privacy request lifecycle action",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PrivacyRequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivacyRequestAdminAction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transition applied"
+          },
+          "409": {
+            "description": "Revision or lifecycle conflict"
+          },
+          "503": {
+            "description": "Response email unavailable"
+          }
+        }
+      }
+    },
+    "/v1/admin/legal-requests": {
+      "get": {
+        "description": "List the minimal consumer-case queue for the verified administrator.",
+        "responses": {
+          "200": {
+            "description": "Consumer-case queue"
+          },
+          "403": {
+            "description": "Administrator required"
+          }
+        }
+      }
+    },
+    "/v1/admin/legal-requests/{requestId}": {
+      "get": {
+        "description": "Read audited consumer-case details.",
+        "responses": {
+          "200": {
+            "description": "Consumer-case details"
+          },
+          "404": {
+            "description": "Case unavailable"
+          }
+        }
+      },
+      "patch": {
+        "description": "Apply a revision-guarded review, answer, closure, or legal-hold action.",
+        "responses": {
+          "200": {
+            "description": "Action applied"
+          },
+          "409": {
+            "description": "Revision or lifecycle conflict"
+          },
+          "503": {
+            "description": "Answer delivery unavailable"
+          }
+        }
+      }
+    },
+    "/v1/admin/security-incidents": {
+      "post": {
+        "description": "Create a minimal encrypted security-incident register record; verified configured administrator only.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecurityIncidentCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Incident created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecurityIncidentResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrator required"
+          }
+        }
+      },
+      "get": {
+        "description": "List security incidents without sensitive details or recipient data.",
+        "responses": {
+          "200": {
+            "description": "Incident queue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecurityIncidentListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrator required"
+          }
+        }
+      }
+    },
+    "/v1/admin/security-incidents/{incidentId}": {
+      "get": {
+        "description": "Read audited encrypted incident details.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SecurityIncidentId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Incident details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecurityIncidentResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Incident unavailable"
+          }
+        }
+      },
+      "patch": {
+        "description": "Apply an explicit revision-guarded incident action. UODO submission is recorded manually; this API never sends reports to UODO.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SecurityIncidentId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecurityIncidentAction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Incident action applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecurityIncidentResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Revision or legal-lifecycle conflict"
+          },
+          "503": {
+            "description": "Subject-notification email unavailable"
+          }
+        }
+      }
+    },
+    "/v1/admin/security-incidents/{incidentId}/authority-exports/{version}": {
+      "get": {
+        "description": "Read one exact encrypted, versioned UODO export and audit the read.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SecurityIncidentId"
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact prepared export",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "payload",
+                    "digest",
+                    "version"
+                  ],
+                  "properties": {
+                    "payload": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "digest": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{43}$"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Export unavailable"
           }
         }
       }
@@ -579,9 +1117,1031 @@
           "type": "string",
           "minLength": 1
         }
+      },
+      "PrivacyRequestId": {
+        "name": "requestId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^pr_[0-9a-f-]{36}$"
+        }
+      },
+      "SecurityIncidentId": {
+        "name": "incidentId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^si_[0-9a-f-]{36}$"
+        }
       }
     },
     "schemas": {
+      "SecurityIncidentCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "details",
+          "detectedAt",
+          "categories",
+          "dataSubjectCount",
+          "recordCount",
+          "specialData",
+          "confidentialityImpact",
+          "integrityImpact",
+          "availabilityImpact",
+          "consequences",
+          "likelihood",
+          "severity",
+          "containment",
+          "remediation",
+          "prevention",
+          "postmortem"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "details": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50000
+          },
+          "detectedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "containedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "categories": {
+            "type": "string"
+          },
+          "dataSubjectCount": {
+            "type": "string"
+          },
+          "recordCount": {
+            "type": "string"
+          },
+          "specialData": {
+            "type": "boolean"
+          },
+          "confidentialityImpact": {
+            "type": "string"
+          },
+          "integrityImpact": {
+            "type": "string"
+          },
+          "availabilityImpact": {
+            "type": "string"
+          },
+          "consequences": {
+            "type": "string"
+          },
+          "likelihood": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "containment": {
+            "type": "string"
+          },
+          "remediation": {
+            "type": "string"
+          },
+          "prevention": {
+            "type": "string"
+          },
+          "postmortem": {
+            "type": "string"
+          }
+        }
+      },
+      "SecurityIncidentAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision"
+            ],
+            "properties": {
+              "action": {
+                "const": "acknowledge_awareness"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision",
+              "classification",
+              "reason"
+            ],
+            "properties": {
+              "action": {
+                "const": "classify"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "classification": {
+                "type": "string",
+                "enum": [
+                  "triage",
+                  "breach_confirmed",
+                  "not_a_breach"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision",
+              "reason",
+              "details",
+              "detectedAt",
+              "categories",
+              "dataSubjectCount",
+              "recordCount",
+              "specialData",
+              "confidentialityImpact",
+              "integrityImpact",
+              "availabilityImpact",
+              "consequences",
+              "likelihood",
+              "severity",
+              "containment",
+              "remediation",
+              "prevention",
+              "postmortem"
+            ],
+            "properties": {
+              "action": {
+                "const": "correct_assessment"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              "details": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 50000
+              },
+              "detectedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "occurredAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "containedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "categories": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              "dataSubjectCount": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "recordCount": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "specialData": {
+                "type": "boolean"
+              },
+              "confidentialityImpact": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "integrityImpact": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "availabilityImpact": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "consequences": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8000
+              },
+              "likelihood": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "severity": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "containment": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8000
+              },
+              "remediation": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8000
+              },
+              "prevention": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8000
+              },
+              "postmortem": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8000
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision",
+              "decision",
+              "reason"
+            ],
+            "properties": {
+              "action": {
+                "const": "decide_authority"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "decision": {
+                "type": "string",
+                "enum": [
+                  "required",
+                  "not_required"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              "legalException": {
+                "type": "string",
+                "maxLength": 4000
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision",
+              "payload"
+            ],
+            "properties": {
+              "action": {
+                "const": "prepare_authority_export"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "payload": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100000
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision",
+              "channel",
+              "reference",
+              "evidence"
+            ],
+            "properties": {
+              "action": {
+                "const": "record_authority_submission"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "channel": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "reference": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "evidence": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20000
+              },
+              "supplementary": {
+                "type": "boolean",
+                "default": false
+              },
+              "delayReason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision",
+              "decision",
+              "reason"
+            ],
+            "properties": {
+              "action": {
+                "const": "decide_subject"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "decision": {
+                "type": "string",
+                "enum": [
+                  "required",
+                  "not_required"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              "legalException": {
+                "type": "string",
+                "maxLength": 4000
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision",
+              "recipients",
+              "subject",
+              "text"
+            ],
+            "properties": {
+              "action": {
+                "const": "prepare_subject_notification"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "recipients": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 500,
+                "items": {
+                  "type": "string",
+                  "format": "email",
+                  "maxLength": 320
+                }
+              },
+              "subject": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 50000
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision",
+              "recipientPseudonym",
+              "snapshotVersion"
+            ],
+            "properties": {
+              "action": {
+                "const": "send_subject_notification"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "recipientPseudonym": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{16,128}$"
+              },
+              "snapshotVersion": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision",
+              "deliveryId",
+              "outcome",
+              "reason"
+            ],
+            "properties": {
+              "action": {
+                "const": "resolve_subject_notification_unknown"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "deliveryId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "sent",
+                  "failed"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision"
+            ],
+            "properties": {
+              "action": {
+                "const": "reconcile_subject_notifications"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision",
+              "reason"
+            ],
+            "properties": {
+              "action": {
+                "const": "set_legal_hold"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision",
+              "reason"
+            ],
+            "properties": {
+              "action": {
+                "const": "release_legal_hold"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision"
+            ],
+            "properties": {
+              "action": {
+                "const": "close"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        ]
+      },
+      "SecurityIncidentAssessment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "details",
+          "detectedAt",
+          "categories",
+          "dataSubjectCount",
+          "recordCount",
+          "specialData",
+          "confidentialityImpact",
+          "integrityImpact",
+          "availabilityImpact",
+          "consequences",
+          "likelihood",
+          "severity",
+          "containment",
+          "remediation",
+          "prevention",
+          "postmortem"
+        ],
+        "properties": {
+          "details": {
+            "type": "string"
+          },
+          "detectedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "containedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "categories": {
+            "type": "string"
+          },
+          "dataSubjectCount": {
+            "type": "string"
+          },
+          "recordCount": {
+            "type": "string"
+          },
+          "specialData": {
+            "type": "boolean"
+          },
+          "confidentialityImpact": {
+            "type": "string"
+          },
+          "integrityImpact": {
+            "type": "string"
+          },
+          "availabilityImpact": {
+            "type": "string"
+          },
+          "consequences": {
+            "type": "string"
+          },
+          "likelihood": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "containment": {
+            "type": "string"
+          },
+          "remediation": {
+            "type": "string"
+          },
+          "prevention": {
+            "type": "string"
+          },
+          "postmortem": {
+            "type": "string"
+          }
+        }
+      },
+      "SecurityIncidentListItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "incidentId",
+          "classification",
+          "authorityDecision",
+          "authorityDeliveryStatus",
+          "subjectDecision",
+          "subjectNotificationStatus",
+          "awarenessAt",
+          "authorityDeadlineAt",
+          "closedAt",
+          "revision",
+          "legalHold",
+          "nextAction"
+        ],
+        "properties": {
+          "incidentId": {
+            "type": "string"
+          },
+          "classification": {
+            "enum": [
+              "triage",
+              "breach_confirmed",
+              "not_a_breach"
+            ]
+          },
+          "authorityDecision": {
+            "enum": [
+              "undecided",
+              "required",
+              "not_required"
+            ]
+          },
+          "authorityDeliveryStatus": {
+            "enum": [
+              "not_started",
+              "submitted",
+              "supplemented"
+            ]
+          },
+          "subjectDecision": {
+            "enum": [
+              "undecided",
+              "required",
+              "not_required"
+            ]
+          },
+          "subjectNotificationStatus": {
+            "enum": [
+              "not_started",
+              "prepared",
+              "pending",
+              "sent",
+              "failed",
+              "unknown"
+            ]
+          },
+          "awarenessAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "authorityDeadlineAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "closedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "legalHold": {
+            "type": "boolean"
+          },
+          "nextAction": {
+            "enum": [
+              "acknowledge_awareness",
+              "classify",
+              "decide_authority",
+              "prepare_authority_export",
+              "record_authority_submission",
+              "decide_subject",
+              "prepare_subject_notification",
+              "resolve_subject_notification_unknown",
+              "send_subject_notification",
+              "close",
+              "none"
+            ]
+          }
+        }
+      },
+      "SecurityIncidentAuditSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "classification": {
+            "enum": [
+              "triage",
+              "breach_confirmed",
+              "not_a_breach"
+            ]
+          },
+          "authorityDecision": {
+            "enum": [
+              "undecided",
+              "required",
+              "not_required"
+            ]
+          },
+          "authorityDeliveryStatus": {
+            "enum": [
+              "not_started",
+              "submitted",
+              "supplemented"
+            ]
+          },
+          "subjectDecision": {
+            "enum": [
+              "undecided",
+              "required",
+              "not_required"
+            ]
+          },
+          "subjectNotificationStatus": {
+            "enum": [
+              "not_started",
+              "prepared",
+              "pending",
+              "sent",
+              "failed",
+              "unknown"
+            ]
+          }
+        }
+      },
+      "SecurityIncidentAuditEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event",
+          "actorPseudonym",
+          "at",
+          "revision",
+          "assessmentVersion",
+          "snapshot"
+        ],
+        "properties": {
+          "event": {
+            "type": "string"
+          },
+          "actorPseudonym": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "nullable": true
+          },
+          "assessmentVersion": {
+            "type": "integer",
+            "nullable": true
+          },
+          "snapshot": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SecurityIncidentAuditSnapshot"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "SecurityIncidentPreparedRecipient": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "recipientPseudonym",
+          "snapshotVersion"
+        ],
+        "properties": {
+          "recipientPseudonym": {
+            "type": "string"
+          },
+          "snapshotVersion": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "SecurityIncidentDelivery": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "recipientPseudonym",
+          "snapshotVersion",
+          "status",
+          "deliveryId"
+        ],
+        "properties": {
+          "recipientPseudonym": {
+            "type": "string"
+          },
+          "snapshotVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "sent",
+              "failed",
+              "unknown",
+              "superseded"
+            ]
+          },
+          "deliveryId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "SecurityIncidentDetails": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SecurityIncidentListItem"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "title",
+              "details",
+              "assessment",
+              "createdAt",
+              "updatedAt",
+              "authorityExportVersion",
+              "assessmentVersion",
+              "authorityReason",
+              "subjectReason",
+              "authoritySubmissionReference",
+              "preparedRecipients",
+              "auditHistory",
+              "subjectNotifications"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "details": {
+                "type": "string"
+              },
+              "assessment": {
+                "$ref": "#/components/schemas/SecurityIncidentAssessment"
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              },
+              "authorityExportVersion": {
+                "type": "integer",
+                "nullable": true
+              },
+              "assessmentVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "authorityReason": {
+                "type": "string",
+                "nullable": true
+              },
+              "subjectReason": {
+                "type": "string",
+                "nullable": true
+              },
+              "authoritySubmissionReference": {
+                "type": "string",
+                "nullable": true
+              },
+              "preparedRecipients": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SecurityIncidentPreparedRecipient"
+                }
+              },
+              "auditHistory": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SecurityIncidentAuditEntry"
+                }
+              },
+              "subjectNotifications": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SecurityIncidentDelivery"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "SecurityIncidentResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "incident"
+        ],
+        "properties": {
+          "incident": {
+            "$ref": "#/components/schemas/SecurityIncidentDetails"
+          }
+        }
+      },
+      "SecurityIncidentListResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "incidents"
+        ],
+        "properties": {
+          "incidents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SecurityIncidentListItem"
+            }
+          }
+        }
+      },
       "ProgressMutation": {
         "type": "object",
         "required": [
@@ -851,21 +2411,67 @@
           }
         }
       },
-      "PublicDeletionRequest": {
+      "CreateAccountPrivacyRequest": {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "email"
+          "right"
+        ],
+        "properties": {
+          "right": {
+            "$ref": "#/components/schemas/PrivacyRight"
+          },
+          "narrative": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        }
+      },
+      "CreatePublicPrivacyRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "email",
+          "right"
         ],
         "properties": {
           "email": {
             "type": "string",
             "format": "email",
             "maxLength": 320
+          },
+          "right": {
+            "$ref": "#/components/schemas/PrivacyRight"
+          },
+          "narrative": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "reportSubmissionIds": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         }
       },
-      "PublicDeletionConfirm": {
+      "PrivacyRight": {
+        "type": "string",
+        "enum": [
+          "access",
+          "rectification",
+          "erasure",
+          "restriction",
+          "objection",
+          "portability",
+          "consent_withdrawal"
+        ]
+      },
+      "PrivacyTokenExchange": {
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -874,8 +2480,22 @@
         "properties": {
           "token": {
             "type": "string",
-            "minLength": 20,
-            "maxLength": 128
+            "minLength": 32,
+            "maxLength": 512
+          }
+        }
+      },
+      "PublicPrivacySession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sessionToken"
+        ],
+        "properties": {
+          "sessionToken": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 512
           }
         }
       },
@@ -884,16 +2504,577 @@
         "additionalProperties": false,
         "required": [
           "operationId",
-          "accountUidHash"
+          "operationSecret"
         ],
         "properties": {
           "operationId": {
             "type": "string",
             "format": "uuid"
           },
-          "accountUidHash": {
+          "operationSecret": {
             "type": "string",
             "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      },
+      "PrivacyRequestAdminAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "reason",
+              "expectedRevision"
+            ],
+            "properties": {
+              "action": {
+                "const": "require_verification"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "reason",
+              "expectedRevision"
+            ],
+            "properties": {
+              "action": {
+                "const": "verify_subject"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision"
+            ],
+            "properties": {
+              "action": {
+                "const": "start_review"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision"
+            ],
+            "properties": {
+              "action": {
+                "const": "execute_export"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "reason",
+              "noticeLocale",
+              "expectedRevision"
+            ],
+            "properties": {
+              "action": {
+                "const": "extend"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "noticeLocale": {
+                "type": "string",
+                "enum": [
+                  "pl",
+                  "en"
+                ]
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision"
+            ],
+            "properties": {
+              "action": {
+                "const": "retry_extension_notice"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "outcome",
+              "response",
+              "reason",
+              "complaintInformationIncluded",
+              "executionEvidence",
+              "expectedRevision"
+            ],
+            "properties": {
+              "action": {
+                "const": "prepare_response"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "fulfilled",
+                  "partially_fulfilled",
+                  "refused"
+                ]
+              },
+              "response": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 250000
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "complaintInformationIncluded": {
+                "const": true
+              },
+              "executionEvidence": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "deliver",
+                  "close"
+                ]
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        ]
+      },
+      "AccountDataExport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "exportId",
+          "exportedAt",
+          "scope",
+          "article15Information",
+          "portable",
+          "accountContext",
+          "manifest"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "type": "string",
+            "const": "account-data-export-v1"
+          },
+          "exportId": {
+            "type": "string",
+            "pattern": "^export_[A-Za-z0-9_-]{32}$"
+          },
+          "exportedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scope": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "portable",
+              "accountContext"
+            ],
+            "properties": {
+              "portable": {
+                "type": "string",
+                "const": "user_data_and_activity"
+              },
+              "accountContext": {
+                "type": "string",
+                "const": "user_visible_account_context"
+              }
+            }
+          },
+          "article15Information": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "purposes",
+              "dataCategories",
+              "recipientCategories",
+              "retentionCriteria",
+              "dataSources",
+              "internationalTransfers",
+              "automatedDecisionMaking",
+              "rightsAndComplaint"
+            ],
+            "properties": {
+              "purposes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "dataCategories": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "recipientCategories": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "retentionCriteria": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "dataSources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "internationalTransfers": {
+                "type": "string"
+              },
+              "automatedDecisionMaking": {
+                "type": "string"
+              },
+              "rightsAndComplaint": {
+                "type": "string"
+              }
+            }
+          },
+          "portable": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "profile",
+              "progress",
+              "linkedContentReports"
+            ],
+            "properties": {
+              "profile": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "createdAt",
+                  "identity"
+                ],
+                "properties": {
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "identity": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "provider",
+                      "email",
+                      "emailVerified"
+                    ],
+                    "properties": {
+                      "provider": {
+                        "type": "string"
+                      },
+                      "email": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "email"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "emailVerified": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                }
+              },
+              "progress": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AccountDataExportProgress"
+                }
+              },
+              "linkedContentReports": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AccountDataExportContentReport"
+                }
+              }
+            }
+          },
+          "accountContext": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "trackAccess",
+              "entitlements",
+              "devices",
+              "syncMetadata",
+              "exportHistory"
+            ],
+            "properties": {
+              "trackAccess": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "entitlements": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "devices": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "syncMetadata": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "exportHistory": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "manifest": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "included",
+              "omitted"
+            ],
+            "properties": {
+              "included": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "omitted": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "category",
+                    "reason"
+                  ],
+                  "properties": {
+                    "category": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "AccountDataExportProgress": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "recordType",
+          "trackId",
+          "targetId",
+          "version",
+          "fingerprint",
+          "state",
+          "lastMutationId",
+          "updatedAt"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "node",
+              "item"
+            ]
+          },
+          "recordType": {
+            "type": "string"
+          },
+          "trackId": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "state": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "lastMutationId": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AccountDataExportContentReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "clientSubmissionId",
+          "trackId",
+          "contentVersion",
+          "itemId",
+          "reason",
+          "description",
+          "context",
+          "linkage",
+          "status",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "clientSubmissionId": {
+            "type": "string"
+          },
+          "trackId": {
+            "type": "string"
+          },
+          "contentVersion": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "context": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "linkage": {
+            "type": "string",
+            "enum": [
+              "account",
+              "account_and_contact"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -933,8 +3114,8 @@
           },
           "description": {
             "type": "string",
-            "minLength": 10,
-            "maxLength": 2000
+            "maxLength": 280,
+            "description": "Optional note. Blank input is stored as a neutral fixed description; obvious contact data, URLs, passwords and codes are rejected."
           },
           "context": {
             "$ref": "#/components/schemas/ContentReportContext"

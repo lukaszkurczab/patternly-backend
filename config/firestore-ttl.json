@@ -1,0 +1,93 @@
+{
+  "database": "(default)",
+  "policies": [
+    {
+      "collectionGroup": "accountDataExportAudits",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "accountDataExportRateLimits",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "privacyRequests",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "privacyRequestSecrets",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "privacyResponseArtifacts",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "privacyResponseChunks",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "privacyRequestRateLimits",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "securityIncidents",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "legalRequests",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "legalRequestRateLimits",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "securityIncidentSecrets",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "securityIncidentArtifacts",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "securityIncidentDeliveries",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "securityIncidentDeliveryKeys",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "securityIncidentReminders",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "syncOperations",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "syncMutations",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "contentReports",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "deletionProofs",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "accountDeletionOperations",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "deletedIdentities",
+      "fieldPath": "expiresAt"
+    },
+    {
+      "collectionGroup": "audit",
+      "fieldPath": "expiresAt"
+    }
+  ]
+}

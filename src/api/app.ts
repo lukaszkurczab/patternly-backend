@@ -1,5 +1,6 @@
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { DestinationStream } from "pino";
+import { createHash, randomUUID } from "node:crypto";
 import type { Environment } from "../config/environment.js";
 import type { FirestoreRuntime } from "../infrastructure/firestore/client.js";
 import type { IdentityTokenVerifier } from "../infrastructure/firebase/verifier.js";
@@ -10,7 +11,14 @@ import type { BackendStores } from "../infrastructure/firestore/stores.js";
 import { syncRequestSchema } from "../modules/progress/contracts.js";
 import { guestMergeConfirmationSchema, guestMergeSnapshotSchema } from "../modules/users/merge.js";
 import { createContentReportSchema, transitionContentReportSchema } from "../modules/content-reports/contracts.js";
-import { accountRecoveryCodeConsumeSchema, accountRecoveryCodeIssueSchema, accountSessionRevokeSchema, accountDeletionRequestSchema, publicDeletionConfirmSchema, publicDeletionRequestSchema, publicDeletionStatusSchema } from "../modules/account-lifecycle/contracts.js";
+import { accountRecoveryCodeConsumeSchema, accountRecoveryCodeIssueSchema, accountSessionRevokeSchema, accountDeletionRequestSchema, publicDeletionStatusSchema } from "../modules/account-lifecycle/contracts.js";
+import { createLogger } from "../infrastructure/logging/logger.js";
+import { DataExportRateLimitError, DataExportTooLargeError } from "../modules/data-export/contracts.js";
+import { createAccountPrivacyRequestSchema, createPublicPrivacyRequestSchema, privacyRequestAdminActionSchema, publicPrivacySessionSchema, PRIVACY_RIGHT_POLICIES, verifyPublicPrivacyRequestSchema } from "../modules/privacy-requests/contracts.js";
+import { createSecurityIncidentSchema, securityIncidentActionSchema } from "../modules/security-incidents/contracts.js";
+import { revenueCatEventSchema, verifyRevenueCatAuthorization } from "../modules/billing/revenuecatWebhook.js";
+import { createLegalRequestSchema, createPublicLegalRequestSchema, legalRequestAdminActionSchema } from "../modules/legal-requests/contracts.js";
+import { z } from "zod";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -28,11 +36,20 @@ export type ApplicationDependencies = Readonly<{
   verifier: IdentityTokenVerifier | null;
   appCheckVerifier: AppCheckTokenVerifier | null;
   stores: BackendStores | null;
-  deletionEmailSender?: import("../modules/account-lifecycle/store.js").DeletionEmailSender | null;
+  privacyRequestEmailSender?: import("../modules/privacy-requests/store.js").PrivacyRequestEmailSender | null;
+  securityIncidentEmailSender?: import("../modules/security-incidents/store.js").SecurityIncidentEmailSender | null;
+  legalRequestEmailSender?: import("../modules/legal-requests/store.js").LegalRequestEmailSender | null;
+  purchaseReceiptEmailSender?: import("../infrastructure/email/smtpPrivacyEmailSender.js").PurchaseReceiptEmailSender | null;
   logStream?: DestinationStream;
 }>;
 
 const RECENT_AUTH_SECONDS = 300;
+const PRIVACY_REQUEST_ID_PATTERN = /^pr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const privacyRequestId = (value: unknown): string | null => typeof value === "string" && PRIVACY_REQUEST_ID_PATTERN.test(value) ? value : null;
+const SECURITY_INCIDENT_ID_PATTERN = /^si_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const securityIncidentId = (value: unknown): string | null => typeof value === "string" && SECURITY_INCIDENT_ID_PATTERN.test(value) ? value : null;
+const LEGAL_REQUEST_ID_PATTERN = /^lr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const legalRequestId = (value: unknown): string | null => typeof value === "string" && LEGAL_REQUEST_ID_PATTERN.test(value) ? value : null;
 
 const authErrorStatus = (error: unknown): number => {
   const message = error instanceof Error ? error.message : "";
@@ -60,8 +77,7 @@ const errorCode = (error: unknown): string => {
   if (message === "recovery_code_invalid") return "recovery_code_invalid";
   if (message === "recovery_code_used") return "recovery_code_used";
   if (message === "account_deleted") return "account_deleted";
-  if (message === "deletion_email_unavailable") return "deletion_email_unavailable";
-  if (message === "deletion_request_invalid") return "deletion_request_invalid";
+  if (message === "legal_acceptance_required") return "legal_acceptance_required";
   if (message === "remote_deletion_pending") return "remote_deletion_pending";
   if (message === "session_revocation_failed") return "session_revocation_failed";
   if (message === "session_revocation_operation_conflict") return "session_revocation_operation_conflict";
@@ -70,6 +86,19 @@ const errorCode = (error: unknown): string => {
   if (message === "app_check_invalid") return "app_check_invalid";
   if (message === "content_report_not_found") return "content_report_not_found";
   if (message === "content_report_transition_invalid") return "content_report_transition_invalid";
+  if (message === "data_export_rate_limited") return "data_export_rate_limited";
+  if (message === "data_export_too_large") return "data_export_too_large";
+  if (message === "privacy_request_not_found") return "privacy_request_not_found";
+  if (message === "privacy_request_revision_conflict") return "privacy_request_revision_conflict";
+  if (message === "privacy_request_transition_invalid") return "privacy_request_transition_invalid";
+  if (message === "privacy_request_extension_invalid") return "privacy_request_extension_invalid";
+  if (message === "privacy_request_subject_unverified") return "privacy_request_subject_unverified";
+  if (message === "privacy_request_executor_required") return "privacy_request_executor_required";
+  if (message === "privacy_request_executor_unavailable") return "privacy_request_executor_unavailable";
+  if (message === "privacy_request_rate_limited") return "privacy_request_rate_limited";
+  if (message === "privacy_email_unavailable") return "privacy_email_unavailable";
+  if (message.startsWith("legal_request_")) return message;
+  if (message.startsWith("security_incident_")) return message;
   return "internal_error";
 };
 
@@ -162,48 +191,47 @@ function requireAdministrator(request: FastifyRequest, reply: FastifyReply, depe
   return true;
 }
 
-export function buildApplication(dependencies: ApplicationDependencies): FastifyInstance {
-  const logger = {
-    level: dependencies.environment.logLevel as "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent",
-    ...(dependencies.logStream === undefined ? {} : { stream: dependencies.logStream }),
-  };
-  const app = Fastify({ logger });
+export function buildApplication(dependencies: ApplicationDependencies) {
+  const app = Fastify({
+    loggerInstance: createLogger(dependencies.environment, dependencies.logStream),
+    genReqId: () => randomUUID(),
+  });
   app.decorateRequest("correlationId", "");
   app.decorateRequest("userId", undefined);
   app.decorateRequest("authenticatedEmail", undefined);
   app.decorateRequest("authenticatedEmailVerified", undefined);
   app.decorateRequest("authTime", undefined);
   app.addHook("onRequest", async (request, reply) => {
-    const supplied = request.headers["x-correlation-id"];
-    const correlationId = typeof supplied === "string" && /^[A-Za-z0-9._-]{1,128}$/u.test(supplied) ? supplied : request.id;
-    request.correlationId = correlationId;
-    reply.header("x-correlation-id", correlationId);
+    request.correlationId = request.id;
+    reply.header("x-correlation-id", request.id);
     const origin = request.headers.origin;
     const isAdminRoute = request.url.startsWith("/v1/admin/");
-    const isPublicDeletionRoute = request.url.startsWith("/v1/public/deletion-");
+    const isPublicPrivacyRoute = request.url.startsWith("/v1/public/privacy-requests");
     if (isAdminRoute && typeof origin === "string" && origin === dependencies.environment.adminWebOrigin) {
       reply.header("access-control-allow-origin", origin);
       reply.header("access-control-allow-headers", "authorization, content-type");
-      reply.header("access-control-allow-methods", "GET, PATCH, OPTIONS");
+      reply.header("access-control-allow-methods", "GET, POST, PATCH, OPTIONS");
       reply.header("vary", "Origin");
     }
-    if (isPublicDeletionRoute && typeof origin === "string" && origin === dependencies.environment.publicDeletionOrigin) {
+    if (isPublicPrivacyRoute && typeof origin === "string" && origin === dependencies.environment.publicPrivacyOrigin) {
       reply.header("access-control-allow-origin", origin);
       reply.header("access-control-allow-headers", "content-type");
-      reply.header("access-control-allow-methods", "GET, POST, OPTIONS");
+      reply.header("access-control-allow-methods", "POST, OPTIONS");
       reply.header("vary", "Origin");
+      reply.header("referrer-policy", "no-referrer");
+      reply.header("cache-control", "no-store");
     }
     if (isAdminRoute && request.method === "OPTIONS") {
       if (typeof origin !== "string" || origin !== dependencies.environment.adminWebOrigin) return reply.code(403).send({ error: { code: "origin_not_allowed" } });
       return reply.code(204).send();
     }
-    if (isPublicDeletionRoute && request.method === "OPTIONS") {
-      if (typeof origin !== "string" || origin !== dependencies.environment.publicDeletionOrigin) return reply.code(403).send({ error: { code: "origin_not_allowed" } });
+    if (isPublicPrivacyRoute && request.method === "OPTIONS") {
+      if (typeof origin !== "string" || origin !== dependencies.environment.publicPrivacyOrigin) return reply.code(403).send({ error: { code: "origin_not_allowed" } });
       return reply.code(204).send();
     }
   });
   app.setErrorHandler((error, request, reply) => {
-    request.log.error({ err: error, correlationId: request.correlationId }, "request_failed");
+    request.log.error({ event: "request_failed", code: errorCode(error), correlationId: request.correlationId }, "request_failed");
     if (reply.sent) return;
     reply.code(500).send({ error: { code: "internal_error", correlationId: request.correlationId } });
   });
@@ -220,10 +248,60 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
   });
   app.get("/openapi.json", async () => OPENAPI_DOCUMENT);
 
+  app.post("/v1/webhooks/revenuecat", async (request, reply) => {
+    const configuration = dependencies.environment;
+    if (!configuration.revenueCatWebhookSecret || !configuration.revenueCatAppId || !configuration.revenueCatEntitlementId || !configuration.revenueCatProductId || !configuration.revenueCatWebhookEnvironment) return reply.code(503).send({ error: { code: "revenuecat_not_configured" } });
+    if (!verifyRevenueCatAuthorization(request.headers.authorization, configuration.revenueCatWebhookSecret)) return reply.code(401).send({ error: { code: "revenuecat_webhook_unauthorized" } });
+    const envelope = request.body as { event?: unknown } | null;
+    const parsed = revenueCatEventSchema.safeParse(envelope?.event);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      const store = requireStores(dependencies).revenueCatWebhook;
+      const result = await store.process(parsed.data, configuration.revenueCatAppId, configuration.revenueCatWebhookEnvironment, configuration.revenueCatEntitlementId, configuration.revenueCatProductId);
+      if (result.receipt) {
+        if (!dependencies.purchaseReceiptEmailSender) {
+          await store.markReceiptDelivery(result.receipt.userId, result.receipt.receiptId, result.receipt.deliveryClaimId, "failed");
+          return reply.code(503).send({ error: { code: "purchase_receipt_delivery_unavailable" } });
+        }
+        try {
+          await dependencies.purchaseReceiptEmailSender.send(result.receipt);
+          await store.markReceiptDelivery(result.receipt.userId, result.receipt.receiptId, result.receipt.deliveryClaimId, "sent");
+        } catch {
+          await store.markReceiptDelivery(result.receipt.userId, result.receipt.receiptId, result.receipt.deliveryClaimId, "failed");
+          return reply.code(503).send({ error: { code: "purchase_receipt_delivery_failed" } });
+        }
+      }
+      return reply.code(200).send({ outcome: result.outcome, duplicate: result.duplicate });
+    } catch (error) {
+      if (error instanceof Error && error.message === "event_timestamp_future") return reply.code(400).send({ error: { code: "invalid_request" } });
+      throw error;
+    }
+  });
+
   app.get("/v1/me", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
     const profile = await requireStores(dependencies).users.readProfile(request.userId!);
     if (!profile) return reply.code(404).send({ error: { code: "user_not_found" } });
     return { user: profile };
+  });
+
+  app.post("/v1/legal-acceptances", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const parsed = z.object({ termsVersion: z.string().regex(/^[A-Za-z0-9._-]{1,80}$/u), minimumAgeConfirmed: z.literal(18) }).strict().safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    const acceptance = await requireStores(dependencies).users.recordLegalAcceptance(request.userId!, parsed.data.termsVersion);
+    return reply.code(201).send({ acceptance });
+  });
+
+  app.post("/v1/purchase-confirmations", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const parsed = z.object({ confirmationId: z.string().uuid(), termsVersion: z.string().regex(/^[A-Za-z0-9._-]{1,80}$/u), productIdentifier: z.string().trim().min(1).max(200), storefrontPrice: z.string().trim().min(1).max(80), locale: z.enum(["en", "pl"]), immediateStartRequested: z.literal(true) }).strict().safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      const confirmation = await requireStores(dependencies).users.recordPurchaseConfirmation(request.userId!, parsed.data);
+      return reply.code(201).send({ confirmation });
+    } catch (error) {
+      if (error instanceof Error && error.message === "legal_acceptance_required") return reply.code(409).send({ error: { code: "legal_acceptance_required" } });
+      if (error instanceof Error && error.message === "purchase_attempt_active") return reply.code(409).send({ error: { code: "purchase_attempt_active" } });
+      throw error;
+    }
   });
 
   app.get("/v1/entitlements", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => ({ entitlements: await requireStores(dependencies).entitlements.read(request.userId!) }));
@@ -231,6 +309,116 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
   app.get("/v1/progress", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => {
     const snapshot = await requireStores(dependencies).progress.readSnapshot(request.userId!);
     return { accountRevision: snapshot.accountRevision, records: snapshot.records };
+  });
+
+  app.get("/v1/account-data/export", { preHandler: async (request, reply) => {
+    reply.header("cache-control", "private, no-store");
+    await protect(request, reply, dependencies);
+  } }, async (request, reply) => {
+    reply.header("cache-control", "private, no-store");
+    if (!requireRecentReauthentication(request, reply)) return;
+    try {
+      const result = await requireStores(dependencies).dataExport.create(request.userId!);
+      return reply
+        .header("content-disposition", 'attachment; filename="patternly-account-data.json"')
+        .type("application/json; charset=utf-8")
+        .send(result.serialized);
+    } catch (error) {
+      if (error instanceof DataExportRateLimitError) return reply.header("retry-after", String(error.retryAfterSeconds)).code(429).send({ error: { code: "data_export_rate_limited" } });
+      if (error instanceof DataExportTooLargeError) return reply.code(413).send({ error: { code: "data_export_too_large" } });
+      throw error;
+    }
+  });
+
+  app.post("/v1/privacy-requests", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const parsed = createAccountPrivacyRequestSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (PRIVACY_RIGHT_POLICIES[parsed.data.right].accountVerification === "recent_reauthentication" && !requireRecentReauthentication(request, reply)) return;
+    const created = await requireStores(dependencies).privacyRequests.createAccount(request.userId!, parsed.data.right, parsed.data.narrative);
+    return reply.code(201).send({ request: created });
+  });
+
+  app.get("/v1/privacy-requests", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => ({ requests: await requireStores(dependencies).privacyRequests.listAccount(request.userId!) }));
+
+  app.get("/v1/privacy-requests/:requestId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireRecentReauthentication(request, reply)) return;
+    const requestId = privacyRequestId((request.params as { requestId?: unknown }).requestId);
+    if (!requestId) return reply.code(404).send({ error: { code: "not_found" } });
+    const result = await requireStores(dependencies).privacyRequests.readAccount(request.userId!, requestId);
+    return result ? reply.code(200).send(result) : reply.code(404).send({ error: { code: "not_found" } });
+  });
+
+  app.post("/v1/public/privacy-requests", async (request, reply) => {
+    reply.header("cache-control", "no-store").header("referrer-policy", "no-referrer");
+    const parsed = createPublicPrivacyRequestSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!dependencies.privacyRequestEmailSender || !dependencies.environment.publicPrivacyOrigin) return reply.code(503).send({ error: { code: "privacy_email_unavailable" } });
+    try {
+      await requireStores(dependencies).privacyRequests.createPublic({ email: parsed.data.email, right: parsed.data.right, reportSubmissionIds: parsed.data.reportSubmissionIds, rateLimitKey: request.ip, ...(parsed.data.narrative === undefined ? {} : { narrative: parsed.data.narrative }) }, dependencies.environment.publicPrivacyOrigin, dependencies.privacyRequestEmailSender);
+    } catch (error) {
+      if (error instanceof Error && error.message === "privacy_request_rate_limited") return reply.code(429).send({ error: { code: "privacy_request_rate_limited" } });
+      if (error instanceof Error && error.message === "privacy_email_unavailable") return reply.code(503).send({ error: { code: "privacy_email_unavailable" } });
+      throw error;
+    }
+    return reply.code(202).send({ status: "accepted" });
+  });
+
+  app.post("/v1/public/privacy-requests/:requestId/session", async (request, reply) => {
+    reply.header("cache-control", "no-store").header("referrer-policy", "no-referrer");
+    const requestId = privacyRequestId((request.params as { requestId?: unknown }).requestId);
+    const parsed = verifyPublicPrivacyRequestSchema.safeParse(request.body);
+    if (!requestId || !parsed.success) return reply.code(404).send({ error: { code: "not_found" } });
+    try {
+      return reply.code(200).send(await requireStores(dependencies).privacyRequests.exchangePublicToken(requestId, parsed.data.token));
+    } catch {
+      return reply.code(404).send({ error: { code: "not_found" } });
+    }
+  });
+
+  app.post("/v1/public/privacy-requests/:requestId/response", async (request, reply) => {
+    reply.header("cache-control", "no-store").header("referrer-policy", "no-referrer");
+    const requestId = privacyRequestId((request.params as { requestId?: unknown }).requestId);
+    const parsed = publicPrivacySessionSchema.safeParse(request.body);
+    if (!requestId || !parsed.success) return reply.code(404).send({ error: { code: "not_found" } });
+    const result = await requireStores(dependencies).privacyRequests.readPublic(requestId, parsed.data.sessionToken);
+    return result ? reply.code(200).send(result) : reply.code(404).send({ error: { code: "not_found" } });
+  });
+
+  app.post("/v1/legal-requests", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const parsed = createLegalRequestSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!dependencies.legalRequestEmailSender || !request.authenticatedEmail || request.authenticatedEmailVerified !== true) return reply.code(503).send({ error: { code: "legal_request_email_unavailable" } });
+    try {
+      const created = await requireStores(dependencies).legalRequests.create({ userId: request.userId!, email: request.authenticatedEmail, kind: parsed.data.kind, ...(parsed.data.narrative === undefined ? {} : { narrative: parsed.data.narrative }), ...(parsed.data.transactionId === undefined ? {} : { transactionId: parsed.data.transactionId }) }, dependencies.legalRequestEmailSender);
+      return reply.code(201).send({ request: created });
+    } catch (error) {
+      if (error instanceof Error && error.message === "legal_request_email_unavailable") return reply.code(503).send({ error: { code: "legal_request_email_unavailable" } });
+      if (error instanceof Error && error.message === "legal_request_rate_limited") return reply.code(429).send({ error: { code: "legal_request_rate_limited" } });
+      throw error;
+    }
+  });
+
+  app.get("/v1/legal-requests", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => ({ requests: await requireStores(dependencies).legalRequests.listAccount(request.userId!) }));
+
+  app.get("/v1/legal-requests/:requestId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const requestId = legalRequestId((request.params as { requestId?: unknown }).requestId);
+    if (!requestId) return reply.code(404).send({ error: { code: "not_found" } });
+    const result = await requireStores(dependencies).legalRequests.readAccount(request.userId!, requestId);
+    return result ? reply.code(200).send({ request: result }) : reply.code(404).send({ error: { code: "not_found" } });
+  });
+
+  app.post("/v1/public/legal-requests", { preHandler: (request, reply) => protectWithAppCheckAndOptionalAuth(request, reply, dependencies) }, async (request, reply) => {
+    const parsed = createPublicLegalRequestSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!dependencies.legalRequestEmailSender) return reply.code(503).send({ error: { code: "legal_request_email_unavailable" } });
+    try {
+      const created = await requireStores(dependencies).legalRequests.create({ userId: request.userId ?? null, email: parsed.data.email, kind: parsed.data.kind, ...(parsed.data.narrative === undefined ? {} : { narrative: parsed.data.narrative }), ...(parsed.data.transactionId === undefined ? {} : { transactionId: parsed.data.transactionId }) }, dependencies.legalRequestEmailSender);
+      return reply.code(201).send({ request: created });
+    } catch (error) {
+      if (error instanceof Error && error.message === "legal_request_email_unavailable") return reply.code(503).send({ error: { code: "legal_request_email_unavailable" } });
+      if (error instanceof Error && error.message === "legal_request_rate_limited") return reply.code(429).send({ error: { code: "legal_request_rate_limited" } });
+      throw error;
+    }
   });
 
   app.post("/v1/progress/sync", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
@@ -339,7 +527,7 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     try {
       const lifecycle = requireStores(dependencies).accountLifecycle;
-      const result = await lifecycle.deleteAccount(request.userId!, parsed.data.operationId);
+      const result = await lifecycle.deleteAccount(request.userId!, parsed.data.operationId, parsed.data.operationSecret);
       try {
         await requireStores(dependencies).contentReports.unlinkAccount(request.userId!);
       } catch {
@@ -348,46 +536,6 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
       return reply.code(200).send(await lifecycle.completeDeletion(result.operationId, result.proofId));
     } catch (error) {
       if (error instanceof Error && ["remote_deletion_pending", "session_revocation_failed"].includes(error.message)) return reply.code(503).send({ error: { code: "remote_deletion_pending" } });
-      throw error;
-    }
-  });
-
-  app.post("/v1/public/deletion-requests", async (request, reply) => {
-    const parsed = publicDeletionRequestSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
-    if (!dependencies.deletionEmailSender) return reply.code(503).send({ error: { code: "deletion_email_unavailable" } });
-    try {
-      await requireStores(dependencies).accountLifecycle.createPublicDeletionRequest(parsed.data.email.trim().toLowerCase(), dependencies.environment.publicDeletionOrigin ?? "", dependencies.deletionEmailSender);
-    } catch (error) {
-      if (error instanceof Error && error.message === "deletion_rate_limited") return reply.code(429).send({ error: { code: "deletion_rate_limited" } });
-      if (error instanceof Error && error.message === "deletion_email_unavailable") return reply.code(503).send({ error: { code: "deletion_email_unavailable" } });
-      throw error;
-    }
-    return reply.code(202).send({ status: "accepted" });
-  });
-
-  app.post("/v1/public/deletion-requests/:requestId/confirm", async (request, reply) => {
-    const params = request.params as { requestId?: unknown };
-    const parsed = publicDeletionConfirmSchema.safeParse(request.body);
-    if (typeof params.requestId !== "string" || !parsed.success) return reply.code(400).send({ error: { code: "deletion_request_invalid" } });
-    try {
-      const lifecycle = requireStores(dependencies).accountLifecycle;
-      const possession = await lifecycle.confirmPublicDeletion(params.requestId, parsed.data.token);
-      if (possession.status === "complete") return reply.code(200).send({ status: "deleted", operationId: possession.operationId, proofId: possession.proofId });
-      const result = await lifecycle.deleteAccount(possession.userId, possession.operationId);
-      try {
-        await requireStores(dependencies).contentReports.unlinkAccount(possession.userId);
-      } catch {
-        throw new Error("remote_deletion_pending");
-      }
-      return reply.code(200).send(await lifecycle.completeDeletion(result.operationId, result.proofId));
-    } catch (error) {
-      if (error instanceof Error && ["deletion_request_invalid", "deletion_request_expired"].includes(error.message)) return reply.code(400).send({ error: { code: "deletion_request_invalid" } });
-      if (error instanceof Error && ["remote_deletion_pending", "session_revocation_failed"].includes(error.message)) {
-        const reconciled = await requireStores(dependencies).accountLifecycle.confirmPublicDeletion(params.requestId, parsed.data.token);
-        if (reconciled.status === "complete") return reply.code(200).send({ status: "deleted", operationId: reconciled.operationId, proofId: reconciled.proofId });
-        return reply.code(503).send({ error: { code: "remote_deletion_pending" } });
-      }
       throw error;
     }
   });
@@ -403,7 +551,7 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
   app.post("/v1/public/deletion-operations/status", async (request, reply) => {
     const parsed = publicDeletionStatusSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(404).send({ error: { code: "not_found" } });
-    const status = await requireStores(dependencies).accountLifecycle.resumeDeletion(parsed.data.operationId, parsed.data.accountUidHash);
+    const status = await requireStores(dependencies).accountLifecycle.resumeDeletion(parsed.data.operationId, parsed.data.operationSecret);
     if (!status) return reply.code(404).send({ error: { code: "not_found" } });
     return reply.code(200).send(status);
   });
@@ -426,6 +574,118 @@ export function buildApplication(dependencies: ApplicationDependencies): Fastify
   app.get("/v1/admin/content-reports", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     return { reports: await requireStores(dependencies).contentReports.listQueue() };
+  });
+  app.get("/v1/admin/privacy-requests", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireAdministrator(request, reply, dependencies)) return;
+    return { requests: await requireStores(dependencies).privacyRequests.listAdmin() };
+  });
+  app.get("/v1/admin/legal-requests", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireAdministrator(request, reply, dependencies)) return;
+    return { requests: await requireStores(dependencies).legalRequests.listAdmin() };
+  });
+  app.get("/v1/admin/legal-requests/:requestId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireAdministrator(request, reply, dependencies)) return;
+    const requestId = legalRequestId((request.params as { requestId?: unknown }).requestId);
+    if (!requestId) return reply.code(404).send({ error: { code: "legal_request_not_found" } });
+    const result = await requireStores(dependencies).legalRequests.readAdmin(requestId, request.userId!);
+    return result ? reply.code(200).send({ request: result }) : reply.code(404).send({ error: { code: "legal_request_not_found" } });
+  });
+  app.patch("/v1/admin/legal-requests/:requestId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireAdministrator(request, reply, dependencies)) return;
+    const requestId = legalRequestId((request.params as { requestId?: unknown }).requestId);
+    const parsed = legalRequestAdminActionSchema.safeParse(request.body);
+    if (!requestId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!dependencies.legalRequestEmailSender) return reply.code(503).send({ error: { code: "legal_request_email_unavailable" } });
+    try {
+      const result = await requireStores(dependencies).legalRequests.transitionAdmin(requestId, request.userId!, parsed.data, dependencies.legalRequestEmailSender);
+      return reply.code(200).send({ request: result });
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === "legal_request_not_found") return reply.code(404).send({ error: { code } });
+      if (code === "legal_request_email_unavailable") return reply.code(503).send({ error: { code } });
+      if (code.startsWith("legal_request_")) return reply.code(409).send({ error: { code } });
+      throw error;
+    }
+  });
+  app.post("/v1/admin/security-incidents", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireAdministrator(request, reply, dependencies)) return;
+    const parsed = createSecurityIncidentSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    const incident = await requireStores(dependencies).securityIncidents.create(request.userId!, parsed.data);
+    return reply.code(201).send({ incident });
+  });
+  app.get("/v1/admin/security-incidents", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireAdministrator(request, reply, dependencies)) return;
+    return { incidents: await requireStores(dependencies).securityIncidents.listAdmin() };
+  });
+  app.get("/v1/admin/security-incidents/:incidentId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireAdministrator(request, reply, dependencies)) return;
+    const incidentId = securityIncidentId((request.params as { incidentId?: unknown }).incidentId);
+    if (!incidentId) return reply.code(404).send({ error: { code: "security_incident_not_found" } });
+    const incident = await requireStores(dependencies).securityIncidents.readAdmin(incidentId, request.userId!);
+    return incident ? reply.code(200).send({ incident }) : reply.code(404).send({ error: { code: "security_incident_not_found" } });
+  });
+  app.get("/v1/admin/security-incidents/:incidentId/authority-exports/:version", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireAdministrator(request, reply, dependencies)) return;
+    const incidentId = securityIncidentId((request.params as { incidentId?: unknown }).incidentId);
+    const rawVersion = (request.params as { version?: unknown }).version;
+    const version = typeof rawVersion === "string" && /^[1-9][0-9]*$/u.test(rawVersion) ? Number(rawVersion) : NaN;
+    if (!incidentId || !Number.isSafeInteger(version)) return reply.code(404).send({ error: { code: "security_incident_export_not_found" } });
+    const exported = await requireStores(dependencies).securityIncidents.readAuthorityExport(incidentId, version, request.userId!);
+    return exported ? reply.code(200).send(exported) : reply.code(404).send({ error: { code: "security_incident_export_not_found" } });
+  });
+  app.patch("/v1/admin/security-incidents/:incidentId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireAdministrator(request, reply, dependencies)) return;
+    const incidentId = securityIncidentId((request.params as { incidentId?: unknown }).incidentId);
+    const parsed = securityIncidentActionSchema.safeParse(request.body);
+    if (!incidentId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      const incident = await requireStores(dependencies).securityIncidents.act(incidentId, request.userId!, parsed.data, dependencies.securityIncidentEmailSender ?? null);
+      return reply.code(200).send({ incident });
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === "security_incident_not_found") return reply.code(404).send({ error: { code } });
+      if (code === "security_incident_email_unavailable") return reply.code(503).send({ error: { code } });
+      if (code.startsWith("security_incident_")) return reply.code(409).send({ error: { code } });
+      throw error;
+    }
+  });
+  app.get("/v1/admin/privacy-requests/:requestId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireAdministrator(request, reply, dependencies)) return;
+    const requestId = privacyRequestId((request.params as { requestId?: unknown }).requestId);
+    if (!requestId) return reply.code(404).send({ error: { code: "privacy_request_not_found" } });
+    const result = await requireStores(dependencies).privacyRequests.readAdmin(requestId, request.userId!);
+    return result ? reply.code(200).send({ request: result }) : reply.code(404).send({ error: { code: "privacy_request_not_found" } });
+  });
+  app.patch("/v1/admin/privacy-requests/:requestId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    if (!requireAdministrator(request, reply, dependencies)) return;
+    const requestId = privacyRequestId((request.params as { requestId?: unknown }).requestId);
+    const parsed = privacyRequestAdminActionSchema.safeParse(request.body);
+    if (!requestId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      if (parsed.data.action === "execute_export") {
+        const privacy = requireStores(dependencies).privacyRequests;
+        const context = await privacy.readExecutionContext(requestId);
+        if (!context) return reply.code(404).send({ error: { code: "privacy_request_not_found" } });
+        if (context.revision !== parsed.data.expectedRevision) return reply.code(409).send({ error: { code: "privacy_request_revision_conflict" } });
+        if (context.channel !== "account" || !context.userId || (context.right !== "access" && context.right !== "portability")) return reply.code(409).send({ error: { code: "privacy_request_executor_unavailable" } });
+        const stableExportId = `export_${createHash("sha256").update(`privacy:${requestId}`, "utf8").digest("base64url").slice(0, 32)}`;
+        let result: Awaited<ReturnType<typeof privacy.prepareExecutedResponse>> | null = null;
+        await requireStores(dependencies).dataExport.create(context.userId, stableExportId, async (exported) => {
+          result = await privacy.prepareExecutedResponse(requestId, request.userId!, parsed.data.expectedRevision, exported.serialized, `${context.right === "access" ? "article_15_export" : "portability_export"}:${exported.exportId}`);
+        });
+        if (!result) throw new Error("privacy_request_executor_incomplete");
+        return reply.code(200).send({ request: result });
+      }
+      const result = await requireStores(dependencies).privacyRequests.transitionAdmin(requestId, request.userId!, parsed.data, dependencies.environment.publicPrivacyOrigin ?? "", dependencies.privacyRequestEmailSender ?? null);
+      return reply.code(200).send({ request: result });
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === "privacy_request_not_found") return reply.code(404).send({ error: { code } });
+      if (["privacy_request_revision_conflict", "privacy_request_transition_invalid", "privacy_request_extension_invalid", "privacy_request_subject_unverified", "privacy_request_executor_required", "privacy_request_executor_unavailable"].includes(code)) return reply.code(409).send({ error: { code } });
+      if (code === "privacy_email_unavailable") return reply.code(503).send({ error: { code } });
+      throw error;
+    }
   });
   app.get("/v1/admin/overview", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;

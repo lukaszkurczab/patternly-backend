@@ -2,32 +2,28 @@
 
 This register is the canonical location for accepted backend decisions and deferred implementation work. It records scope and required verification; it does not grant release approval.
 
-## BE-DEC-001 — Materialize Premium entitlement through RevenueCat
+## BE-DEC-001 — Materialize Premium entitlement through RevenueCat (implemented)
 
 | Field | Decision |
 | --- | --- |
-| Status | deferred |
-| Confirmed gap | The backend has no canonical path that writes a Premium entitlement projection from RevenueCat. `/v1/entitlements` only reads Firestore projections. |
-| Deferral reason | Deferred only by the owner's explicit decision: current individual application testing does not include a paid subscription. |
-| Production status | Premium is not ready for a production launch. |
-| Required before | Complete this work before paid-subscription testing or any Premium release. |
-| Recommended implementation | Accept RevenueCat webhooks in the backend, verify their signatures, process provider events idempotently, and write the canonical account entitlement projection to Firestore. |
-| Required verification | Add backend tests for purchase, renewal, expiration, and restore, including signature verification and idempotent replay. |
-| Boundaries | Do not implement RevenueCat while this decision is deferred. Do not represent Premium as production-ready without the canonical write path and required verification. |
+| Status | implemented locally; production configuration pending |
+| Decision | RevenueCat webhooks are the canonical write path for the Premium entitlement projection; `/v1/entitlements` remains the authenticated read model. |
+| Identity | The authenticated Patternly user ID is configured as the RevenueCat App User ID. Transfer aliases are resolved only against existing Patternly users. |
+| Safety | Authorization, app, environment, product and entitlement are fail-closed. Event delivery is idempotent and projection ordering is monotonic by timestamp plus event ID. |
+| Verification | Unit and Firestore Emulator tests cover purchase, renewal semantics, cancellation, expiration, refund outcome, replay, out-of-order delivery and transfer. |
+| Production status | Configure the real RevenueCat/App Store identifiers and Secret Manager value, register the HTTPS webhook and complete sandbox/production provider E2E before enabling checkout. |
+| Boundaries | Mobile purchase UI and SDK composition belong to ODK-E2E-059. |
 
-This is a deferred implementation decision, not evidence that RevenueCat integration or Premium production readiness exists.
+Restore is represented by the provider's purchase/renewal events and transfer event, not a separate webhook type.
 
-## BE-DEC-002 — Compose public account-deletion email delivery
+## BE-DEC-002 — Keep account deletion in the application
 
 | Field | Decision |
 | --- | --- |
-| Status | deferred |
-| Confirmed gap | The production entrypoint does not compose a `DeletionEmailSender`, while the public deletion-request route returns `deletion_email_unavailable` without one. Existing emulator tests inject a test sender and therefore do not exercise production composition. |
-| Deferral reason | Deferred only by the owner's explicit decision: current individual application testing does not require production email delivery. |
-| Production status | The public account-deletion request path is not ready for production availability. |
-| Required before | Complete this work before exposing the public account-deletion request path in production. |
-| Required implementation | Compose a production `DeletionEmailSender` in the backend entrypoint, configure its runtime data securely, and add a production-composition test. |
-| Required verification | Preserve the existing emulator tests, but do not treat them as production-readiness evidence. Add a composition test proving that the configured production path does not fail because an email sender is absent. |
-| Boundaries | Do not implement email delivery while this decision is deferred. Do not represent the public account-deletion path as production-ready without secure runtime configuration and composition evidence. |
+| Status | superseded by product-owner decision on 2026-09-06 |
+| Decision | Account deletion is initiated only from the authenticated application flow. Do not expose an email-initiated deletion request or a public deletion page. |
+| Production status | The in-app flow remains canonical, including recent reauthentication, explicit hold confirmation, retry and proof verification. |
+| Required verification | Preserve the unauthenticated proof/status endpoints needed after Firebase authentication is removed, but verify that public request/confirmation routes and application links no longer exist. |
+| Boundaries | Transactional email is used only for public privacy-right requests. It must never create a second account-deletion initiation path. |
 
-This is a deferred implementation decision, not evidence that public account-deletion email delivery is configured or production-ready.
+This decision removes the deferred public deletion path rather than implementing it.
