@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { syncableRecordTypeSchema, type ProgressRecord, type SyncableRecordType } from "../progress/contracts.js";
+import { MAX_SERIALIZED_JSON_UTF16_CODE_UNITS } from "../progress/serializedJsonLimits.js";
 
 const mergeUserId = z.string().uuid();
 const mergeOperationId = z.string().uuid();
 const conflictId = z.string().min(1).max(128);
 const recordId = z.string().min(1).max(256);
 
-const mergeState = z.record(z.unknown()).refine((value) => JSON.stringify(value).length <= 64 * 1024, "merge_state_too_large");
+const mergeState = z.record(z.unknown()).refine((value) => JSON.stringify(value).length <= MAX_SERIALIZED_JSON_UTF16_CODE_UNITS, "merge_state_too_large");
 
 export const guestMergeRecordSchema = z.object({
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/u),

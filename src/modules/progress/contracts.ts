@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { AdoptionExecution, AdoptionPreview, GuestMergeConfirmation, GuestMergeSnapshot } from "../users/merge.js";
+import { MAX_SERIALIZED_JSON_UTF16_CODE_UNITS } from "./serializedJsonLimits.js";
 
-const progressState = z.record(z.unknown()).refine((value) => JSON.stringify(value).length <= 64 * 1024, "progress_state_too_large");
+const progressState = z.record(z.unknown()).refine((value) => JSON.stringify(value).length <= MAX_SERIALIZED_JSON_UTF16_CODE_UNITS, "progress_state_too_large");
 
 export const syncableRecordTypeSchema = z.enum([
   "active_track",
