@@ -26,6 +26,21 @@ function previewFor(local: readonly GuestMergeRecord[], remote: readonly GuestMe
   return buildGuestMergePreview({ accountUserId, accountSnapshotVersion: 4, guestSnapshot: snapshot(local, flags), remoteRecords: remote });
 }
 
+const track = "coding-interview-dsa-problem-solving";
+function goalRecord(goalType = "prepare_for_an_interview", envelopeRevision = 3, version = 0): GuestMergeRecord {
+  const state = { schemaVersion: 1, revision: envelopeRevision, record: { goalType, preferredDays: ["mon", "wed", "sat"], status: "active", targetDate: "2027-09-09", trackId: track, weeklySessionTarget: 3 } };
+  const base = { recordId: track, recordType: "goal" as const, state, trackId: track };
+  return { ...base, fingerprint: createMergeRecordFingerprint(base), version };
+}
+function planRecord(time = "18:00", goalRevision = 3, version = 0): GuestMergeRecord {
+  const state = { schemaVersion: 1, revision: 2, plan: { schemaVersion: 1, planId: "plan-1", trackId: track, goalRevision, status: "accepted", timezone: "Europe/Warsaw", contentVersion: "content-v1", contentPackagePin: { packageIdentity: "pkg", packageVersion: "1", contentReleaseId: "release" }, acceptedTarget: { meaning: "event", targetDate: "2027-09-09" }, createdAt: "2026-09-09T08:00:00.000Z", updatedAt: "2026-09-09T08:00:00.000Z", planRevision: 2, commandId: "command-1", slots: [{ slotId: "slot-1", day: "mon", localTime: time, sessionLength: 10 }] } };
+  const base = { recordId: track, recordType: "learning_plan" as const, state, trackId: track };
+  return { ...base, fingerprint: createMergeRecordFingerprint(base), version };
+}
+function previewV2(local: readonly GuestMergeRecord[], remote: readonly GuestMergeRecord[]) {
+  return buildGuestMergePreview({ accountUserId, accountSnapshotVersion: 8, guestSnapshot: { protocolVersion: 2, guestSnapshotVersion: 9, guestUserId, records: [...local], activeSession: false, pendingJournal: false }, remoteRecords: remote });
+}
+
 test("adoption preview covers empty, upload, restore, identical and divergent datasets", () => {
   const local = record({ recordId: "attempt-1", state: { result: "correct" } });
   const remote = record({ recordId: "attempt-2", state: { result: "incorrect" }, version: 2 });
@@ -59,4 +74,38 @@ test("guest merge rejects stale previews and unresolved conflicts", () => {
   assert.throws(() => validateGuestMergeConfirmation(adoption.preview, stale), { message: "merge_preview_mismatch" });
   const unresolved = guestMergeConfirmationSchema.parse({ operationId: adoption.preview.operationId, previewFingerprint: adoption.preview.fingerprint, protocolVersion: 1, resolutions: [{ conflictId, resolution: "manual_required" }] });
   assert.throws(() => validateGuestMergeConfirmation(adoption.preview, unresolved), { message: "merge_conflict_requires_manual_resolution" });
+});
+
+test("v2 groups a divergent goal and plan once per track and requires exactly one group choice", () => {
+  const adoption = previewV2([goalRecord(), planRecord("18:00")], [goalRecord("build_foundations", 4, 2), planRecord("20:00", 4, 2)]);
+  assert.equal(adoption.preview.protocolVersion, 2);
+  if (adoption.preview.protocolVersion !== 2) assert.fail("expected v2");
+  assert.deepEqual(adoption.preview.goalPlanConflictGroups, [{ groupId: `track:${track}`, trackId: track, localRecordIds: [`goal:${track}`, `learning_plan:${track}`], accountRecordIds: [`goal:${track}`, `learning_plan:${track}`] }]);
+  assert.deepEqual(adoption.plan.conflictRecordIds, []);
+  assert.throws(() => validateGuestMergeConfirmation(adoption.preview, guestMergeConfirmationSchema.parse({ protocolVersion: 2, operationId: adoption.preview.operationId, previewFingerprint: adoption.preview.fingerprint, resolutions: [], groupChoices: [] })), { message: "merge_group_choice_incomplete" });
+  const confirmation = guestMergeConfirmationSchema.parse({ protocolVersion: 2, operationId: adoption.preview.operationId, previewFingerprint: adoption.preview.fingerprint, resolutions: [], groupChoices: [{ groupId: `track:${track}`, resolution: "keep_guest" }] });
+  assert.equal(validateGuestMergeConfirmation(adoption.preview, confirmation).status, "ready_to_execute");
+});
+
+test("v2 uploads, restores and deduplicates complete goal-plan bundles without a choice", () => {
+  assert.deepEqual(previewV2([goalRecord(), planRecord()], []).plan.uploadRecordIds, [`goal:${track}`, `learning_plan:${track}`]);
+  assert.deepEqual(previewV2([], [goalRecord(), planRecord()]).plan.restoreRecordIds, [`goal:${track}`, `learning_plan:${track}`]);
+  assert.deepEqual(previewV2([goalRecord(), planRecord()], [goalRecord(), planRecord()]).plan.deduplicatedRecordIds, [`goal:${track}`, `learning_plan:${track}`]);
+});
+
+test("v2 rejects malformed or mixed goal-plan identity before preview", () => {
+  assert.throws(() => previewV2([planRecord()], []), { message: "goal_plan_bundle_invalid" });
+  assert.throws(() => previewV2([goalRecord(), planRecord("18:00", 4)], []), { message: "goal_plan_bundle_invalid" });
+  const damaged = planRecord();
+  const badState = { ...(damaged.state as Record<string, unknown>), plan: { ...((damaged.state as { plan: Record<string, unknown> }).plan), contentPackagePin: { packageIdentity: "pkg", packageVersion: "1" } } };
+  const base = { ...damaged, state: badState };
+  assert.throws(() => previewV2([{ ...base, fingerprint: createMergeRecordFingerprint(base) }], []), { message: "goal_plan_bundle_invalid" });
+});
+
+test("v1 rejects v2 records and keeps its original preview shape", () => {
+  assert.equal(guestMergeSnapshotSchema.safeParse({ protocolVersion: 1, guestSnapshotVersion: 1, guestUserId, records: [goalRecord()], activeSession: false, pendingJournal: false }).success, false);
+  const adoption = previewFor([], [goalRecord()]);
+  assert.equal(adoption.preview.protocolVersion, 1);
+  assert.equal("goalPlanConflictGroups" in adoption.preview, false);
+  assert.equal(adoption.plan.remoteRecordCount, 0);
 });

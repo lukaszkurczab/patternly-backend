@@ -306,8 +306,11 @@ export function buildApplication(dependencies: ApplicationDependencies) {
 
   app.get("/v1/entitlements", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => ({ entitlements: await requireStores(dependencies).entitlements.read(request.userId!) }));
 
-  app.get("/v1/progress", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => {
-    const snapshot = await requireStores(dependencies).progress.readSnapshot(request.userId!);
+  app.get("/v1/progress", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const requested = (request.query as { protocolVersion?: unknown }).protocolVersion;
+    if (requested !== undefined && requested !== "1" && requested !== "2") return reply.code(400).send({ error: { code: "invalid_request" } });
+    const protocolVersion = requested === "2" ? 2 : 1;
+    const snapshot = await requireStores(dependencies).progress.readSnapshot(request.userId!, protocolVersion);
     return { accountRevision: snapshot.accountRevision, records: snapshot.records };
   });
 
@@ -436,7 +439,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       return reply.code(200).send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : "internal_error";
-      if (message === "progress_fingerprint_mismatch") {
+      if (message === "progress_fingerprint_mismatch" || message === "goal_plan_bundle_invalid") {
         logAccountSyncRejection(request, "sync", message);
         return reply.code(400).send({ error: { code: errorCode(error) } });
       }
@@ -454,7 +457,16 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       logAccountSyncRejection(request, "preview", "invalid_request");
       return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });
     }
-    return reply.code(200).send(await requireStores(dependencies).progress.previewAdoption(request.userId!, parsed.data));
+    try {
+      return reply.code(200).send(await requireStores(dependencies).progress.previewAdoption(request.userId!, parsed.data));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "internal_error";
+      if (message === "progress_fingerprint_mismatch" || message === "goal_plan_bundle_invalid") {
+        logAccountSyncRejection(request, "preview", message);
+        return reply.code(400).send({ error: { code: errorCode(error) } });
+      }
+      throw error;
+    }
   });
 
   app.post("/v1/account-data/adoption/confirm", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
@@ -470,11 +482,11 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       return reply.code(200).send(await requireStores(dependencies).progress.confirmAdoption(request.userId!, deviceId, snapshot.data, confirmation.data));
     } catch (error) {
       const message = error instanceof Error ? error.message : "internal_error";
-      if (["merge_preview_mismatch", "merge_resolution_incomplete", "merge_resolution_mismatch", "merge_conflict_requires_manual_resolution", "active_session_adoption_blocked", "journal_recovery_required", "mutation_id_reuse"].includes(message)) {
+      if (["merge_preview_mismatch", "merge_resolution_incomplete", "merge_resolution_mismatch", "merge_conflict_requires_manual_resolution", "merge_group_choice_incomplete", "merge_group_choice_mismatch", "active_session_adoption_blocked", "journal_recovery_required", "mutation_id_reuse"].includes(message)) {
         logAccountSyncRejection(request, "confirm", message);
         return reply.code(409).send({ error: { code: errorCode(error) } });
       }
-      if (message === "progress_fingerprint_mismatch") {
+      if (message === "progress_fingerprint_mismatch" || message === "goal_plan_bundle_invalid") {
         logAccountSyncRejection(request, "confirm", message);
         return reply.code(400).send({ error: { code: errorCode(error) } });
       }

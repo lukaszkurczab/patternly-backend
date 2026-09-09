@@ -3,6 +3,8 @@ import { COLLECTIONS, progressDocumentId } from "../../infrastructure/firestore/
 import { asIsoString, asRecord, now } from "../../infrastructure/firestore/values.js";
 import {
   buildGuestMergePreview,
+  assertGoalPlanBundles, assertGoalPlanRecordShapes,
+  guestMergeSnapshotSchema,
   createMergeRecordFingerprint,
   mergeRecordKey,
   progressRecordToMergeRecord,
@@ -12,7 +14,7 @@ import {
   type GuestMergeRecord,
   type GuestMergeSnapshot,
 } from "../users/merge.js";
-import { syncableRecordTypeSchema, type ProgressMutation, type ProgressRecord, type ProgressSnapshot, type ProgressStore, type SyncBatchResult } from "./contracts.js";
+import { legacySyncableRecordTypeSchema, syncableRecordTypeSchema, type ProgressMutation, type ProgressRecord, type ProgressSnapshot, type ProgressStore, type SyncBatchResult } from "./contracts.js";
 
 const ACCOUNT_METADATA_ID = "account";
 const SYNC_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
@@ -57,30 +59,34 @@ function readAccountRevision(data: Record<string, unknown> | undefined): number 
 export class FirestoreProgressStore implements ProgressStore {
   public constructor(private readonly db: Firestore) {}
 
-  public async read(userId: string): Promise<readonly ProgressRecord[]> {
-    return (await this.readSnapshot(userId)).records;
+  public async read(userId: string, protocolVersion: 1 | 2 = 1): Promise<readonly ProgressRecord[]> {
+    return (await this.readSnapshot(userId, protocolVersion)).records;
   }
 
-  public async readSnapshot(userId: string): Promise<ProgressSnapshot> {
+  public async readSnapshot(userId: string, protocolVersion: 1 | 2 = 1): Promise<ProgressSnapshot> {
     const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
     const [meta, snapshot] = await Promise.all([
       accountMetadataRef(this.db, userId).get(),
       userRef.collection("progress").get(),
     ]);
-    return Object.freeze({ accountRevision: readAccountRevision(meta.data() as Record<string, unknown> | undefined), records: Object.freeze(snapshot.docs.map((document) => toView(asRecord(document.data(), "progress")))) });
+    const records = snapshot.docs.map((document) => toView(asRecord(document.data(), "progress")))
+      .filter((record) => protocolVersion === 2 || legacySyncableRecordTypeSchema.safeParse(record.recordType).success);
+    return Object.freeze({ accountRevision: readAccountRevision(meta.data() as Record<string, unknown> | undefined), records: Object.freeze(records) });
   }
 
   public async previewAdoption(userId: string, guestSnapshot: GuestMergeSnapshot): Promise<AdoptionPreview> {
-    const remote = await this.readSnapshot(userId);
+    const parsedSnapshot = guestMergeSnapshotSchema.parse(guestSnapshot);
+    const remote = await this.readSnapshot(userId, parsedSnapshot.protocolVersion);
     return buildGuestMergePreview({
       accountUserId: userId,
       accountSnapshotVersion: remote.accountRevision,
-      guestSnapshot,
+      guestSnapshot: parsedSnapshot,
       remoteRecords: remote.records.map(progressRecordToMergeRecord),
     });
   }
 
   public async confirmAdoption(userId: string, deviceId: string, guestSnapshot: GuestMergeSnapshot, confirmation: GuestMergeConfirmation): Promise<AdoptionExecution> {
+    const parsedGuestSnapshot = guestMergeSnapshotSchema.parse(guestSnapshot);
     return this.db.runTransaction(async (transaction) => {
       const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
       const user = await transaction.get(userRef);
@@ -94,13 +100,16 @@ export class FirestoreProgressStore implements ProgressStore {
       ]);
       if (operationSnapshot.exists) {
         const stored = asRecord(operationSnapshot.data(), "sync_operation");
-        if (stored.previewFingerprint !== confirmation.previewFingerprint || stored.guestUserId !== guestSnapshot.guestUserId) throw new Error("mutation_id_reuse");
+        if (stored.previewFingerprint !== confirmation.previewFingerprint || stored.guestUserId !== parsedGuestSnapshot.guestUserId) throw new Error("mutation_id_reuse");
+        if (stored.protocolVersion !== undefined && stored.protocolVersion !== confirmation.protocolVersion) throw new Error("mutation_id_reuse");
+        if (stored.confirmation !== undefined && JSON.stringify(stored.confirmation) !== JSON.stringify(confirmation)) throw new Error("mutation_id_reuse");
         if (!Number.isSafeInteger(stored.accountRevision) || Number(stored.accountRevision) < 0) throw new Error("account_revision_invalid");
         return Object.freeze({ accountRevision: Number(stored.accountRevision), operationId: confirmation.operationId, mutationIds: Object.freeze(Array.isArray(stored.mutationIds) ? stored.mutationIds.filter((value): value is string => typeof value === "string") : []), records: Object.freeze(Array.isArray(stored.records) ? stored.records.map((value) => value as GuestMergeRecord) : []) });
       }
       const accountRevision = readAccountRevision(metaSnapshot.data() as Record<string, unknown> | undefined);
-      const remoteRecords = progressSnapshot.docs.map((document) => progressRecordToMergeRecord(toView(asRecord(document.data(), "progress"))));
-      const adoption = buildGuestMergePreview({ accountUserId: userId, accountSnapshotVersion: accountRevision, guestSnapshot, remoteRecords });
+      const remoteRecords = progressSnapshot.docs.map((document) => progressRecordToMergeRecord(toView(asRecord(document.data(), "progress"))))
+        .filter((record) => parsedGuestSnapshot.protocolVersion === 2 || legacySyncableRecordTypeSchema.safeParse(record.recordType).success);
+      const adoption = buildGuestMergePreview({ accountUserId: userId, accountSnapshotVersion: accountRevision, guestSnapshot: parsedGuestSnapshot, remoteRecords });
       if (adoption.preview.fingerprint !== confirmation.previewFingerprint || adoption.preview.operationId !== confirmation.operationId) throw new Error("merge_preview_mismatch");
       if (adoption.plan.blockingReason === "active_session") throw new Error("active_session_adoption_blocked");
       if (adoption.plan.blockingReason === "journal_recovery") throw new Error("journal_recovery_required");
@@ -109,21 +118,37 @@ export class FirestoreProgressStore implements ProgressStore {
       const resolved = new Map(remoteByKey);
       const mutationIds: string[] = [];
       const progressWrites: Array<{ mutation: ProgressMutation; ref: DocumentReference; mutationRef: DocumentReference; nextVersion: number; updatedAt: ReturnType<typeof now> }> = [];
-      for (const record of guestSnapshot.records) {
+      const groupedKeys = new Set<string>();
+      if (adoption.preview.protocolVersion === 2 && ready.confirmation.protocolVersion === 2) {
+        const localByKey = new Map(parsedGuestSnapshot.records.map((record) => [mergeRecordKey(record), record]));
+        for (const group of adoption.preview.goalPlanConflictGroups) {
+          for (const key of [...group.localRecordIds, ...group.accountRecordIds]) groupedKeys.add(key);
+          const choice = ready.confirmation.groupChoices.find((candidate) => candidate.groupId === group.groupId)!;
+          if (choice.resolution === "keep_account") continue;
+          for (const recordType of ["goal", "learning_plan"] as const) {
+            const key = `${recordType}:${group.trackId}`;
+            const local = localByKey.get(key);
+            const remote = remoteByKey.get(key);
+            if (local && local.state.deleted !== true) {
+              if (remote?.fingerprint === local.fingerprint) continue;
+              queueWrite(local, remote, key);
+            } else if (remote && remote.state.deleted !== true) {
+              const tombstoneState = Object.freeze({ deleted: true });
+              const tombstone: GuestMergeRecord = Object.freeze({ fingerprint: createMergeRecordFingerprint({ recordId: group.trackId, recordType, state: tombstoneState, trackId: group.trackId }), recordId: group.trackId, recordType, state: tombstoneState, trackId: group.trackId, version: remote.version });
+              queueWrite(tombstone, remote, key);
+            }
+          }
+        }
+      }
+      for (const record of parsedGuestSnapshot.records) {
         const key = mergeRecordKey(record);
+        if (groupedKeys.has(key)) continue;
         const remote = remoteByKey.get(key);
         if (remote?.fingerprint === record.fingerprint) continue;
         if (remote && ready.confirmation.resolutions.find((resolution) => resolution.conflictId === key)?.resolution === "keep_account") continue;
-        const mutationId = adoptionMutationId(confirmation.operationId, key, record.fingerprint);
-        const mutation = mergeRecordToMutation(record, mutationId, remote?.version ?? null);
-        const ref = userRef.collection("progress").doc(progressDocumentId(mutation));
-        const mutationRef = userRef.collection("syncMutations").doc(mutationId);
-        const nextVersion = (remote?.version ?? 0) + 1;
-        const updatedAt = now();
-        progressWrites.push({ mutation, ref, mutationRef, nextVersion, updatedAt });
-        mutationIds.push(mutationId);
-        resolved.set(key, { ...record, version: nextVersion });
+        queueWrite(record, remote, key);
       }
+      if (parsedGuestSnapshot.protocolVersion === 2) assertGoalPlanBundles([...resolved.values()]);
       for (const write of progressWrites) {
         transaction.set(write.ref, {
           kind: write.mutation.kind,
@@ -155,16 +180,31 @@ export class FirestoreProgressStore implements ProgressStore {
         createdAt,
         expiresAt: expiresAfterSyncRetention(createdAt),
         deviceId,
-        guestUserId: guestSnapshot.guestUserId,
+        guestUserId: parsedGuestSnapshot.guestUserId,
         mutationIds,
         previewFingerprint: confirmation.previewFingerprint,
+        protocolVersion: confirmation.protocolVersion,
+        confirmation,
         records,
       });
       return Object.freeze({ accountRevision: nextAccountRevision, operationId: confirmation.operationId, mutationIds: Object.freeze(mutationIds), records: Object.freeze(records) });
+
+      function queueWrite(record: GuestMergeRecord, remote: GuestMergeRecord | undefined, key: string): void {
+        const mutationId = adoptionMutationId(confirmation.operationId, key, record.fingerprint);
+        const mutation = mergeRecordToMutation(record, mutationId, remote?.version ?? null);
+        const ref = userRef.collection("progress").doc(progressDocumentId(mutation));
+        const mutationRef = userRef.collection("syncMutations").doc(mutationId);
+        const nextVersion = (remote?.version ?? 0) + 1;
+        const updatedAt = now();
+        progressWrites.push({ mutation, ref, mutationRef, nextVersion, updatedAt });
+        mutationIds.push(mutationId);
+        resolved.set(key, { ...record, version: nextVersion });
+      }
     });
   }
 
   public async applyBatch(userId: string, deviceId: string | null, expectedAccountRevision: number, mutations: readonly ProgressMutation[]): Promise<SyncBatchResult> {
+    assertGoalPlanRecordShapes(mutations.map((mutation) => ({ fingerprint: mutation.fingerprint, recordId: mutation.targetId, recordType: mutation.recordType, state: mutation.state, trackId: mutation.trackId, version: mutation.expectedVersion ?? 0 })));
     for (const mutation of mutations) {
       if (createMergeRecordFingerprint({ recordId: mutation.targetId, recordType: mutation.recordType, state: mutation.state, trackId: mutation.trackId }) !== mutation.fingerprint) throw new Error("progress_fingerprint_mismatch");
     }

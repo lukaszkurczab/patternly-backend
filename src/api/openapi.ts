@@ -31,7 +31,7 @@ export const OPENAPI_DOCUMENT = Object.freeze({
     "/v1/legal-acceptances": { post: { description: "Record an immutable, versioned Terms and minimum-age acceptance for the authenticated account.", responses: { "201": { description: "Acceptance recorded" }, "400": { description: "Invalid acceptance" }, "401": { description: "Authentication required" } } } },
     "/v1/purchase-confirmations": { post: { description: "Record the immutable pre-contract offer and express immediate-start request before opening App Store checkout.", responses: { "201": { description: "Confirmation recorded" }, "400": { description: "Invalid confirmation" }, "401": { description: "Authentication required" } } } },
     "/v1/entitlements": { get: { responses: { "200": { description: "Account entitlement projection" } } } },
-    "/v1/progress": { get: { responses: { "200": { description: "Canonical progress state and account revision" } } } },
+    "/v1/progress": { get: { parameters: [{ name: "protocolVersion", in: "query", required: false, schema: { type: "integer", enum: [1, 2], default: 1 } }], responses: { "200": { description: "Canonical progress state and account revision" }, "400": { description: "Unsupported progress protocol version" } } } },
     "/v1/account-data/export": { get: { description: "Download a bounded JSON account-data export after recent reauthentication. The response is an attachment and is never persisted as a payload.", responses: { "200": { description: "JSON account-data attachment", headers: { "Cache-Control": { schema: { type: "string", const: "private, no-store" } }, "Content-Disposition": { schema: { type: "string" } } }, content: { "application/json": { schema: { "$ref": "#/components/schemas/AccountDataExport" } } } }, "401": { description: "Authentication or recent reauthentication required", headers: { "Cache-Control": { schema: { type: "string", const: "private, no-store" } } } }, "413": { description: "Serialized export exceeds the configured maximum" }, "429": { description: "Per-account export rate limit exceeded", headers: { "Retry-After": { schema: { type: "integer", minimum: 1 } } } } } } },
     "/v1/privacy-requests": { post: { description: "Create one authenticated privacy-right case", requestBody: { required: true, content: { "application/json": { schema: { "$ref": "#/components/schemas/CreateAccountPrivacyRequest" } } } }, responses: { "201": { description: "Privacy request created" }, "401": { description: "Authentication or recent reauthentication required" } } }, get: { description: "List minimal metadata for the authenticated subject's own privacy requests", responses: { "200": { description: "Privacy request list" } } } },
     "/v1/privacy-requests/{requestId}": { get: { description: "Read one own privacy response after recent reauthentication", parameters: [{ "$ref": "#/components/parameters/PrivacyRequestId" }], responses: { "200": { description: "Privacy response" }, "401": { description: "Recent reauthentication required" }, "404": { description: "Request unavailable" } } } },
@@ -86,7 +86,7 @@ export const OPENAPI_DOCUMENT = Object.freeze({
         properties: {
           mutationId: { type: "string", minLength: 16, maxLength: 128 },
           kind: { type: "string", enum: ["node", "item"] },
-          recordType: { type: "string", enum: ["active_track", "training_session_summary", "training_session_result", "training_attempt", "review_queue_entry"] },
+          recordType: { type: "string", enum: ["active_track", "training_session_summary", "training_session_result", "training_attempt", "review_queue_entry", "goal", "learning_plan"] },
           trackId: { type: "string" },
           targetId: { type: "string" },
           expectedVersion: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
@@ -98,6 +98,7 @@ export const OPENAPI_DOCUMENT = Object.freeze({
         type: "object",
         required: ["expectedAccountRevision", "mutations"],
         properties: {
+          protocolVersion: { type: "integer", enum: [1, 2] },
           expectedAccountRevision: { type: "integer", minimum: 0 },
           deviceId: { anyOf: [{ type: "string", format: "uuid" }, { type: "null" }] },
           mutations: { type: "array", minItems: 1, maxItems: 100, items: { "$ref": "#/components/schemas/ProgressMutation" } },
@@ -108,6 +109,7 @@ export const OPENAPI_DOCUMENT = Object.freeze({
         additionalProperties: false,
         required: ["guestSnapshotVersion", "guestUserId", "records", "activeSession", "pendingJournal"],
         properties: {
+          protocolVersion: { type: "integer", enum: [1, 2] },
           guestSnapshotVersion: { type: "integer", minimum: 0 },
           guestUserId: { type: "string", format: "uuid" },
           records: { type: "array", maxItems: 1000, items: { "$ref": "#/components/schemas/GuestMergeRecord" } },
@@ -122,7 +124,7 @@ export const OPENAPI_DOCUMENT = Object.freeze({
         properties: {
           fingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
           recordId: { type: "string" },
-          recordType: { type: "string", enum: ["active_track", "training_session_summary", "training_session_result", "training_attempt", "review_queue_entry"] },
+          recordType: { type: "string", enum: ["active_track", "training_session_summary", "training_session_result", "training_attempt", "review_queue_entry", "goal", "learning_plan"] },
           state: { type: "object", additionalProperties: true },
           trackId: { type: "string" },
           version: { type: "integer", minimum: 0 },
@@ -142,8 +144,9 @@ export const OPENAPI_DOCUMENT = Object.freeze({
             properties: {
               operationId: { type: "string", format: "uuid" },
               previewFingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
-              protocolVersion: { type: "integer", enum: [1] },
+              protocolVersion: { type: "integer", enum: [1, 2] },
               resolutions: { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false, required: ["conflictId", "resolution"], properties: { conflictId: { type: "string" }, resolution: { type: "string", enum: ["keep_guest", "keep_account", "manual_required"] } } } },
+              groupChoices: { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false, required: ["groupId", "resolution"], properties: { groupId: { type: "string" }, resolution: { type: "string", enum: ["keep_guest", "keep_account"] } } } },
             },
           },
         },

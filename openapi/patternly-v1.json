@@ -153,9 +153,27 @@
     },
     "/v1/progress": {
       "get": {
+        "parameters": [
+          {
+            "name": "protocolVersion",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "enum": [
+                1,
+                2
+              ],
+              "default": 1
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Canonical progress state and account revision"
+          },
+          "400": {
+            "description": "Unsupported progress protocol version"
           }
         }
       }
@@ -2174,7 +2192,9 @@
               "training_session_summary",
               "training_session_result",
               "training_attempt",
-              "review_queue_entry"
+              "review_queue_entry",
+              "goal",
+              "learning_plan"
             ]
           },
           "trackId": {
@@ -2211,6 +2231,13 @@
           "mutations"
         ],
         "properties": {
+          "protocolVersion": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ]
+          },
           "expectedAccountRevision": {
             "type": "integer",
             "minimum": 0
@@ -2247,6 +2274,13 @@
           "pendingJournal"
         ],
         "properties": {
+          "protocolVersion": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ]
+          },
           "guestSnapshotVersion": {
             "type": "integer",
             "minimum": 0
@@ -2296,7 +2330,9 @@
               "training_session_summary",
               "training_session_result",
               "training_attempt",
-              "review_queue_entry"
+              "review_queue_entry",
+              "goal",
+              "learning_plan"
             ]
           },
           "state": {
@@ -2349,7 +2385,8 @@
               "protocolVersion": {
                 "type": "integer",
                 "enum": [
-                  1
+                  1,
+                  2
                 ]
               },
               "resolutions": {
@@ -2372,6 +2409,30 @@
                         "keep_guest",
                         "keep_account",
                         "manual_required"
+                      ]
+                    }
+                  }
+                }
+              },
+              "groupChoices": {
+                "type": "array",
+                "maxItems": 1000,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "groupId",
+                    "resolution"
+                  ],
+                  "properties": {
+                    "groupId": {
+                      "type": "string"
+                    },
+                    "resolution": {
+                      "type": "string",
+                      "enum": [
+                        "keep_guest",
+                        "keep_account"
                       ]
                     }
                   }
