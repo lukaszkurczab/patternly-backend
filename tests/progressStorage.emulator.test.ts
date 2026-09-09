@@ -27,6 +27,15 @@ function record(state: Record<string, unknown>) {
   return { ...value, version: 0, fingerprint: createMergeRecordFingerprint(value) };
 }
 
+function goalPlanRecords(label: string) {
+  const goalState = { schemaVersion: 1, revision: 1, record: { goalType: "prepare_for_an_interview", preferredDays: ["mon"], status: "active", trackId, weeklySessionTarget: 1 } };
+  const planState = { schemaVersion: 1, revision: 1, plan: { schemaVersion: 1, planId: `plan:${label}`, trackId, goalRevision: 1, status: "accepted", timezone: "Europe/Warsaw", contentVersion: "test", contentPackagePin: { packageIdentity: "package", packageVersion: "1", contentReleaseId: "release" }, acceptedTarget: { meaning: "none", targetDate: null }, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", planRevision: 1, commandId: `command:${label}`, slots: [{ slotId: "slot:mon", day: "mon", localTime: label === "guest" ? "19:00" : "18:00", sessionLength: 10 }] } };
+  return ([
+    { recordId: trackId, recordType: "goal" as const, trackId, state: goalState },
+    { recordId: trackId, recordType: "learning_plan" as const, trackId, state: planState },
+  ]).map((value) => ({ ...value, version: 0, fingerprint: createMergeRecordFingerprint(value) }));
+}
+
 async function sync(userId: string, revision: number, state: Record<string, unknown>) {
   const value = record(state);
   return store.applyBatch(userId, null, revision, [{
@@ -81,4 +90,23 @@ test("adoption replaces the selected account record and remains readable on repl
   assert.equal(persisted.records[0]?.fingerprint, record(state).fingerprint);
   const replay = await store.confirmAdoption(userId, deviceId, snapshot, confirmation);
   assert.deepEqual(replay, first);
+});
+
+test("v2 adoption executes one exact group choice and rejects missing or mismatched choices", async () => {
+  const userId = await account();
+  const remote = goalPlanRecords("account");
+  await store.applyBatch(userId, null, 0, remote.map((item) => ({ mutationId: `mutation-${randomUUID()}`, kind: "node" as const, recordType: item.recordType, trackId, targetId: trackId, expectedVersion: null, state: item.state, fingerprint: item.fingerprint })));
+  const guest = goalPlanRecords("guest");
+  const snapshot = { protocolVersion: 2 as const, guestSnapshotVersion: 1, guestUserId: randomUUID(), records: guest, activeSession: false, pendingJournal: false };
+  const { preview } = await store.previewAdoption(userId, snapshot);
+  assert.equal(preview.protocolVersion, 2);
+  if (preview.protocolVersion !== 2) throw new Error("v2_preview_required");
+  assert.equal(preview.goalPlanConflictGroups.length, 1);
+  const base = { operationId: preview.operationId, previewFingerprint: preview.fingerprint, resolutions: [] };
+  await assert.rejects(() => store.confirmAdoption(userId, randomUUID(), snapshot, { ...base, protocolVersion: 2, groupChoices: [] }), /merge_group_choice_incomplete/);
+  await assert.rejects(() => store.confirmAdoption(userId, randomUUID(), snapshot, { ...base, protocolVersion: 1 }), /merge_preview_mismatch/);
+  const result = await store.confirmAdoption(userId, randomUUID(), snapshot, { ...base, protocolVersion: 2, groupChoices: [{ groupId: preview.goalPlanConflictGroups[0]!.groupId, resolution: "keep_guest" }] });
+  assert.equal(result.accountRevision, 3);
+  const persisted = await store.readSnapshot(userId, 2);
+  assert.equal(persisted.records.find((item) => item.recordType === "learning_plan")?.fingerprint, guest[1]!.fingerprint);
 });

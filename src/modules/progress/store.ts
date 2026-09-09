@@ -8,6 +8,7 @@ import {
   createMergeRecordFingerprint,
   mergeRecordKey,
   progressRecordToMergeRecord,
+  validateGuestMergeConfirmation,
   type AdoptionExecution,
   type AdoptionPreview,
   type GuestMergeConfirmation,
@@ -113,7 +114,7 @@ export class FirestoreProgressStore implements ProgressStore {
       if (adoption.preview.fingerprint !== confirmation.previewFingerprint || adoption.preview.operationId !== confirmation.operationId) throw new Error("merge_preview_mismatch");
       if (adoption.plan.blockingReason === "active_session") throw new Error("active_session_adoption_blocked");
       if (adoption.plan.blockingReason === "journal_recovery") throw new Error("journal_recovery_required");
-      const ready = validateConfirmation(adoption.preview, confirmation);
+      const ready = validateGuestMergeConfirmation(adoption.preview, confirmation);
       const remoteByKey = new Map(remoteRecords.map((record) => [mergeRecordKey(record), record]));
       const resolved = new Map(remoteByKey);
       const mutationIds: string[] = [];
@@ -262,20 +263,6 @@ export class FirestoreProgressStore implements ProgressStore {
       return Object.freeze({ accountRevision: nextAccountRevision, applied: Object.freeze(applied), duplicates: Object.freeze(duplicates), conflicts: Object.freeze(conflicts) });
     });
   }
-}
-
-function validateConfirmation(preview: ReturnType<typeof buildGuestMergePreview>["preview"], confirmation: GuestMergeConfirmation) {
-  const conflictIds = new Set(preview.conflicts.map((conflict) => conflict.conflictId));
-  if (confirmation.operationId !== preview.operationId || confirmation.previewFingerprint !== preview.fingerprint) throw new Error("merge_preview_mismatch");
-  if (confirmation.resolutions.length !== conflictIds.size) throw new Error("merge_resolution_incomplete");
-  const resolved = new Set<string>();
-  for (const resolution of confirmation.resolutions) {
-    if (!conflictIds.has(resolution.conflictId) || resolved.has(resolution.conflictId)) throw new Error("merge_resolution_mismatch");
-    if (resolution.resolution === "manual_required") throw new Error("merge_conflict_requires_manual_resolution");
-    resolved.add(resolution.conflictId);
-  }
-  if (resolved.size !== conflictIds.size) throw new Error("merge_resolution_incomplete");
-  return { confirmation, preview, status: "ready_to_execute" as const };
 }
 
 function adoptionMutationId(operationId: string, key: string, fingerprint: string): string {
