@@ -37,6 +37,11 @@ function planRecord(time = "18:00", goalRevision = 3, version = 0): GuestMergeRe
   const base = { recordId: track, recordType: "learning_plan" as const, state, trackId: track };
   return { ...base, fingerprint: createMergeRecordFingerprint(base), version };
 }
+function tombstone(recordType: "goal" | "learning_plan", version = 0): GuestMergeRecord {
+  const state = { deleted: true };
+  const base = { recordId: track, recordType, state, trackId: track };
+  return { ...base, fingerprint: createMergeRecordFingerprint(base), version };
+}
 function previewV2(local: readonly GuestMergeRecord[], remote: readonly GuestMergeRecord[]) {
   return buildGuestMergePreview({ accountUserId, accountSnapshotVersion: 8, guestSnapshot: { protocolVersion: 2, guestSnapshotVersion: 9, guestUserId, records: [...local], activeSession: false, pendingJournal: false }, remoteRecords: remote });
 }
@@ -91,6 +96,22 @@ test("v2 uploads, restores and deduplicates complete goal-plan bundles without a
   assert.deepEqual(previewV2([goalRecord(), planRecord()], []).plan.uploadRecordIds, [`goal:${track}`, `learning_plan:${track}`]);
   assert.deepEqual(previewV2([], [goalRecord(), planRecord()]).plan.restoreRecordIds, [`goal:${track}`, `learning_plan:${track}`]);
   assert.deepEqual(previewV2([goalRecord(), planRecord()], [goalRecord(), planRecord()]).plan.deduplicatedRecordIds, [`goal:${track}`, `learning_plan:${track}`]);
+});
+
+test("v2 treats a tombstone and a live goal-plan state as one explicit track conflict", () => {
+  const accountDeleted = [tombstone("goal", 2), tombstone("learning_plan", 2)];
+  const adoption = previewV2([goalRecord(), planRecord()], accountDeleted);
+  assert.equal(adoption.preview.protocolVersion, 2);
+  if (adoption.preview.protocolVersion !== 2) assert.fail("expected v2");
+  assert.deepEqual(adoption.preview.goalPlanConflictGroups, [{ groupId: `track:${track}`, trackId: track, localRecordIds: [`goal:${track}`, `learning_plan:${track}`], accountRecordIds: [`goal:${track}`, `learning_plan:${track}`] }]);
+  assert.deepEqual(adoption.plan.uploadRecordIds, []);
+  assert.deepEqual(adoption.plan.conflictRecordIds, []);
+});
+
+test("v2 deduplicates identical tombstones and restores a one-sided account tombstone", () => {
+  const deleted = [tombstone("goal", 2), tombstone("learning_plan", 2)];
+  assert.deepEqual(previewV2(deleted, deleted).plan.deduplicatedRecordIds, [`goal:${track}`, `learning_plan:${track}`]);
+  assert.deepEqual(previewV2([], deleted).plan.restoreRecordIds, [`goal:${track}`, `learning_plan:${track}`]);
 });
 
 test("v2 rejects malformed or mixed goal-plan identity before preview", () => {

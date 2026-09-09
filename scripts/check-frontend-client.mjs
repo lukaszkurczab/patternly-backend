@@ -14,6 +14,7 @@ for (const path of mobilePaths) {
   const templatePath = path.replace(/\{([^}]+)\}/gu, "\${$1}");
   const encodedTemplatePath = path.replace(/\{([^}]+)\}/gu, "\${encodeURIComponent($1)}");
   const sources = `${client}\n${publicWebClient}`;
-  if (!sources.includes(`\"${path}\"`) && !sources.includes(`\`${templatePath}\``) && !sources.includes(`\`${encodedTemplatePath}\``)) throw new Error(`frontend_generated_client_missing_path:${path}`);
+  const staticPathPattern = new RegExp(`\"${path.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}(?:\\?[^\"]*)?\"`, "u");
+  if (!staticPathPattern.test(sources) && !sources.includes(`\`${templatePath}\``) && !sources.includes(`\`${encodedTemplatePath}\``)) throw new Error(`frontend_generated_client_missing_path:${path}`);
 }
 console.log(`frontend client matches ${mobilePaths.length} mobile versioned paths; administrator routes are served only by patternly-web.`);

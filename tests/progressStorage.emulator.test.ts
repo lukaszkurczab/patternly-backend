@@ -36,6 +36,13 @@ function goalPlanRecords(label: string) {
   ]).map((value) => ({ ...value, version: 0, fingerprint: createMergeRecordFingerprint(value) }));
 }
 
+function goalPlanTombstones() {
+  return (["goal", "learning_plan"] as const).map((recordType) => {
+    const value = { recordId: trackId, recordType, trackId, state: { deleted: true } };
+    return { ...value, version: 0, fingerprint: createMergeRecordFingerprint(value) };
+  });
+}
+
 async function sync(userId: string, revision: number, state: Record<string, unknown>) {
   const value = record(state);
   return store.applyBatch(userId, null, revision, [{
@@ -109,4 +116,40 @@ test("v2 adoption executes one exact group choice and rejects missing or mismatc
   assert.equal(result.accountRevision, 3);
   const persisted = await store.readSnapshot(userId, 2);
   assert.equal(persisted.records.find((item) => item.recordType === "learning_plan")?.fingerprint, guest[1]!.fingerprint);
+});
+
+test("v2 adoption requires a choice before replacing account tombstones with a live local goal-plan pair", async () => {
+  const userId = await account();
+  const deleted = goalPlanTombstones();
+  await store.applyBatch(userId, null, 0, deleted.map((item) => ({ mutationId: `mutation-${randomUUID()}`, kind: "node" as const, recordType: item.recordType, trackId, targetId: trackId, expectedVersion: null, state: item.state, fingerprint: item.fingerprint })));
+  const guest = goalPlanRecords("guest");
+  const snapshot = { protocolVersion: 2 as const, guestSnapshotVersion: 1, guestUserId: randomUUID(), records: guest, activeSession: false, pendingJournal: false };
+  const { preview } = await store.previewAdoption(userId, snapshot);
+  if (preview.protocolVersion !== 2) throw new Error("v2_preview_required");
+  assert.equal(preview.goalPlanConflictGroups.length, 1);
+  const base = { operationId: preview.operationId, previewFingerprint: preview.fingerprint, protocolVersion: 2 as const, resolutions: [] };
+  await assert.rejects(() => store.confirmAdoption(userId, randomUUID(), snapshot, { ...base, groupChoices: [] }), /merge_group_choice_incomplete/);
+  const keptAccount = await store.confirmAdoption(userId, randomUUID(), snapshot, { ...base, groupChoices: [{ groupId: preview.goalPlanConflictGroups[0]!.groupId, resolution: "keep_account" as const }] });
+  assert.ok(keptAccount.records.filter((item) => item.state.deleted === true).length === 2);
+});
+
+test("a stale live preview cannot replace account tombstones created before confirmation", async () => {
+  const userId = await account();
+  const remote = goalPlanRecords("account");
+  await store.applyBatch(userId, null, 0, remote.map((item) => ({ mutationId: `mutation-${randomUUID()}`, kind: "node" as const, recordType: item.recordType, trackId, targetId: trackId, expectedVersion: null, state: item.state, fingerprint: item.fingerprint })));
+  const guest = goalPlanRecords("guest");
+  const snapshot = { protocolVersion: 2 as const, guestSnapshotVersion: 1, guestUserId: randomUUID(), records: guest, activeSession: false, pendingJournal: false };
+  const { preview } = await store.previewAdoption(userId, snapshot);
+  if (preview.protocolVersion !== 2) throw new Error("v2_preview_required");
+  const deleted = goalPlanTombstones();
+  await store.applyBatch(userId, null, 2, deleted.map((item) => ({ mutationId: `mutation-${randomUUID()}`, kind: "node" as const, recordType: item.recordType, trackId, targetId: trackId, expectedVersion: 1, state: item.state, fingerprint: item.fingerprint })));
+  await assert.rejects(() => store.confirmAdoption(userId, randomUUID(), snapshot, {
+    operationId: preview.operationId,
+    previewFingerprint: preview.fingerprint,
+    protocolVersion: 2,
+    resolutions: [],
+    groupChoices: [{ groupId: preview.goalPlanConflictGroups[0]!.groupId, resolution: "keep_guest" }],
+  }), /merge_preview_mismatch/);
+  const persisted = await store.readSnapshot(userId, 2);
+  assert.equal(persisted.records.filter((item) => item.state.deleted === true).length, 2);
 });

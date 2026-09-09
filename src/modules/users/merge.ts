@@ -74,13 +74,12 @@ export function buildGuestMergePreview(input: Readonly<{ accountUserId: string; 
   const conflicts: Array<z.infer<typeof guestMergeConflictSchema>> = [];
   for (const record of guestSnapshot.records) {
     const key = mergeRecordKey(record); if (groupedKeys.has(key)) continue;
-    const storedRemote = remoteByKey.get(key);
-    const remote = isGoalPlan(record) && storedRemote?.state.deleted === true ? undefined : storedRemote;
+    const remote = remoteByKey.get(key);
     if (!remote) upload.push(key);
     else if (remote.fingerprint === record.fingerprint) dedup.push(key);
     else { conflictIds.push(key); conflicts.push({ accountVersion: remote.version, conflictId: key, guestVersion: record.version, recordId: record.recordId, recordType: record.recordType }); }
   }
-  for (const record of remoteRecords) { const key = mergeRecordKey(record); if (!groupedKeys.has(key) && !localByKey.has(key) && !(isGoalPlan(record) && record.state.deleted === true)) restore.push(key); }
+  for (const record of remoteRecords) { const key = mergeRecordKey(record); if (!groupedKeys.has(key) && !localByKey.has(key)) restore.push(key); }
   const blockingReason = guestSnapshot.activeSession ? "active_session" : guestSnapshot.pendingJournal ? "journal_recovery" : null;
   const hasConflict = conflicts.length > 0 || groups.length > 0;
   const caseId = blockingReason ? "blocked" : guestSnapshot.records.length === 0 && remoteRecords.length === 0 ? "emptyLocalEmptyRemote" : guestSnapshot.records.length > 0 && remoteRecords.length === 0 ? "populatedLocalEmptyRemote" : guestSnapshot.records.length === 0 && remoteRecords.length > 0 ? "emptyLocalPopulatedRemote" : hasConflict ? "divergentRecord" : "populatedLocalPopulatedRemote";
@@ -132,7 +131,7 @@ export function assertGoalPlanRecordShapes(records: readonly GuestMergeRecord[])
 function buildGroups(local: readonly GuestMergeRecord[], account: readonly GuestMergeRecord[]): GoalPlanConflictGroup[] {
   const tracks = new Set([...local.filter(isGoalPlan).map((record) => record.trackId), ...account.filter(isGoalPlan).map((record) => record.trackId)]); const groups: GoalPlanConflictGroup[] = [];
   for (const id of [...tracks].sort()) {
-    const a = local.filter((record) => isGoalPlan(record) && record.trackId === id && record.state.deleted !== true); const b = account.filter((record) => isGoalPlan(record) && record.trackId === id && record.state.deleted !== true);
+    const a = local.filter((record) => isGoalPlan(record) && record.trackId === id); const b = account.filter((record) => isGoalPlan(record) && record.trackId === id);
     if (!a.length || !b.length) continue;
     const byA = new Map(a.map((record) => [record.recordType, record])); const byB = new Map(b.map((record) => [record.recordType, record]));
     if ((["goal", "learning_plan"] as const).every((type) => byA.get(type)?.fingerprint === byB.get(type)?.fingerprint)) continue;
