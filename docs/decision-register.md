@@ -53,6 +53,6 @@ BE-DEC-003 supersedes the BE-DEC-002 boundary that reserved transactional email 
 | Failure | Missing, invalid or unavailable attestation fails closed. Production has no bypass or optimistic success. The application exposes unavailable/retry, and backend operations monitor sanitized rejection counts and reasons. |
 | Web and admin | Hosted web is marketing-only and receives no mobile App Check. The legacy public privacy flow is removed under BE-DEC-003 rather than attested. The loopback-only administrator workspace uses Firebase Authentication and administrator authorization, not mobile App Check. |
 | Test boundary | Local/emulator tests use explicit debug configuration/tokens. Production artifacts reject debug configuration. |
-| Canonical plan | `../../docs/APP-CHECK-DECISION-AND-DELIVERY-PLAN.md` owns the channel matrix, APPCHK-01–04 delivery tasks and ODK-E2E-084 provider evidence. |
+| Canonical plan | `../../docs/PATTERNLY-WORKING-PLAN.md` owns the channel policy, APPCHK-01–04 delivery order and ODK-E2E-084 provider gate. |
 
 Current source and OpenAPI prove only a partial implementation and remain evidence to reconcile in APPCHK-01/02. They do not prove the accepted matrix or a real provider.
