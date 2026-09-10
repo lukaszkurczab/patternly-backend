@@ -27,3 +27,32 @@ Restore is represented by the provider's purchase/renewal events and transfer ev
 | Boundaries | Transactional email is used only for public privacy-right requests. It must never create a second account-deletion initiation path. |
 
 This decision removes the deferred public deletion path rather than implementing it.
+
+## BE-DEC-003 — Keep all user data-rights initiation in application Settings
+
+| Field | Decision |
+| --- | --- |
+| Status | accepted by Product Owner on 2026-09-10; implementation and removal work pending |
+| Decision | Every user-initiated privacy and data-rights request starts only in the Patternly application under `Settings`. The hosted public web does not expose intake, verification-link, response-session or account-login routes. |
+| Web boundary | The hosted site is marketing-only. The administrator panel is a Product Owner-only local workspace and is never hosted or bundled into the public artifact. |
+| Current conflict | The existing `/v1/public/privacy-requests` API family, `PrivacyRequestPage`, Firebase Hosting rewrites, public-origin/SMTP flow and hosted admin entry contradict the accepted target and require scoped removal or replacement. |
+| Required follow-up | Define the authenticated and guest states of the in-app Settings flow, remove obsolete public-browser contracts and evidence, split local admin from the public build, and add negative deployment tests. |
+| Safety | Removing the public browser path must not remove the in-app ability to exercise applicable data rights or the local Product Owner workflow for reviewing requests. |
+
+The Product Owner approved the account-state split on 2026-09-10: authenticated requests are account-bound; guests reset device-only data locally and may submit an in-app email-based request for data created through network features. Guest verification must return to the application or another non-web completion mechanism; it cannot recreate the removed public browser response surface.
+
+BE-DEC-003 supersedes the BE-DEC-002 boundary that reserved transactional email for public privacy-right requests. BE-DEC-002 remains authoritative for application-only account deletion.
+
+## BE-DEC-004 — Require App Check for protected mobile requests
+
+| Field | Decision |
+| --- | --- |
+| Status | accepted by Product Owner on 2026-09-10; implementation is partial; real-provider verification pending |
+| Decision | App Check proves application authenticity, not user identity. Every protected mobile request requires valid App Check. Signed-in operations additionally retain Firebase Authentication and recent reauthentication where required. |
+| Anonymous mobile | Content reports and guest legal/data/privacy requests initiated in the application require App Check plus their existing rate-limit, schema and idempotency controls. |
+| Failure | Missing, invalid or unavailable attestation fails closed. Production has no bypass or optimistic success. The application exposes unavailable/retry, and backend operations monitor sanitized rejection counts and reasons. |
+| Web and admin | Hosted web is marketing-only and receives no mobile App Check. The legacy public privacy flow is removed under BE-DEC-003 rather than attested. The loopback-only administrator workspace uses Firebase Authentication and administrator authorization, not mobile App Check. |
+| Test boundary | Local/emulator tests use explicit debug configuration/tokens. Production artifacts reject debug configuration. |
+| Canonical plan | `../../docs/APP-CHECK-DECISION-AND-DELIVERY-PLAN.md` owns the channel matrix, APPCHK-01–04 delivery tasks and ODK-E2E-084 provider evidence. |
+
+Current source and OpenAPI prove only a partial implementation and remain evidence to reconcile in APPCHK-01/02. They do not prove the accepted matrix or a real provider.

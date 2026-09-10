@@ -33,15 +33,17 @@ for Firestore; no client or external database credentials are configured.
 `PRIVACY_RESPONSE_KEY_BASE64` (32 random bytes encoded as base64) and
 `PRIVACY_AUDIT_HMAC_SECRET` (at least 32 characters) are Secret Manager
 secrets. They encrypt temporary response artifacts and pseudonymize audit
-identifiers. `PUBLIC_PRIVACY_ORIGIN` is the exact HTTPS origin serving
-`/privacy-request`; it must not contain a path, query, fragment or credentials.
-Public privacy-request intake uses Google Workspace SMTP Relay. Configure
+identifiers. The current checkout also accepts `PUBLIC_PRIVACY_ORIGIN` and
+contains a public-browser privacy/SMTP flow. This is legacy implementation
+evidence, not the deployment target: BE-DEC-003 requires its endpoint, web,
+CORS/origin, configuration and test removal. Do not promote or extend this
+channel and do not add mobile App Check to the public web. Guest privacy intake
+must start in the application under the mandatory App Check policy in
+BE-DEC-004. SMTP configuration that remains after the removal uses
 `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_FROM_EMAIL`,
-`SMTP_FROM_NAME` and optional `SMTP_REPLY_TO` as runtime values. Provide
-`SMTP_PASSWORD` through Secret Manager with a narrowly scoped `secretAccessor`
-grant. Production startup fails closed when this configuration is incomplete.
-Account deletion is initiated only in the authenticated application and does
-not use email.
+`SMTP_FROM_NAME`, optional `SMTP_REPLY_TO` and a Secret Manager
+`SMTP_PASSWORD` with a narrowly scoped `secretAccessor` grant. Account deletion
+is initiated only in the authenticated application and does not use email.
 
 Firestore collection fields, TTL settings and the seven-day PITR target are
 operational configuration, not request-time schema creation. The application
