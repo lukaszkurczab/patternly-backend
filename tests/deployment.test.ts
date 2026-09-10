@@ -35,13 +35,22 @@ test("Firestore export retention and history indexes are repository-deployable",
     { collectionGroup: "securityIncidentReminders", fieldPath: "expiresAt" },
     { collectionGroup: "syncOperations", fieldPath: "expiresAt" },
     { collectionGroup: "syncMutations", fieldPath: "expiresAt" },
+    { collectionGroup: "syncBatches", fieldPath: "expiresAt" },
+    { collectionGroup: "adoptionTransfers", fieldPath: "expiresAt" },
+    { collectionGroup: "adoptionTransferIdempotency", fieldPath: "expiresAt" },
+    { collectionGroup: "records", fieldPath: "expiresAt" },
+    { collectionGroup: "chunks", fieldPath: "expiresAt" },
+    { collectionGroup: "decisions", fieldPath: "expiresAt" },
+    { collectionGroup: "results", fieldPath: "expiresAt" },
+    { collectionGroup: "markers", fieldPath: "expiresAt" },
+    { collectionGroup: "progressGenerations", fieldPath: "expiresAt" },
     { collectionGroup: "contentReports", fieldPath: "expiresAt" },
     { collectionGroup: "deletionProofs", fieldPath: "expiresAt" },
     { collectionGroup: "accountDeletionOperations", fieldPath: "expiresAt" },
     { collectionGroup: "deletedIdentities", fieldPath: "expiresAt" },
     { collectionGroup: "audit", fieldPath: "expiresAt" },
   ]);
-  assert.equal(ttl.policies.length, 22);
+  assert.equal(ttl.policies.length, 31);
   const indexes = JSON.parse(await readFile(resolve(process.cwd(), "firestore.indexes.json"), "utf8")) as { indexes?: readonly { collectionGroup?: unknown; queryScope?: unknown; fields?: readonly { fieldPath?: unknown; order?: unknown }[] }[] };
   assert.equal(indexes.indexes?.some((index) => index.collectionGroup === "accountDataExportAudits" && index.queryScope === "COLLECTION" && index.fields?.[0]?.fieldPath === "userId" && index.fields?.[0]?.order === "ASCENDING" && index.fields?.[1]?.fieldPath === "createdAt" && index.fields?.[1]?.order === "DESCENDING"), true);
   const packageJson = JSON.parse(await readFile(resolve(process.cwd(), "package.json"), "utf8")) as { scripts?: Record<string, unknown> };

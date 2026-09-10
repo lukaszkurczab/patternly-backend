@@ -8,7 +8,7 @@ import type { AppCheckTokenVerifier } from "../infrastructure/firebase/appCheckV
 import { OPENAPI_DOCUMENT } from "./openapi.js";
 import { authenticateRequest } from "../modules/auth/request.js";
 import type { BackendStores } from "../infrastructure/firestore/stores.js";
-import { syncRequestSchema } from "../modules/progress/contracts.js";
+import { createProgressPageToken, isSyncRequestWithinBudget, parseProgressPageToken, syncRequestSchema, type ProgressRecord, type SyncBatchMetadata } from "../modules/progress/contracts.js";
 import { guestMergeConfirmationSchema, guestMergeSnapshotSchema } from "../modules/users/merge.js";
 import { createContentReportSchema, transitionContentReportSchema } from "../modules/content-reports/contracts.js";
 import { accountRecoveryCodeConsumeSchema, accountRecoveryCodeIssueSchema, accountSessionRevokeSchema, accountDeletionRequestSchema, publicDeletionStatusSchema } from "../modules/account-lifecycle/contracts.js";
@@ -18,7 +18,9 @@ import { createAccountPrivacyRequestSchema, createPublicPrivacyRequestSchema, pr
 import { createSecurityIncidentSchema, securityIncidentActionSchema } from "../modules/security-incidents/contracts.js";
 import { revenueCatEventSchema, verifyRevenueCatAuthorization } from "../modules/billing/revenuecatWebhook.js";
 import { createLegalRequestSchema, createPublicLegalRequestSchema, legalRequestAdminActionSchema } from "../modules/legal-requests/contracts.js";
+import { adoptionTransferApplySchema, adoptionTransferConfirmSchema, adoptionTransferPreviewSchema, adoptionTransferSealSchema, adoptionTransferStartSchema, adoptionTransferStatusSchema, adoptionTransferUploadSchema } from "../modules/users/adoptionTransfer.js";
 import { z } from "zod";
+import { canonicalJson } from "../infrastructure/identity/canonicalJson.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -50,6 +52,16 @@ const SECURITY_INCIDENT_ID_PATTERN = /^si_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[
 const securityIncidentId = (value: unknown): string | null => typeof value === "string" && SECURITY_INCIDENT_ID_PATTERN.test(value) ? value : null;
 const LEGAL_REQUEST_ID_PATTERN = /^lr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const legalRequestId = (value: unknown): string | null => typeof value === "string" && LEGAL_REQUEST_ID_PATTERN.test(value) ? value : null;
+const ADOPTION_TRANSFER_SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/u;
+const adoptionTransferSessionId = (value: unknown): string | null => typeof value === "string" && ADOPTION_TRANSFER_SESSION_ID_PATTERN.test(value) ? value : null;
+
+function progressRecordIdentity(record: Pick<ProgressRecord, "recordType" | "targetId" | "trackId">): string {
+  return canonicalJson({ recordId: record.targetId, recordType: record.recordType, trackId: record.trackId });
+}
+
+function progressRecordOrder(left: ProgressRecord, right: ProgressRecord): number {
+  return progressRecordIdentity(left).localeCompare(progressRecordIdentity(right));
+}
 
 const authErrorStatus = (error: unknown): number => {
   const message = error instanceof Error ? error.message : "";
@@ -71,6 +83,12 @@ const errorCode = (error: unknown): string => {
   if (message === "journal_recovery_required") return "journal_recovery_required";
   if (message === "mutation_id_reuse") return "mutation_id_reuse";
   if (message === "progress_fingerprint_mismatch") return "progress_fingerprint_mismatch";
+  if (message === "goal_plan_bundle_invalid") return "goal_plan_bundle_invalid";
+  if (message === "progress_state_too_large") return "progress_state_too_large";
+  if (message === "sync_request_too_large") return "sync_request_too_large";
+  if (message === "progress_pagination_token_invalid") return "progress_pagination_token_invalid";
+  if (message === "progress_generation_conflict") return "progress_generation_conflict";
+  if (message.startsWith("adoption_transfer_")) return message;
   if (message === "firestore_not_ready") return "firestore_not_ready";
   if (message === "authentication_required") return "authentication_required";
   if (message === "recent_reauthentication_required") return "recent_reauthentication_required";
@@ -108,6 +126,11 @@ const ACCOUNT_SYNC_REJECTION_CODES = new Set([
   "version_conflict",
   "account_revision_conflict",
   "progress_fingerprint_mismatch",
+  "goal_plan_bundle_invalid",
+  "progress_state_too_large",
+  "sync_request_too_large",
+  "progress_pagination_token_invalid",
+  "progress_generation_conflict",
   "mutation_id_reuse",
   "merge_preview_mismatch",
   "merge_resolution_incomplete",
@@ -139,6 +162,17 @@ function logAccountSyncRejection(request: FastifyRequest, stage: AccountSyncReje
 function requireStores(dependencies: ApplicationDependencies): BackendStores {
   if (!dependencies.stores) throw new Error("firestore_not_ready");
   return dependencies.stores;
+}
+
+function adoptionTransferErrorResponse(error: unknown, reply: FastifyReply): boolean {
+  const message = error instanceof Error ? error.message : "internal_error";
+  if (!message.startsWith("adoption_transfer_") && !["active_session_adoption_blocked", "journal_recovery_required", "progress_fingerprint_mismatch", "goal_plan_bundle_invalid"].includes(message)) return false;
+  const notFound = message === "adoption_transfer_not_found";
+  const tooLarge = message === "adoption_transfer_record_limit" || message.includes("too_large");
+  const conflict = message.includes("conflict") || message.includes("mismatch") || message.includes("stale") || message.includes("precondition") || message.includes("duplicate") || message.includes("generation") || message.includes("cursor") || message.includes("incomplete") || message.includes("sequence");
+  const status = notFound ? 404 : tooLarge ? 413 : conflict || message === "active_session_adoption_blocked" || message === "journal_recovery_required" ? 409 : 400;
+  reply.code(status).send({ error: { code: errorCode(error) } });
+  return true;
 }
 
 async function protectOptional(request: FastifyRequest, reply: FastifyReply, dependencies: ApplicationDependencies): Promise<void> {
@@ -311,7 +345,32 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     if (requested !== undefined && requested !== "1" && requested !== "2") return reply.code(400).send({ error: { code: "invalid_request" } });
     const protocolVersion = requested === "2" ? 2 : 1;
     const snapshot = await requireStores(dependencies).progress.readSnapshot(request.userId!, protocolVersion);
-    return { accountRevision: snapshot.accountRevision, records: snapshot.records };
+    const query = request.query as { pageSize?: unknown; pageToken?: unknown };
+    if (query.pageSize === undefined && query.pageToken === undefined) return { accountRevision: snapshot.accountRevision, generation: snapshot.generation ?? 0, records: snapshot.records };
+    const pageSize = query.pageSize === undefined ? 100 : Number(query.pageSize);
+    if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) return reply.code(400).send({ error: { code: "invalid_request" } });
+    let cursor: string | null = null;
+    if (query.pageToken !== undefined) {
+      if (typeof query.pageToken !== "string") return reply.code(400).send({ error: { code: "progress_pagination_token_invalid" } });
+      try {
+        const token = parseProgressPageToken(query.pageToken);
+        if (token.userId !== request.userId || token.accountRevision !== snapshot.accountRevision || token.generation !== (snapshot.generation ?? 0)) return reply.code(409).send({ error: { code: "progress_generation_conflict" } });
+        cursor = token.cursor;
+      } catch (error) {
+        if (error instanceof Error && error.message === "progress_pagination_token_invalid") return reply.code(400).send({ error: { code: "progress_pagination_token_invalid" } });
+        throw error;
+      }
+    }
+    const records = [...snapshot.records].sort(progressRecordOrder);
+    const cursorIndex = cursor === null ? -1 : records.findIndex((record) => progressRecordIdentity(record) === cursor);
+    if (cursor !== null && cursorIndex < 0) return reply.code(409).send({ error: { code: "progress_generation_conflict" } });
+    const start = cursorIndex + 1;
+    const page = records.slice(start, start + pageSize);
+    const last = page.at(-1);
+    const nextPageToken = start + page.length < records.length && last
+      ? createProgressPageToken({ version: 1, userId: request.userId!, generation: snapshot.generation ?? 0, accountRevision: snapshot.accountRevision, cursor: progressRecordIdentity(last) })
+      : null;
+    return { accountRevision: snapshot.accountRevision, generation: snapshot.generation ?? 0, records: page, nextPageToken };
   });
 
   app.get("/v1/account-data/export", { preHandler: async (request, reply) => {
@@ -426,12 +485,19 @@ export function buildApplication(dependencies: ApplicationDependencies) {
 
   app.post("/v1/progress/sync", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
     const parsed = syncRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      logAccountSyncRejection(request, "sync", "invalid_request");
-      return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });
+    const withinBudget = isSyncRequestWithinBudget(request.body);
+    if (!parsed.success || !withinBudget) {
+      const recordTooLarge = parsed.success === false && parsed.error.issues.some((issue) => issue.message === "progress_state_too_large");
+      const envelopeTooLarge = parsed.success && !withinBudget;
+      const code = recordTooLarge ? "progress_state_too_large" : envelopeTooLarge ? "sync_request_too_large" : "invalid_request";
+      logAccountSyncRejection(request, "sync", code);
+      return reply.code(recordTooLarge || envelopeTooLarge ? 413 : 400).send({ error: { code, ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
     }
     try {
-      const result = await requireStores(dependencies).progress.applyBatch(request.userId!, parsed.data.deviceId, parsed.data.expectedAccountRevision, parsed.data.mutations);
+      const metadata: SyncBatchMetadata | undefined = parsed.data.protocolVersion === 3
+        ? { sessionId: parsed.data.sessionId, batchId: parsed.data.batchId, planVersion: 3, highWatermark: parsed.data.highWatermark }
+        : undefined;
+      const result = await requireStores(dependencies).progress.applyBatch(request.userId!, parsed.data.deviceId, parsed.data.expectedAccountRevision, parsed.data.mutations, metadata);
       if (result.conflicts.length > 0 || result.accountRevisionConflict) {
         logAccountSyncRejection(request, "sync", result.accountRevisionConflict?.code ?? result.conflicts[0]?.code);
         return reply.code(409).send(result.accountRevisionConflict ? { error: result.accountRevisionConflict } : result);
@@ -490,6 +556,97 @@ export function buildApplication(dependencies: ApplicationDependencies) {
         logAccountSyncRejection(request, "confirm", message);
         return reply.code(400).send({ error: { code: errorCode(error) } });
       }
+      throw error;
+    }
+  });
+
+  // Protocol-v3 is deliberately explicit and resumable.  The legacy v1/v2
+  // preview/confirm routes above retain their existing one-shot contract.
+  app.post("/v3/account-data/adoption/start", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const parsed = adoptionTransferStartSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });
+    try {
+      return reply.code(200).send(await requireStores(dependencies).progress.startAdoptionTransfer(request.userId!, parsed.data));
+    } catch (error) {
+      if (adoptionTransferErrorResponse(error, reply)) return;
+      throw error;
+    }
+  });
+
+  app.post("/v3/account-data/adoption/:sessionId/upload", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
+    const parsed = adoptionTransferUploadSchema.safeParse(request.body);
+    if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
+    try {
+      return reply.code(200).send(await requireStores(dependencies).progress.uploadAdoptionTransfer(request.userId!, sessionId, parsed.data));
+    } catch (error) {
+      if (adoptionTransferErrorResponse(error, reply)) return;
+      throw error;
+    }
+  });
+
+  app.post("/v3/account-data/adoption/:sessionId/seal", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
+    const parsed = adoptionTransferSealSchema.safeParse(request.body);
+    if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
+    try {
+      return reply.code(200).send(await requireStores(dependencies).progress.sealAdoptionTransfer(request.userId!, sessionId, parsed.data));
+    } catch (error) {
+      if (adoptionTransferErrorResponse(error, reply)) return;
+      throw error;
+    }
+  });
+
+  app.post("/v3/account-data/adoption/:sessionId/preview", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
+    const parsed = adoptionTransferPreviewSchema.safeParse(request.body ?? {});
+    if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
+    try {
+      return reply.code(200).send(await requireStores(dependencies).progress.previewAdoptionTransfer(request.userId!, sessionId, parsed.data));
+    } catch (error) {
+      if (adoptionTransferErrorResponse(error, reply)) return;
+      throw error;
+    }
+  });
+
+  app.post("/v3/account-data/adoption/:sessionId/confirm", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
+    const body = request.body as Record<string, unknown> | null;
+    const nested = body && typeof body.confirmation === "object" && body.confirmation !== null && !Array.isArray(body.confirmation)
+      ? { ...(body.confirmation as Record<string, unknown>), ...(typeof body.deviceId === "string" ? { deviceId: body.deviceId } : {}) }
+      : body;
+    const parsed = adoptionTransferConfirmSchema.safeParse(nested);
+    if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
+    try {
+      return reply.code(200).send(await requireStores(dependencies).progress.confirmAdoptionTransfer(request.userId!, sessionId, parsed.data));
+    } catch (error) {
+      if (adoptionTransferErrorResponse(error, reply)) return;
+      throw error;
+    }
+  });
+
+  app.post("/v3/account-data/adoption/:sessionId/apply", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
+    const parsed = adoptionTransferApplySchema.safeParse(request.body);
+    if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
+    try {
+      return reply.code(200).send(await requireStores(dependencies).progress.applyAdoptionTransfer(request.userId!, sessionId, parsed.data));
+    } catch (error) {
+      if (adoptionTransferErrorResponse(error, reply)) return;
+      throw error;
+    }
+  });
+
+  app.get("/v3/account-data/adoption/:sessionId/status", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+    const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
+    const query = request.query as { deviceId?: unknown };
+    const parsed = adoptionTransferStatusSchema.safeParse({ deviceId: query.deviceId });
+    if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      const status = await requireStores(dependencies).progress.statusAdoptionTransfer(request.userId!, sessionId, parsed.data.deviceId);
+      return status ? reply.code(200).send(status) : reply.code(404).send({ error: { code: "adoption_transfer_not_found" } });
+    } catch (error) {
+      if (adoptionTransferErrorResponse(error, reply)) return;
       throw error;
     }
   });

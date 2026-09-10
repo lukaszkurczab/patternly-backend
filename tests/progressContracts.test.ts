@@ -7,9 +7,11 @@ import {
   guestMergeSnapshotSchema,
 } from "../src/modules/users/merge.js";
 import {
+  isSyncRequestWithinBudget,
   progressMutationSchema,
   syncRequestSchema,
 } from "../src/modules/progress/contracts.js";
+import { canonicalJson, canonicalJsonBytes } from "../src/infrastructure/identity/canonicalJson.js";
 import { MAX_SERIALIZED_JSON_UTF16_CODE_UNITS } from "../src/modules/progress/serializedJsonLimits.js";
 
 const guestUserId = "22222222-2222-4222-8222-222222222222";
@@ -85,4 +87,32 @@ test("a complete immutable Custom40 plan fits sync and adoption without losing i
   const parsedMerge = guestMergeSnapshotSchema.parse({ guestSnapshotVersion: 1, guestUserId, activeSession: false, pendingJournal: false, records: [{ ...mergeRecord(state), recordType: "training_session_summary", recordId: state.id }] });
   assert.deepEqual(parsedSync.mutations[0]!.state, state);
   assert.deepEqual(parsedMerge.records[0]!.state, state);
+});
+
+test("canonical-json-v1 normalizes NFC, rejects duplicate normalized keys, and uses UTF-8 bytes", () => {
+  assert.equal(canonicalJson({ "e\u0301": "🙂" }), canonicalJson({ "é": "🙂" }));
+  assert.throws(() => canonicalJson({ "e\u0301": 1, "é": 2 }), /canonical_json_duplicate_key/u);
+  assert.throws(() => canonicalJson({ value: Number.NaN }), /canonical_json_non_finite_number/u);
+  assert.ok(canonicalJsonBytes({ value: "🙂" }) > JSON.stringify({ value: "🙂" }).length);
+});
+
+test("protocol-v3 sync carries durable batch metadata and enforces the complete UTF-8 envelope budget", () => {
+  const request = {
+    protocolVersion: 3 as const,
+    canonicalVersion: "canonical-json-v1" as const,
+    expectedAccountRevision: 0,
+    deviceId: "00000000-0000-4000-8000-000000000000",
+    sessionId: "plan_1",
+    batchId: "plan_1:batch:0",
+    planVersion: 3 as const,
+    highWatermark: 1,
+    mutations: [mutation({ value: "🙂" })],
+  };
+  assert.equal(syncRequestSchema.safeParse(request).success, true);
+  assert.equal(syncRequestSchema.safeParse({ ...request, deviceId: null }).success, false);
+  assert.equal(syncRequestSchema.safeParse({ ...request, deviceId: undefined }).success, false);
+  assert.equal(isSyncRequestWithinBudget(request), true);
+  const oversized = { ...request, mutations: [mutation({ value: "x".repeat(520_000) })] };
+  assert.equal(syncRequestSchema.safeParse(oversized).success, false);
+  assert.equal(isSyncRequestWithinBudget(oversized), false);
 });

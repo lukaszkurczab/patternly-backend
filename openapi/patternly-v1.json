@@ -166,14 +166,36 @@
               ],
               "default": 1
             }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "pageToken",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Canonical progress state and account revision"
+            "description": "Canonical progress state and account revision; paged responses include generation and nextPageToken"
           },
           "400": {
-            "description": "Unsupported progress protocol version"
+            "description": "Unsupported protocol version or invalid pagination token"
+          },
+          "409": {
+            "description": "Progress generation or account revision changed while paging"
           }
         }
       }
@@ -452,8 +474,14 @@
           "200": {
             "description": "Applied or duplicate mutations"
           },
+          "400": {
+            "description": "Invalid sync request, fingerprint, or track bundle"
+          },
           "409": {
             "description": "Progress or account revision conflict"
+          },
+          "413": {
+            "description": "Canonical UTF-8 sync envelope exceeds 512 KiB"
           }
         }
       }
@@ -500,6 +528,245 @@
           },
           "409": {
             "description": "Preview, resolution, active-session or idempotency conflict"
+          }
+        }
+      }
+    },
+    "/v3/account-data/adoption/start": {
+      "post": {
+        "description": "Start an authenticated, resumable adoption-v3 transfer session",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdoptionTransferStart"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transfer session created or replayed idempotently"
+          },
+          "400": {
+            "description": "Invalid transfer start"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Generation or idempotency conflict"
+          }
+        }
+      }
+    },
+    "/v3/account-data/adoption/{sessionId}/upload": {
+      "post": {
+        "description": "Upload one bounded adoption-v3 chunk; records and chunk metadata are stored separately",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AdoptionTransferSessionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdoptionTransferUpload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Chunk accepted or replayed"
+          },
+          "400": {
+            "description": "Invalid record, chunk, or fingerprint"
+          },
+          "404": {
+            "description": "Transfer unavailable"
+          },
+          "409": {
+            "description": "Duplicate, state, or idempotency conflict"
+          },
+          "413": {
+            "description": "Canonical envelope or record limit exceeded"
+          }
+        }
+      }
+    },
+    "/v3/account-data/adoption/{sessionId}/seal": {
+      "post": {
+        "description": "Seal a complete adoption-v3 transfer by canonical digest",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AdoptionTransferSessionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdoptionTransferSeal"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transfer sealed or replayed"
+          },
+          "400": {
+            "description": "Invalid seal"
+          },
+          "404": {
+            "description": "Transfer unavailable"
+          },
+          "409": {
+            "description": "Incomplete, stale, or mismatched seal"
+          }
+        }
+      }
+    },
+    "/v3/account-data/adoption/{sessionId}/preview": {
+      "post": {
+        "description": "Build a resumable deterministic adoption-v3 preview using the existing merge semantics",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AdoptionTransferSessionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdoptionTransferPreview"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Preview ready"
+          },
+          "400": {
+            "description": "Invalid or unsupported merge"
+          },
+          "404": {
+            "description": "Transfer unavailable"
+          },
+          "409": {
+            "description": "Preview or generation conflict"
+          }
+        }
+      }
+    },
+    "/v3/account-data/adoption/{sessionId}/confirm": {
+      "post": {
+        "description": "Persist an immutable adoption-v3 decision fingerprint and exact conflict resolutions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AdoptionTransferSessionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdoptionTransferConfirm"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Decision recorded or replayed"
+          },
+          "400": {
+            "description": "Invalid confirmation"
+          },
+          "404": {
+            "description": "Transfer unavailable"
+          },
+          "409": {
+            "description": "Preview, decision, device, or resolution conflict"
+          }
+        }
+      }
+    },
+    "/v3/account-data/adoption/{sessionId}/apply": {
+      "post": {
+        "description": "Materialize confirmed adoption into an invisible generation and atomically flip the active generation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AdoptionTransferSessionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdoptionTransferApply"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Applied or resumed atomically"
+          },
+          "400": {
+            "description": "Invalid apply request"
+          },
+          "404": {
+            "description": "Transfer unavailable"
+          },
+          "409": {
+            "description": "Generation, cursor, or decision conflict"
+          }
+        }
+      }
+    },
+    "/v3/account-data/adoption/{sessionId}/status": {
+      "get": {
+        "description": "Read bounded resumable adoption-v3 status",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AdoptionTransferSessionId"
+          },
+          {
+            "name": "deviceId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transfer status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdoptionTransferStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or mismatched device"
+          },
+          "404": {
+            "description": "Transfer unavailable"
           }
         }
       }
@@ -1152,6 +1419,15 @@
         "schema": {
           "type": "string",
           "pattern": "^si_[0-9a-f-]{36}$"
+        }
+      },
+      "AdoptionTransferSessionId": {
+        "name": "sessionId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{1,128}$"
         }
       }
     },
@@ -2225,43 +2501,145 @@
         }
       },
       "SyncRequest": {
-        "type": "object",
-        "required": [
-          "expectedAccountRevision",
-          "mutations"
-        ],
-        "properties": {
-          "protocolVersion": {
-            "type": "integer",
-            "enum": [
-              1,
-              2
-            ]
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "expectedAccountRevision",
+              "mutations"
+            ],
+            "properties": {
+              "protocolVersion": {
+                "type": "integer",
+                "const": 1,
+                "default": 1
+              },
+              "expectedAccountRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "deviceId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "mutations": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/ProgressMutation"
+                }
+              }
+            }
           },
-          "expectedAccountRevision": {
-            "type": "integer",
-            "minimum": 0
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "protocolVersion",
+              "expectedAccountRevision",
+              "mutations"
+            ],
+            "properties": {
+              "protocolVersion": {
+                "type": "integer",
+                "const": 2
+              },
+              "expectedAccountRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "deviceId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "mutations": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/ProgressMutation"
+                }
+              }
+            }
           },
-          "deviceId": {
-            "anyOf": [
-              {
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "protocolVersion",
+              "canonicalVersion",
+              "expectedAccountRevision",
+              "deviceId",
+              "sessionId",
+              "batchId",
+              "planVersion",
+              "highWatermark",
+              "mutations"
+            ],
+            "properties": {
+              "protocolVersion": {
+                "type": "integer",
+                "const": 3
+              },
+              "canonicalVersion": {
+                "type": "string",
+                "const": "canonical-json-v1"
+              },
+              "expectedAccountRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "deviceId": {
                 "type": "string",
                 "format": "uuid"
               },
-              {
-                "type": "null"
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "batchId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "planVersion": {
+                "type": "integer",
+                "const": 3
+              },
+              "highWatermark": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "mutations": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/ProgressMutation"
+                }
               }
-            ]
-          },
-          "mutations": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 100,
-            "items": {
-              "$ref": "#/components/schemas/ProgressMutation"
             }
           }
-        }
+        ]
       },
       "GuestMergeSnapshot": {
         "type": "object",
@@ -2439,6 +2817,524 @@
                 }
               }
             }
+          }
+        }
+      },
+      "AdoptionTransferStart": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "guestUserId",
+          "snapshotVersion",
+          "deviceId"
+        ],
+        "properties": {
+          "protocolVersion": {
+            "type": "integer",
+            "const": 3,
+            "default": 3
+          },
+          "canonicalVersion": {
+            "type": "string",
+            "const": "canonical-json-v1",
+            "default": "canonical-json-v1"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "guestUserId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "snapshotVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expectedGeneration": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "deviceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "activeSession": {
+            "type": "boolean",
+            "default": false
+          },
+          "pendingJournal": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "AdoptionTransferRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "recordType",
+          "recordId",
+          "trackId",
+          "fingerprint",
+          "state",
+          "version"
+        ],
+        "properties": {
+          "recordType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "recordId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "trackId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "state": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AdoptionTransferChunk": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "chunkId",
+          "index",
+          "recordKeys",
+          "fingerprint",
+          "bytes"
+        ],
+        "properties": {
+          "chunkId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "recordKeys": {
+            "type": "array",
+            "maxItems": 450,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 524288
+          }
+        }
+      },
+      "AdoptionTransferUpload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "deviceId",
+          "chunk",
+          "records"
+        ],
+        "properties": {
+          "canonicalVersion": {
+            "type": "string",
+            "const": "canonical-json-v1",
+            "default": "canonical-json-v1"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "deviceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "chunk": {
+            "$ref": "#/components/schemas/AdoptionTransferChunk"
+          },
+          "records": {
+            "type": "array",
+            "maxItems": 450,
+            "items": {
+              "$ref": "#/components/schemas/AdoptionTransferRecord"
+            }
+          }
+        }
+      },
+      "AdoptionTransferSeal": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "deviceId",
+          "snapshotFingerprint",
+          "recordCount",
+          "chunkCount"
+        ],
+        "properties": {
+          "canonicalVersion": {
+            "type": "string",
+            "const": "canonical-json-v1",
+            "default": "canonical-json-v1"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "deviceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "snapshotFingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "recordCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "chunkCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          }
+        }
+      },
+      "AdoptionTransferPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "deviceId"
+        ],
+        "properties": {
+          "canonicalVersion": {
+            "type": "string",
+            "const": "canonical-json-v1",
+            "default": "canonical-json-v1"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "deviceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "protocolVersion": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ],
+            "default": 2
+          }
+        }
+      },
+      "AdoptionTransferConfirm": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "deviceId",
+          "previewFingerprint",
+          "protocolVersion",
+          "resolutions"
+        ],
+        "properties": {
+          "canonicalVersion": {
+            "type": "string",
+            "const": "canonical-json-v1",
+            "default": "canonical-json-v1"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "deviceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "operationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "previewFingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "decisionFingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "protocolVersion": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ]
+          },
+          "resolutions": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "conflictId",
+                "resolution"
+              ],
+              "properties": {
+                "conflictId": {
+                  "type": "string"
+                },
+                "resolution": {
+                  "type": "string",
+                  "enum": [
+                    "keep_guest",
+                    "keep_account",
+                    "manual_required"
+                  ]
+                }
+              }
+            }
+          },
+          "groupChoices": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "groupId",
+                "resolution"
+              ],
+              "properties": {
+                "groupId": {
+                  "type": "string"
+                },
+                "resolution": {
+                  "type": "string",
+                  "enum": [
+                    "keep_guest",
+                    "keep_account"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "AdoptionTransferApply": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "deviceId"
+        ],
+        "properties": {
+          "canonicalVersion": {
+            "type": "string",
+            "const": "canonical-json-v1",
+            "default": "canonical-json-v1"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "deviceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "decisionFingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "expectedGeneration": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AdoptionTransferStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "accountId",
+          "sessionId",
+          "state",
+          "recordCount",
+          "chunkCount",
+          "generation"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "const": 3
+          },
+          "accountId": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "guestUserId": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "collecting",
+              "sealing",
+              "sealed",
+              "result_building",
+              "preview_ready",
+              "applying",
+              "complete",
+              "failed"
+            ]
+          },
+          "expectedGeneration": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "recordCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "chunkCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "snapshotFingerprint": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "previewFingerprint": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operationId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decisionFingerprint": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "targetGeneration": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "applyCursor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "applyTotal": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "accountRevision": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failureCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
