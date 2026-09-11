@@ -21,6 +21,8 @@ import { createLegalRequestSchema, createPublicLegalRequestSchema, legalRequestA
 import { adoptionTransferApplySchema, adoptionTransferConfirmSchema, adoptionTransferPreviewSchema, adoptionTransferSealSchema, adoptionTransferStartSchema, adoptionTransferStatusSchema, adoptionTransferUploadSchema } from "../modules/users/adoptionTransfer.js";
 import { z } from "zod";
 import { canonicalJson } from "../infrastructure/identity/canonicalJson.js";
+import { runtimeRoute, type RuntimeRouteDescriptor } from "./openapi-validator.js";
+import { normalizeRoutePath, type RouteGuard } from "./route-contract.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -29,6 +31,9 @@ declare module "fastify" {
     authenticatedEmail: string | undefined;
     authenticatedEmailVerified: boolean | undefined;
     authTime: number | undefined;
+  }
+  interface FastifyInstance {
+    patternlyRouteInventory: RuntimeRouteDescriptor[];
   }
 }
 
@@ -225,10 +230,129 @@ function requireAdministrator(request: FastifyRequest, reply: FastifyReply, depe
   return true;
 }
 
+type RoutePreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void> | void;
+
+type RouteFunction = (...args: never[]) => unknown;
+const routeProtections = new WeakMap<RouteFunction, RouteGuard>();
+
+function observedGuard(handler: unknown): RouteGuard | null {
+  if (typeof handler !== "function") return null;
+  return routeProtections.get(handler as RouteFunction) ?? null;
+}
+
+function createBearerGuard(dependencies: ApplicationDependencies): RoutePreHandler {
+  const guard: RoutePreHandler = async (request, reply) => { await protect(request, reply, dependencies); };
+  routeProtections.set(guard as RouteFunction, "bearer");
+  return guard;
+}
+
+function createAccountExportGuard(dependencies: ApplicationDependencies): RoutePreHandler {
+  const guard: RoutePreHandler = async (request, reply) => {
+    reply.header("cache-control", "private, no-store");
+    await protect(request, reply, dependencies);
+  };
+  routeProtections.set(guard as RouteFunction, "bearer");
+  return guard;
+}
+
+function createAppCheckGuard(dependencies: ApplicationDependencies): RoutePreHandler {
+  const guard: RoutePreHandler = async (request, reply) => { await protectWithAppCheckAndOptionalAuth(request, reply, dependencies); };
+  routeProtections.set(guard as RouteFunction, "app_check_optional_bearer");
+  return guard;
+}
+
+function createAdminGuard(dependencies: ApplicationDependencies): RoutePreHandler {
+  const guard: RoutePreHandler = async (request, reply) => {
+    await protect(request, reply, dependencies);
+    if (!reply.sent) requireAdministrator(request, reply, dependencies);
+  };
+  routeProtections.set(guard as RouteFunction, "admin");
+  return guard;
+}
+
+function routeGuard(profile: RouteGuard, dependencies: ApplicationDependencies): RoutePreHandler {
+  if (profile === "bearer") return createBearerGuard(dependencies);
+  if (profile === "app_check_optional_bearer") return createAppCheckGuard(dependencies);
+  if (profile === "admin") return createAdminGuard(dependencies);
+  throw new Error(`route_guard_not_supported:${profile}`);
+}
+
+type RouteHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> | unknown;
+
+function createWebhookHandler(dependencies: ApplicationDependencies): RouteHandler {
+  const handler: RouteHandler = async (request, reply) => {
+    const configuration = dependencies.environment;
+    if (!configuration.revenueCatWebhookSecret || !configuration.revenueCatAppId || !configuration.revenueCatEntitlementId || !configuration.revenueCatProductId || !configuration.revenueCatWebhookEnvironment) return reply.code(503).send({ error: { code: "revenuecat_not_configured" } });
+    if (!verifyRevenueCatAuthorization(request.headers.authorization, configuration.revenueCatWebhookSecret)) return reply.code(401).send({ error: { code: "revenuecat_webhook_unauthorized" } });
+    const envelope = request.body as { event?: unknown } | null;
+    const parsed = revenueCatEventSchema.safeParse(envelope?.event);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      const store = requireStores(dependencies).revenueCatWebhook;
+      const result = await store.process(parsed.data, configuration.revenueCatAppId, configuration.revenueCatWebhookEnvironment, configuration.revenueCatEntitlementId, configuration.revenueCatProductId);
+      if (result.receipt) {
+        if (!dependencies.purchaseReceiptEmailSender) {
+          await store.markReceiptDelivery(result.receipt.userId, result.receipt.receiptId, result.receipt.deliveryClaimId, "failed");
+          return reply.code(503).send({ error: { code: "purchase_receipt_delivery_unavailable" } });
+        }
+        try {
+          await dependencies.purchaseReceiptEmailSender.send(result.receipt);
+          await store.markReceiptDelivery(result.receipt.userId, result.receipt.receiptId, result.receipt.deliveryClaimId, "sent");
+        } catch {
+          await store.markReceiptDelivery(result.receipt.userId, result.receipt.receiptId, result.receipt.deliveryClaimId, "failed");
+          return reply.code(503).send({ error: { code: "purchase_receipt_delivery_failed" } });
+        }
+      }
+      return reply.code(200).send({ outcome: result.outcome, duplicate: result.duplicate });
+    } catch (error) {
+      if (error instanceof Error && error.message === "event_timestamp_future") return reply.code(400).send({ error: { code: "invalid_request" } });
+      throw error;
+    }
+  };
+  routeProtections.set(handler as RouteFunction, "webhook");
+  return handler;
+}
+
+function observedRouteProtection(route: Readonly<{ preHandler?: unknown; handler?: unknown }>): string {
+  const preHandlers = route.preHandler === undefined ? [] : Array.isArray(route.preHandler) ? route.preHandler : [route.preHandler];
+  if (preHandlers.length > 0) {
+    const protections = preHandlers.map((handler) => observedGuard(handler));
+    const first = protections[0];
+    if (first !== undefined && first !== null && protections.every((protection) => protection === first)) return first;
+    return "unknown";
+  }
+  return observedGuard(route.handler) ?? "none";
+}
+
+function openApiOperationForRoute(method: string, path: string): Readonly<Record<string, unknown>> | undefined {
+  const paths = OPENAPI_DOCUMENT.paths as unknown as Record<string, unknown>;
+  const pathItem = paths[normalizeRoutePath(path)];
+  if (typeof pathItem !== "object" || pathItem === null || Array.isArray(pathItem)) return undefined;
+  const operation = (pathItem as Record<string, unknown>)[method.toLowerCase()];
+  return typeof operation === "object" && operation !== null && !Array.isArray(operation)
+    ? operation as Readonly<Record<string, unknown>>
+    : undefined;
+}
+
 export function buildApplication(dependencies: ApplicationDependencies) {
   const app = Fastify({
     loggerInstance: createLogger(dependencies.environment, dependencies.logStream),
     genReqId: () => randomUUID(),
+  });
+  const runtimeRoutes: RuntimeRouteDescriptor[] = [];
+  app.decorate("patternlyRouteInventory", runtimeRoutes);
+  app.addHook("onRoute", (route) => {
+    const methods = typeof route.method === "string" ? [route.method] : route.method;
+    for (const method of methods) {
+      if (method.toUpperCase() === "HEAD") continue;
+      runtimeRoutes.push(runtimeRoute(
+        method,
+        route.url,
+        openApiOperationForRoute(method, route.url),
+        observedRouteProtection(route),
+        !["GET", "HEAD"].includes(method.toUpperCase()),
+      ));
+    }
   });
   app.decorateRequest("correlationId", "");
   app.decorateRequest("userId", undefined);
@@ -282,50 +406,22 @@ export function buildApplication(dependencies: ApplicationDependencies) {
   });
   app.get("/openapi.json", async () => OPENAPI_DOCUMENT);
 
-  app.post("/v1/webhooks/revenuecat", async (request, reply) => {
-    const configuration = dependencies.environment;
-    if (!configuration.revenueCatWebhookSecret || !configuration.revenueCatAppId || !configuration.revenueCatEntitlementId || !configuration.revenueCatProductId || !configuration.revenueCatWebhookEnvironment) return reply.code(503).send({ error: { code: "revenuecat_not_configured" } });
-    if (!verifyRevenueCatAuthorization(request.headers.authorization, configuration.revenueCatWebhookSecret)) return reply.code(401).send({ error: { code: "revenuecat_webhook_unauthorized" } });
-    const envelope = request.body as { event?: unknown } | null;
-    const parsed = revenueCatEventSchema.safeParse(envelope?.event);
-    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
-    try {
-      const store = requireStores(dependencies).revenueCatWebhook;
-      const result = await store.process(parsed.data, configuration.revenueCatAppId, configuration.revenueCatWebhookEnvironment, configuration.revenueCatEntitlementId, configuration.revenueCatProductId);
-      if (result.receipt) {
-        if (!dependencies.purchaseReceiptEmailSender) {
-          await store.markReceiptDelivery(result.receipt.userId, result.receipt.receiptId, result.receipt.deliveryClaimId, "failed");
-          return reply.code(503).send({ error: { code: "purchase_receipt_delivery_unavailable" } });
-        }
-        try {
-          await dependencies.purchaseReceiptEmailSender.send(result.receipt);
-          await store.markReceiptDelivery(result.receipt.userId, result.receipt.receiptId, result.receipt.deliveryClaimId, "sent");
-        } catch {
-          await store.markReceiptDelivery(result.receipt.userId, result.receipt.receiptId, result.receipt.deliveryClaimId, "failed");
-          return reply.code(503).send({ error: { code: "purchase_receipt_delivery_failed" } });
-        }
-      }
-      return reply.code(200).send({ outcome: result.outcome, duplicate: result.duplicate });
-    } catch (error) {
-      if (error instanceof Error && error.message === "event_timestamp_future") return reply.code(400).send({ error: { code: "invalid_request" } });
-      throw error;
-    }
-  });
+  app.post("/v1/webhooks/revenuecat", createWebhookHandler(dependencies));
 
-  app.get("/v1/me", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v1/me", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const profile = await requireStores(dependencies).users.readProfile(request.userId!);
     if (!profile) return reply.code(404).send({ error: { code: "user_not_found" } });
     return { user: profile };
   });
 
-  app.post("/v1/legal-acceptances", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v1/legal-acceptances", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const parsed = z.object({ termsVersion: z.string().regex(/^[A-Za-z0-9._-]{1,80}$/u), minimumAgeConfirmed: z.literal(18) }).strict().safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     const acceptance = await requireStores(dependencies).users.recordLegalAcceptance(request.userId!, parsed.data.termsVersion);
     return reply.code(201).send({ acceptance });
   });
 
-  app.post("/v1/purchase-confirmations", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v1/purchase-confirmations", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const parsed = z.object({ confirmationId: z.string().uuid(), termsVersion: z.string().regex(/^[A-Za-z0-9._-]{1,80}$/u), productIdentifier: z.string().trim().min(1).max(200), storefrontPrice: z.string().trim().min(1).max(80), locale: z.enum(["en", "pl"]), immediateStartRequested: z.literal(true) }).strict().safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     try {
@@ -338,9 +434,9 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.get("/v1/entitlements", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => ({ entitlements: await requireStores(dependencies).entitlements.read(request.userId!) }));
+  app.get("/v1/entitlements", { preHandler: routeGuard("bearer", dependencies) }, async (request) => ({ entitlements: await requireStores(dependencies).entitlements.read(request.userId!) }));
 
-  app.get("/v1/progress", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v1/progress", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const requested = (request.query as { protocolVersion?: unknown }).protocolVersion;
     if (requested !== undefined && requested !== "1" && requested !== "2") return reply.code(400).send({ error: { code: "invalid_request" } });
     const protocolVersion = requested === "2" ? 2 : 1;
@@ -373,10 +469,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     return { accountRevision: snapshot.accountRevision, generation: snapshot.generation ?? 0, records: page, nextPageToken };
   });
 
-  app.get("/v1/account-data/export", { preHandler: async (request, reply) => {
-    reply.header("cache-control", "private, no-store");
-    await protect(request, reply, dependencies);
-  } }, async (request, reply) => {
+  app.get("/v1/account-data/export", { preHandler: createAccountExportGuard(dependencies) }, async (request, reply) => {
     reply.header("cache-control", "private, no-store");
     if (!requireRecentReauthentication(request, reply)) return;
     try {
@@ -392,7 +485,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/privacy-requests", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v1/privacy-requests", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const parsed = createAccountPrivacyRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     if (PRIVACY_RIGHT_POLICIES[parsed.data.right].accountVerification === "recent_reauthentication" && !requireRecentReauthentication(request, reply)) return;
@@ -400,9 +493,9 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     return reply.code(201).send({ request: created });
   });
 
-  app.get("/v1/privacy-requests", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => ({ requests: await requireStores(dependencies).privacyRequests.listAccount(request.userId!) }));
+  app.get("/v1/privacy-requests", { preHandler: routeGuard("bearer", dependencies) }, async (request) => ({ requests: await requireStores(dependencies).privacyRequests.listAccount(request.userId!) }));
 
-  app.get("/v1/privacy-requests/:requestId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v1/privacy-requests/:requestId", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     if (!requireRecentReauthentication(request, reply)) return;
     const requestId = privacyRequestId((request.params as { requestId?: unknown }).requestId);
     if (!requestId) return reply.code(404).send({ error: { code: "not_found" } });
@@ -446,7 +539,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     return result ? reply.code(200).send(result) : reply.code(404).send({ error: { code: "not_found" } });
   });
 
-  app.post("/v1/legal-requests", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v1/legal-requests", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const parsed = createLegalRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     if (!dependencies.legalRequestEmailSender || !request.authenticatedEmail || request.authenticatedEmailVerified !== true) return reply.code(503).send({ error: { code: "legal_request_email_unavailable" } });
@@ -460,16 +553,16 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.get("/v1/legal-requests", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => ({ requests: await requireStores(dependencies).legalRequests.listAccount(request.userId!) }));
+  app.get("/v1/legal-requests", { preHandler: routeGuard("bearer", dependencies) }, async (request) => ({ requests: await requireStores(dependencies).legalRequests.listAccount(request.userId!) }));
 
-  app.get("/v1/legal-requests/:requestId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v1/legal-requests/:requestId", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const requestId = legalRequestId((request.params as { requestId?: unknown }).requestId);
     if (!requestId) return reply.code(404).send({ error: { code: "not_found" } });
     const result = await requireStores(dependencies).legalRequests.readAccount(request.userId!, requestId);
     return result ? reply.code(200).send({ request: result }) : reply.code(404).send({ error: { code: "not_found" } });
   });
 
-  app.post("/v1/public/legal-requests", { preHandler: (request, reply) => protectWithAppCheckAndOptionalAuth(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v1/public/legal-requests", { preHandler: routeGuard("app_check_optional_bearer", dependencies) }, async (request, reply) => {
     const parsed = createPublicLegalRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     if (!dependencies.legalRequestEmailSender) return reply.code(503).send({ error: { code: "legal_request_email_unavailable" } });
@@ -483,7 +576,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/progress/sync", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v1/progress/sync", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const parsed = syncRequestSchema.safeParse(request.body);
     const withinBudget = isSyncRequestWithinBudget(request.body);
     if (!parsed.success || !withinBudget) {
@@ -517,7 +610,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/account-data/adoption/preview", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v1/account-data/adoption/preview", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const parsed = guestMergeSnapshotSchema.safeParse(request.body);
     if (!parsed.success) {
       logAccountSyncRejection(request, "preview", "invalid_request");
@@ -535,7 +628,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/account-data/adoption/confirm", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v1/account-data/adoption/confirm", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const body = request.body as Record<string, unknown>;
     const snapshot = guestMergeSnapshotSchema.safeParse(body?.snapshot);
     const confirmation = guestMergeConfirmationSchema.safeParse(body?.confirmation);
@@ -562,7 +655,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
 
   // Protocol-v3 is deliberately explicit and resumable.  The legacy v1/v2
   // preview/confirm routes above retain their existing one-shot contract.
-  app.post("/v3/account-data/adoption/start", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v3/account-data/adoption/start", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const parsed = adoptionTransferStartSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });
     try {
@@ -573,7 +666,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v3/account-data/adoption/:sessionId/upload", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v3/account-data/adoption/:sessionId/upload", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
     const parsed = adoptionTransferUploadSchema.safeParse(request.body);
     if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
@@ -585,7 +678,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v3/account-data/adoption/:sessionId/seal", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v3/account-data/adoption/:sessionId/seal", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
     const parsed = adoptionTransferSealSchema.safeParse(request.body);
     if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
@@ -597,7 +690,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v3/account-data/adoption/:sessionId/preview", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v3/account-data/adoption/:sessionId/preview", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
     const parsed = adoptionTransferPreviewSchema.safeParse(request.body ?? {});
     if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
@@ -609,7 +702,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v3/account-data/adoption/:sessionId/confirm", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v3/account-data/adoption/:sessionId/confirm", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
     const body = request.body as Record<string, unknown> | null;
     const nested = body && typeof body.confirmation === "object" && body.confirmation !== null && !Array.isArray(body.confirmation)
@@ -625,7 +718,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v3/account-data/adoption/:sessionId/apply", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v3/account-data/adoption/:sessionId/apply", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
     const parsed = adoptionTransferApplySchema.safeParse(request.body);
     if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
@@ -637,7 +730,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.get("/v3/account-data/adoption/:sessionId/status", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v3/account-data/adoption/:sessionId/status", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
     const query = request.query as { deviceId?: unknown };
     const parsed = adoptionTransferStatusSchema.safeParse({ deviceId: query.deviceId });
@@ -651,7 +744,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/account/recovery-codes", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v1/account/recovery-codes", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     if (!requireRecentReauthentication(request, reply)) return;
     const parsed = accountRecoveryCodeIssueSchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
@@ -678,7 +771,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/account/session/revoke", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v1/account/session/revoke", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const parsed = accountSessionRevokeSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     try {
@@ -690,7 +783,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/account/deletion", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v1/account/deletion", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     if (!requireRecentReauthentication(request, reply)) return;
     const parsed = accountDeletionRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
@@ -725,9 +818,9 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     return reply.code(200).send(status);
   });
 
-  app.get("/v1/tracks", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request) => ({ tracks: await requireStores(dependencies).tracks.readAccess(request.userId!) }));
-  app.get("/v1/content/versions", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async () => ({ versions: await requireStores(dependencies).content.readCurrent() }));
-  app.post("/v1/content/reports", { preHandler: (request, reply) => protectWithAppCheckAndOptionalAuth(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v1/tracks", { preHandler: routeGuard("bearer", dependencies) }, async (request) => ({ tracks: await requireStores(dependencies).tracks.readAccess(request.userId!) }));
+  app.get("/v1/content/versions", { preHandler: routeGuard("bearer", dependencies) }, async () => ({ versions: await requireStores(dependencies).content.readCurrent() }));
+  app.post("/v1/content/reports", { preHandler: routeGuard("app_check_optional_bearer", dependencies) }, async (request, reply) => {
     const parsed = createContentReportSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });
     try {
@@ -740,26 +833,26 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       throw error;
     }
   });
-  app.get("/v1/admin/content-reports", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v1/admin/content-reports", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     return { reports: await requireStores(dependencies).contentReports.listQueue() };
   });
-  app.get("/v1/admin/privacy-requests", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v1/admin/privacy-requests", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     return { requests: await requireStores(dependencies).privacyRequests.listAdmin() };
   });
-  app.get("/v1/admin/legal-requests", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v1/admin/legal-requests", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     return { requests: await requireStores(dependencies).legalRequests.listAdmin() };
   });
-  app.get("/v1/admin/legal-requests/:requestId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v1/admin/legal-requests/:requestId", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     const requestId = legalRequestId((request.params as { requestId?: unknown }).requestId);
     if (!requestId) return reply.code(404).send({ error: { code: "legal_request_not_found" } });
     const result = await requireStores(dependencies).legalRequests.readAdmin(requestId, request.userId!);
     return result ? reply.code(200).send({ request: result }) : reply.code(404).send({ error: { code: "legal_request_not_found" } });
   });
-  app.patch("/v1/admin/legal-requests/:requestId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.patch("/v1/admin/legal-requests/:requestId", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     const requestId = legalRequestId((request.params as { requestId?: unknown }).requestId);
     const parsed = legalRequestAdminActionSchema.safeParse(request.body);
@@ -776,25 +869,25 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       throw error;
     }
   });
-  app.post("/v1/admin/security-incidents", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.post("/v1/admin/security-incidents", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     const parsed = createSecurityIncidentSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     const incident = await requireStores(dependencies).securityIncidents.create(request.userId!, parsed.data);
     return reply.code(201).send({ incident });
   });
-  app.get("/v1/admin/security-incidents", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v1/admin/security-incidents", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     return { incidents: await requireStores(dependencies).securityIncidents.listAdmin() };
   });
-  app.get("/v1/admin/security-incidents/:incidentId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v1/admin/security-incidents/:incidentId", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     const incidentId = securityIncidentId((request.params as { incidentId?: unknown }).incidentId);
     if (!incidentId) return reply.code(404).send({ error: { code: "security_incident_not_found" } });
     const incident = await requireStores(dependencies).securityIncidents.readAdmin(incidentId, request.userId!);
     return incident ? reply.code(200).send({ incident }) : reply.code(404).send({ error: { code: "security_incident_not_found" } });
   });
-  app.get("/v1/admin/security-incidents/:incidentId/authority-exports/:version", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v1/admin/security-incidents/:incidentId/authority-exports/:version", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     const incidentId = securityIncidentId((request.params as { incidentId?: unknown }).incidentId);
     const rawVersion = (request.params as { version?: unknown }).version;
@@ -803,7 +896,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     const exported = await requireStores(dependencies).securityIncidents.readAuthorityExport(incidentId, version, request.userId!);
     return exported ? reply.code(200).send(exported) : reply.code(404).send({ error: { code: "security_incident_export_not_found" } });
   });
-  app.patch("/v1/admin/security-incidents/:incidentId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.patch("/v1/admin/security-incidents/:incidentId", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     const incidentId = securityIncidentId((request.params as { incidentId?: unknown }).incidentId);
     const parsed = securityIncidentActionSchema.safeParse(request.body);
@@ -819,14 +912,14 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       throw error;
     }
   });
-  app.get("/v1/admin/privacy-requests/:requestId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v1/admin/privacy-requests/:requestId", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     const requestId = privacyRequestId((request.params as { requestId?: unknown }).requestId);
     if (!requestId) return reply.code(404).send({ error: { code: "privacy_request_not_found" } });
     const result = await requireStores(dependencies).privacyRequests.readAdmin(requestId, request.userId!);
     return result ? reply.code(200).send({ request: result }) : reply.code(404).send({ error: { code: "privacy_request_not_found" } });
   });
-  app.patch("/v1/admin/privacy-requests/:requestId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.patch("/v1/admin/privacy-requests/:requestId", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     const requestId = privacyRequestId((request.params as { requestId?: unknown }).requestId);
     const parsed = privacyRequestAdminActionSchema.safeParse(request.body);
@@ -856,11 +949,11 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       throw error;
     }
   });
-  app.get("/v1/admin/overview", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v1/admin/overview", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     return requireStores(dependencies).admin.readOverview();
   });
-  app.get("/v1/admin/questions", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.get("/v1/admin/questions", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     const query = request.query as { trackId?: unknown; q?: unknown; page?: unknown; pageSize?: unknown };
     const trackId = typeof query.trackId === "string" && /^[A-Za-z0-9._:/-]{1,128}$/u.test(query.trackId) ? query.trackId : undefined;
@@ -872,7 +965,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     if ("unavailable" in questions) return reply.code(503).send({ error: { code: "question_inspection_unavailable", reason: questions.reason } });
     return questions;
   });
-  app.patch("/v1/admin/content-reports/:clientSubmissionId", { preHandler: (request, reply) => protect(request, reply, dependencies) }, async (request, reply) => {
+  app.patch("/v1/admin/content-reports/:clientSubmissionId", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     const params = request.params as { clientSubmissionId?: unknown };
     const clientSubmissionId = typeof params.clientSubmissionId === "string" ? params.clientSubmissionId : "";
