@@ -6,9 +6,11 @@ import {
   createMergeRecordFingerprint,
   guestMergeConfirmationSchema,
   guestMergeSnapshotSchema,
+  mergeRecordKey,
   validateGuestMergeConfirmation,
   type GuestMergeRecord,
 } from "../src/modules/users/merge.js";
+import { CONTENT_IDENTITY_SCHEMA } from "../src/modules/progress/contracts.js";
 
 const accountUserId = "11111111-1111-4111-8111-111111111111";
 const guestUserId = "22222222-2222-4222-8222-222222222222";
@@ -35,6 +37,16 @@ function goalRecord(goalType = "prepare_for_an_interview", envelopeRevision = 3,
 function planRecord(time = "18:00", goalRevision = 3, version = 0): GuestMergeRecord {
   const state = { schemaVersion: 1, revision: 2, plan: { schemaVersion: 1, planId: "plan-1", trackId: track, goalRevision, status: "accepted", timezone: "Europe/Warsaw", contentVersion: "content-v1", contentPackagePin: { packageIdentity: "pkg", packageVersion: "1", contentReleaseId: "release" }, acceptedTarget: { meaning: "event", targetDate: "2027-09-09" }, createdAt: "2026-09-09T08:00:00.000Z", updatedAt: "2026-09-09T08:00:00.000Z", planRevision: 2, commandId: "command-1", slots: [{ slotId: "slot-1", day: "mon", localTime: time, sessionLength: 10 }] } };
   const base = { recordId: track, recordType: "learning_plan" as const, state, trackId: track };
+  return { ...base, fingerprint: createMergeRecordFingerprint(base), version };
+}
+function v4GoalRecord(version = 0): GuestMergeRecord {
+  const state = { schemaVersion: 1, revision: 3, record: { goalType: "prepare_for_an_interview", preferredDays: ["mon", "wed", "sat"], status: "active", targetDate: "2027-09-09", trackId: track, weeklySessionTarget: 3 } };
+  const base = { recordId: track, recordType: "goal" as const, state, trackId: track, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA };
+  return { ...base, fingerprint: createMergeRecordFingerprint(base), version };
+}
+function v4PlanRecord(time = "18:00", goalRevision = 3, version = 0): GuestMergeRecord {
+  const state = { schemaVersion: 1, revision: 2, plan: { schemaVersion: 1, planId: "plan-v4", trackId: track, goalRevision, status: "accepted", timezone: "Europe/Warsaw", contentVersion: "content-v4", artifactSha256: "a".repeat(64), acceptedTarget: { meaning: "event", targetDate: "2027-09-09" }, createdAt: "2026-09-09T08:00:00.000Z", updatedAt: "2026-09-09T08:00:00.000Z", planRevision: 2, commandId: "command-v4", slots: [{ slotId: "slot-1", day: "mon", localTime: time, sessionLength: 10 }] } };
+  const base = { recordId: track, recordType: "learning_plan" as const, state, trackId: track, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA };
   return { ...base, fingerprint: createMergeRecordFingerprint(base), version };
 }
 function tombstone(recordType: "goal" | "learning_plan", version = 0): GuestMergeRecord {
@@ -129,4 +141,21 @@ test("v1 rejects v2 records and keeps its original preview shape", () => {
   assert.equal(adoption.preview.protocolVersion, 1);
   assert.equal("goalPlanConflictGroups" in adoption.preview, false);
   assert.equal(adoption.plan.remoteRecordCount, 0);
+});
+
+test("v4 validates goal-plan bundles without requiring a legacy contentPackagePin", () => {
+  const local = [v4GoalRecord(), v4PlanRecord()];
+  const snapshot = guestMergeSnapshotSchema.parse({ protocolVersion: 4, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA, guestSnapshotVersion: 9, guestUserId, records: local, activeSession: false, pendingJournal: false });
+  const adoption = buildGuestMergePreview({ accountUserId, accountSnapshotVersion: 8, guestSnapshot: snapshot, remoteRecords: [] });
+  assert.equal(adoption.preview.protocolVersion, 4);
+  if (adoption.preview.protocolVersion !== 4) assert.fail("v4_preview_required");
+  assert.equal(adoption.preview.contentIdentitySchema, CONTENT_IDENTITY_SCHEMA);
+  assert.deepEqual(adoption.plan.uploadRecordIds, [mergeRecordKey(local[0]!, "full"), mergeRecordKey(local[1]!, "full")]);
+});
+
+test("v4 rejects legacy identity fields recursively in merge records", () => {
+  const base = v4PlanRecord();
+  const state = { ...(base.state as Record<string, unknown>), nested: { packagePin: "legacy" } };
+  const withLegacy = { ...base, state, fingerprint: createMergeRecordFingerprint({ ...base, state }) };
+  assert.equal(guestMergeSnapshotSchema.safeParse({ protocolVersion: 4, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA, guestSnapshotVersion: 9, guestUserId, records: [withLegacy], activeSession: false, pendingJournal: false }).success, false);
 });

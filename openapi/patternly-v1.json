@@ -666,7 +666,8 @@
               "type": "integer",
               "enum": [
                 1,
-                2
+                2,
+                4
               ],
               "default": 1
             }
@@ -716,72 +717,149 @@
                     "records": {
                       "type": "array",
                       "items": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": [
-                          "kind",
-                          "recordType",
-                          "trackId",
-                          "targetId",
-                          "version",
-                          "fingerprint",
-                          "state",
-                          "lastMutationId",
-                          "updatedAt"
-                        ],
-                        "properties": {
-                          "kind": {
-                            "type": "string",
-                            "enum": [
-                              "node",
-                              "item"
-                            ]
-                          },
-                          "recordType": {
-                            "type": "string",
-                            "enum": [
-                              "active_track",
-                              "training_session_summary",
-                              "training_session_result",
-                              "training_attempt",
-                              "review_queue_entry",
-                              "goal",
-                              "learning_plan"
-                            ]
-                          },
-                          "trackId": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 128
-                          },
-                          "targetId": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 256
-                          },
-                          "version": {
-                            "type": "integer",
-                            "minimum": 0
-                          },
-                          "fingerprint": {
-                            "type": "string",
-                            "pattern": "^[a-f0-9]{64}$"
-                          },
-                          "state": {
+                        "oneOf": [
+                          {
                             "type": "object",
-                            "additionalProperties": true,
-                            "properties": {}
+                            "additionalProperties": false,
+                            "required": [
+                              "kind",
+                              "recordType",
+                              "trackId",
+                              "targetId",
+                              "version",
+                              "fingerprint",
+                              "state",
+                              "lastMutationId",
+                              "updatedAt"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "node",
+                                  "item"
+                                ]
+                              },
+                              "recordType": {
+                                "type": "string",
+                                "enum": [
+                                  "active_track",
+                                  "training_session_summary",
+                                  "training_session_result",
+                                  "training_attempt",
+                                  "review_queue_entry",
+                                  "goal",
+                                  "learning_plan"
+                                ]
+                              },
+                              "trackId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 128
+                              },
+                              "targetId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 256
+                              },
+                              "version": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "fingerprint": {
+                                "type": "string",
+                                "pattern": "^[a-f0-9]{64}$"
+                              },
+                              "state": {
+                                "type": "object",
+                                "additionalProperties": true,
+                                "properties": {}
+                              },
+                              "lastMutationId": {
+                                "type": "string",
+                                "minLength": 16,
+                                "maxLength": 128
+                              },
+                              "updatedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            }
                           },
-                          "lastMutationId": {
-                            "type": "string",
-                            "minLength": 16,
-                            "maxLength": 128
-                          },
-                          "updatedAt": {
-                            "type": "string",
-                            "format": "date-time"
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "kind",
+                              "recordType",
+                              "trackId",
+                              "targetId",
+                              "version",
+                              "fingerprint",
+                              "state",
+                              "lastMutationId",
+                              "updatedAt",
+                              "contentIdentitySchema"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "node",
+                                  "item"
+                                ]
+                              },
+                              "recordType": {
+                                "type": "string",
+                                "enum": [
+                                  "active_track",
+                                  "training_session_summary",
+                                  "training_session_result",
+                                  "training_attempt",
+                                  "review_queue_entry",
+                                  "goal",
+                                  "learning_plan"
+                                ]
+                              },
+                              "trackId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 128
+                              },
+                              "targetId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 256
+                              },
+                              "version": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "fingerprint": {
+                                "type": "string",
+                                "pattern": "^[a-f0-9]{64}$"
+                              },
+                              "state": {
+                                "type": "object",
+                                "additionalProperties": true,
+                                "properties": {}
+                              },
+                              "lastMutationId": {
+                                "type": "string",
+                                "minLength": 16,
+                                "maxLength": 128
+                              },
+                              "updatedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "contentIdentitySchema": {
+                                "type": "string",
+                                "const": "patternly:content-identity:v2"
+                              }
+                            }
                           }
-                        }
+                        ]
                       }
                     },
                     "nextPageToken": {
@@ -810,7 +888,7 @@
             }
           },
           "409": {
-            "description": "Progress generation or account revision changed while paging",
+            "description": "Progress generation, account revision, or content identity schema changed while paging",
             "content": {
               "application/json": {
                 "schema": {
@@ -5723,6 +5801,430 @@
           }
         ]
       },
+      "ProgressMutationV4": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mutationId",
+              "kind",
+              "recordType",
+              "trackId",
+              "targetId",
+              "expectedVersion",
+              "fingerprint",
+              "state",
+              "contentIdentitySchema"
+            ],
+            "properties": {
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{16,128}$"
+              },
+              "trackId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "targetId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "expectedVersion": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "fingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "state": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
+              },
+              "recordType": {
+                "const": "active_track"
+              },
+              "kind": {
+                "const": "node"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mutationId",
+              "kind",
+              "recordType",
+              "trackId",
+              "targetId",
+              "expectedVersion",
+              "fingerprint",
+              "state",
+              "contentIdentitySchema"
+            ],
+            "properties": {
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{16,128}$"
+              },
+              "trackId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "targetId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "expectedVersion": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "fingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "state": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
+              },
+              "recordType": {
+                "const": "training_session_summary"
+              },
+              "kind": {
+                "const": "node"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mutationId",
+              "kind",
+              "recordType",
+              "trackId",
+              "targetId",
+              "expectedVersion",
+              "fingerprint",
+              "state",
+              "contentIdentitySchema"
+            ],
+            "properties": {
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{16,128}$"
+              },
+              "trackId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "targetId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "expectedVersion": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "fingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "state": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
+              },
+              "recordType": {
+                "const": "training_session_result"
+              },
+              "kind": {
+                "const": "node"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mutationId",
+              "kind",
+              "recordType",
+              "trackId",
+              "targetId",
+              "expectedVersion",
+              "fingerprint",
+              "state",
+              "contentIdentitySchema"
+            ],
+            "properties": {
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{16,128}$"
+              },
+              "trackId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "targetId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "expectedVersion": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "fingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "state": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
+              },
+              "recordType": {
+                "const": "training_attempt"
+              },
+              "kind": {
+                "const": "item"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mutationId",
+              "kind",
+              "recordType",
+              "trackId",
+              "targetId",
+              "expectedVersion",
+              "fingerprint",
+              "state",
+              "contentIdentitySchema"
+            ],
+            "properties": {
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{16,128}$"
+              },
+              "trackId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "targetId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "expectedVersion": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "fingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "state": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
+              },
+              "recordType": {
+                "const": "review_queue_entry"
+              },
+              "kind": {
+                "const": "item"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mutationId",
+              "kind",
+              "recordType",
+              "trackId",
+              "targetId",
+              "expectedVersion",
+              "fingerprint",
+              "state",
+              "contentIdentitySchema"
+            ],
+            "properties": {
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{16,128}$"
+              },
+              "trackId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "targetId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "expectedVersion": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "fingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "state": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
+              },
+              "recordType": {
+                "const": "goal"
+              },
+              "kind": {
+                "const": "node"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mutationId",
+              "kind",
+              "recordType",
+              "trackId",
+              "targetId",
+              "expectedVersion",
+              "fingerprint",
+              "state",
+              "contentIdentitySchema"
+            ],
+            "properties": {
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{16,128}$"
+              },
+              "trackId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "targetId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "expectedVersion": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "fingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "state": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
+              },
+              "recordType": {
+                "const": "learning_plan"
+              },
+              "kind": {
+                "const": "node"
+              }
+            }
+          }
+        ]
+      },
       "LegacyProgressMutation": {
         "oneOf": [
           {
@@ -6140,13 +6642,127 @@
                 }
               }
             }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "protocolVersion",
+              "canonicalVersion",
+              "contentIdentitySchema",
+              "expectedAccountRevision",
+              "deviceId",
+              "sessionId",
+              "batchId",
+              "planVersion",
+              "highWatermark",
+              "mutations"
+            ],
+            "properties": {
+              "protocolVersion": {
+                "type": "integer",
+                "const": 4
+              },
+              "canonicalVersion": {
+                "type": "string",
+                "const": "canonical-json-v1"
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
+              },
+              "expectedAccountRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "deviceId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "batchId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "planVersion": {
+                "type": "integer",
+                "const": 4
+              },
+              "highWatermark": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "mutations": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/ProgressMutationV4"
+                }
+              }
+            }
           }
         ]
       },
       "GuestMergeSnapshot": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "guestSnapshotVersion",
+              "guestUserId",
+              "records",
+              "activeSession",
+              "pendingJournal"
+            ],
+            "properties": {
+              "protocolVersion": {
+                "type": "integer",
+                "enum": [
+                  1,
+                  2
+                ]
+              },
+              "guestSnapshotVersion": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "guestUserId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "records": {
+                "type": "array",
+                "maxItems": 1000,
+                "items": {
+                  "$ref": "#/components/schemas/GuestMergeRecord"
+                }
+              },
+              "activeSession": {
+                "type": "boolean"
+              },
+              "pendingJournal": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/GuestMergeSnapshotV4"
+          }
+        ]
+      },
+      "GuestMergeSnapshotV4": {
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "protocolVersion",
+          "contentIdentitySchema",
           "guestSnapshotVersion",
           "guestUserId",
           "records",
@@ -6156,10 +6772,11 @@
         "properties": {
           "protocolVersion": {
             "type": "integer",
-            "enum": [
-              1,
-              2
-            ]
+            "const": 4
+          },
+          "contentIdentitySchema": {
+            "type": "string",
+            "const": "patternly:content-identity:v2"
           },
           "guestSnapshotVersion": {
             "type": "integer",
@@ -6173,7 +6790,7 @@
             "type": "array",
             "maxItems": 1000,
             "items": {
-              "$ref": "#/components/schemas/GuestMergeRecord"
+              "$ref": "#/components/schemas/GuestMergeRecordV4"
             }
           },
           "activeSession": {
@@ -6228,6 +6845,55 @@
           }
         }
       },
+      "GuestMergeRecordV4": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contentIdentitySchema",
+          "fingerprint",
+          "recordId",
+          "recordType",
+          "state",
+          "trackId",
+          "version"
+        ],
+        "properties": {
+          "contentIdentitySchema": {
+            "type": "string",
+            "const": "patternly:content-identity:v2"
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "recordId": {
+            "type": "string"
+          },
+          "recordType": {
+            "type": "string",
+            "enum": [
+              "active_track",
+              "training_session_summary",
+              "training_session_result",
+              "training_attempt",
+              "review_queue_entry",
+              "goal",
+              "learning_plan"
+            ]
+          },
+          "state": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "trackId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "AdoptionConfirmationRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -6245,20 +6911,776 @@
             "$ref": "#/components/schemas/GuestMergeSnapshot"
           },
           "confirmation": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "operationId",
+                  "previewFingerprint",
+                  "protocolVersion",
+                  "resolutions"
+                ],
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "previewFingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "protocolVersion": {
+                    "type": "integer",
+                    "enum": [
+                      1,
+                      2
+                    ]
+                  },
+                  "resolutions": {
+                    "type": "array",
+                    "maxItems": 1000,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "conflictId",
+                        "resolution"
+                      ],
+                      "properties": {
+                        "conflictId": {
+                          "type": "string"
+                        },
+                        "resolution": {
+                          "type": "string",
+                          "enum": [
+                            "keep_guest",
+                            "keep_account",
+                            "manual_required"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "groupChoices": {
+                    "type": "array",
+                    "maxItems": 1000,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "groupId",
+                        "resolution"
+                      ],
+                      "properties": {
+                        "groupId": {
+                          "type": "string"
+                        },
+                        "resolution": {
+                          "type": "string",
+                          "enum": [
+                            "keep_guest",
+                            "keep_account"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "operationId",
+                  "previewFingerprint",
+                  "protocolVersion",
+                  "contentIdentitySchema",
+                  "resolutions"
+                ],
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "previewFingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "protocolVersion": {
+                    "type": "integer",
+                    "const": 4
+                  },
+                  "contentIdentitySchema": {
+                    "type": "string",
+                    "const": "patternly:content-identity:v2"
+                  },
+                  "resolutions": {
+                    "type": "array",
+                    "maxItems": 1000,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "conflictId",
+                        "resolution"
+                      ],
+                      "properties": {
+                        "conflictId": {
+                          "type": "string"
+                        },
+                        "resolution": {
+                          "type": "string",
+                          "enum": [
+                            "keep_guest",
+                            "keep_account",
+                            "manual_required"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "groupChoices": {
+                    "type": "array",
+                    "maxItems": 1000,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "groupId",
+                        "resolution"
+                      ],
+                      "properties": {
+                        "groupId": {
+                          "type": "string"
+                        },
+                        "resolution": {
+                          "type": "string",
+                          "enum": [
+                            "keep_guest",
+                            "keep_account"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "AdoptionTransferStart": {
+        "oneOf": [
+          {
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "operationId",
+              "idempotencyKey",
+              "guestUserId",
+              "snapshotVersion",
+              "deviceId"
+            ],
+            "properties": {
+              "protocolVersion": {
+                "type": "integer",
+                "const": 3,
+                "default": 3
+              },
+              "canonicalVersion": {
+                "type": "string",
+                "const": "canonical-json-v1",
+                "default": "canonical-json-v1"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "guestUserId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "snapshotVersion": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "expectedGeneration": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0
+              },
+              "deviceId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "activeSession": {
+                "type": "boolean",
+                "default": false
+              },
+              "pendingJournal": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "protocolVersion",
+              "contentIdentitySchema",
+              "idempotencyKey",
+              "guestUserId",
+              "snapshotVersion",
+              "deviceId"
+            ],
+            "properties": {
+              "protocolVersion": {
+                "type": "integer",
+                "const": 4
+              },
+              "canonicalVersion": {
+                "type": "string",
+                "const": "canonical-json-v1",
+                "default": "canonical-json-v1"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "guestUserId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "snapshotVersion": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "expectedGeneration": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0
+              },
+              "deviceId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "activeSession": {
+                "type": "boolean",
+                "default": false
+              },
+              "pendingJournal": {
+                "type": "boolean",
+                "default": false
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
+              }
+            }
+          }
+        ]
+      },
+      "AdoptionTransferRecordV3": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "recordType",
+          "recordId",
+          "trackId",
+          "fingerprint",
+          "state",
+          "version"
+        ],
+        "properties": {
+          "recordType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "recordId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "trackId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "state": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AdoptionTransferRecordV4": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "recordType",
+          "recordId",
+          "trackId",
+          "fingerprint",
+          "state",
+          "version",
+          "contentIdentitySchema"
+        ],
+        "properties": {
+          "recordType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "recordId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "trackId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "state": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "contentIdentitySchema": {
+            "type": "string",
+            "const": "patternly:content-identity:v2"
+          }
+        }
+      },
+      "AdoptionTransferRecord": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "recordType",
+              "recordId",
+              "trackId",
+              "fingerprint",
+              "state",
+              "version"
+            ],
+            "properties": {
+              "recordType": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "recordId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "trackId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "fingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "state": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "recordType",
+              "recordId",
+              "trackId",
+              "fingerprint",
+              "state",
+              "version",
+              "contentIdentitySchema"
+            ],
+            "properties": {
+              "recordType": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "recordId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "trackId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "fingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "state": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
+              }
+            }
+          }
+        ]
+      },
+      "AdoptionTransferChunk": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "chunkId",
+          "index",
+          "recordKeys",
+          "fingerprint",
+          "bytes"
+        ],
+        "properties": {
+          "chunkId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "recordKeys": {
+            "type": "array",
+            "maxItems": 450,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 524288
+          }
+        }
+      },
+      "AdoptionTransferUpload": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "deviceId",
+              "chunk",
+              "records"
+            ],
+            "properties": {
+              "canonicalVersion": {
+                "type": "string",
+                "const": "canonical-json-v1",
+                "default": "canonical-json-v1"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "deviceId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "chunk": {
+                "$ref": "#/components/schemas/AdoptionTransferChunk"
+              },
+              "records": {
+                "type": "array",
+                "maxItems": 450,
+                "items": {
+                  "$ref": "#/components/schemas/AdoptionTransferRecordV3"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "contentIdentitySchema",
+              "deviceId",
+              "chunk",
+              "records"
+            ],
+            "properties": {
+              "canonicalVersion": {
+                "type": "string",
+                "const": "canonical-json-v1",
+                "default": "canonical-json-v1"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "deviceId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "chunk": {
+                "$ref": "#/components/schemas/AdoptionTransferChunk"
+              },
+              "records": {
+                "type": "array",
+                "maxItems": 450,
+                "items": {
+                  "$ref": "#/components/schemas/AdoptionTransferRecordV4"
+                }
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
+              }
+            }
+          }
+        ]
+      },
+      "AdoptionTransferSeal": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "deviceId",
+              "snapshotFingerprint",
+              "recordCount",
+              "chunkCount"
+            ],
+            "properties": {
+              "canonicalVersion": {
+                "type": "string",
+                "const": "canonical-json-v1",
+                "default": "canonical-json-v1"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "deviceId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "snapshotFingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "recordCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "chunkCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "contentIdentitySchema",
+              "deviceId",
+              "snapshotFingerprint",
+              "recordCount",
+              "chunkCount"
+            ],
+            "properties": {
+              "canonicalVersion": {
+                "type": "string",
+                "const": "canonical-json-v1",
+                "default": "canonical-json-v1"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "deviceId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "snapshotFingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "recordCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "chunkCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
+              }
+            }
+          }
+        ]
+      },
+      "AdoptionTransferPreview": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "deviceId"
+            ],
+            "properties": {
+              "canonicalVersion": {
+                "type": "string",
+                "const": "canonical-json-v1",
+                "default": "canonical-json-v1"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "deviceId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "protocolVersion": {
+                "type": "integer",
+                "enum": [
+                  1,
+                  2
+                ],
+                "default": 2
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "deviceId",
+              "protocolVersion",
+              "contentIdentitySchema"
+            ],
+            "properties": {
+              "canonicalVersion": {
+                "type": "string",
+                "const": "canonical-json-v1",
+                "default": "canonical-json-v1"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "deviceId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "protocolVersion": {
+                "type": "integer",
+                "const": 4
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
+              }
+            }
+          }
+        ]
+      },
+      "AdoptionTransferConfirm": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "deviceId",
               "previewFingerprint",
               "protocolVersion",
               "resolutions"
             ],
             "properties": {
+              "canonicalVersion": {
+                "type": "string",
+                "const": "canonical-json-v1",
+                "default": "canonical-json-v1"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "deviceId": {
+                "type": "string",
+                "format": "uuid"
+              },
               "operationId": {
                 "type": "string",
                 "format": "uuid"
               },
               "previewFingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "decisionFingerprint": {
                 "type": "string",
                 "pattern": "^[a-f0-9]{64}$"
               },
@@ -6319,526 +7741,494 @@
                 }
               }
             }
-          }
-        }
-      },
-      "AdoptionTransferStart": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "idempotencyKey",
-          "guestUserId",
-          "snapshotVersion",
-          "deviceId"
-        ],
-        "properties": {
-          "protocolVersion": {
-            "type": "integer",
-            "const": 3,
-            "default": 3
           },
-          "canonicalVersion": {
-            "type": "string",
-            "const": "canonical-json-v1",
-            "default": "canonical-json-v1"
-          },
-          "sessionId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "idempotencyKey": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "guestUserId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "snapshotVersion": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "expectedGeneration": {
-            "type": "integer",
-            "minimum": 0,
-            "default": 0
-          },
-          "deviceId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "activeSession": {
-            "type": "boolean",
-            "default": false
-          },
-          "pendingJournal": {
-            "type": "boolean",
-            "default": false
-          }
-        }
-      },
-      "AdoptionTransferRecord": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "recordType",
-          "recordId",
-          "trackId",
-          "fingerprint",
-          "state",
-          "version"
-        ],
-        "properties": {
-          "recordType": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "recordId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256
-          },
-          "trackId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "fingerprint": {
-            "type": "string",
-            "pattern": "^[a-f0-9]{64}$"
-          },
-          "state": {
+          {
             "type": "object",
-            "additionalProperties": true
-          },
-          "version": {
-            "type": "integer",
-            "minimum": 0
-          }
-        }
-      },
-      "AdoptionTransferChunk": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "chunkId",
-          "index",
-          "recordKeys",
-          "fingerprint",
-          "bytes"
-        ],
-        "properties": {
-          "chunkId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "index": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "recordKeys": {
-            "type": "array",
-            "maxItems": 450,
-            "items": {
-              "type": "string",
-              "minLength": 1
-            }
-          },
-          "fingerprint": {
-            "type": "string",
-            "pattern": "^[a-f0-9]{64}$"
-          },
-          "bytes": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 524288
-          }
-        }
-      },
-      "AdoptionTransferUpload": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "deviceId",
-          "chunk",
-          "records"
-        ],
-        "properties": {
-          "canonicalVersion": {
-            "type": "string",
-            "const": "canonical-json-v1",
-            "default": "canonical-json-v1"
-          },
-          "idempotencyKey": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "deviceId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "chunk": {
-            "$ref": "#/components/schemas/AdoptionTransferChunk"
-          },
-          "records": {
-            "type": "array",
-            "maxItems": 450,
-            "items": {
-              "$ref": "#/components/schemas/AdoptionTransferRecord"
-            }
-          }
-        }
-      },
-      "AdoptionTransferSeal": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "deviceId",
-          "snapshotFingerprint",
-          "recordCount",
-          "chunkCount"
-        ],
-        "properties": {
-          "canonicalVersion": {
-            "type": "string",
-            "const": "canonical-json-v1",
-            "default": "canonical-json-v1"
-          },
-          "idempotencyKey": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "deviceId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "snapshotFingerprint": {
-            "type": "string",
-            "pattern": "^[a-f0-9]{64}$"
-          },
-          "recordCount": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 1000
-          },
-          "chunkCount": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 1000
-          }
-        }
-      },
-      "AdoptionTransferPreview": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "deviceId"
-        ],
-        "properties": {
-          "canonicalVersion": {
-            "type": "string",
-            "const": "canonical-json-v1",
-            "default": "canonical-json-v1"
-          },
-          "idempotencyKey": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "deviceId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "protocolVersion": {
-            "type": "integer",
-            "enum": [
-              1,
-              2
+            "additionalProperties": false,
+            "required": [
+              "deviceId",
+              "previewFingerprint",
+              "protocolVersion",
+              "contentIdentitySchema",
+              "resolutions"
             ],
-            "default": 2
-          }
-        }
-      },
-      "AdoptionTransferConfirm": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "deviceId",
-          "previewFingerprint",
-          "protocolVersion",
-          "resolutions"
-        ],
-        "properties": {
-          "canonicalVersion": {
-            "type": "string",
-            "const": "canonical-json-v1",
-            "default": "canonical-json-v1"
-          },
-          "idempotencyKey": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "deviceId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "operationId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "previewFingerprint": {
-            "type": "string",
-            "pattern": "^[a-f0-9]{64}$"
-          },
-          "decisionFingerprint": {
-            "type": "string",
-            "pattern": "^[a-f0-9]{64}$"
-          },
-          "protocolVersion": {
-            "type": "integer",
-            "enum": [
-              1,
-              2
-            ]
-          },
-          "resolutions": {
-            "type": "array",
-            "maxItems": 1000,
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "conflictId",
-                "resolution"
-              ],
-              "properties": {
-                "conflictId": {
-                  "type": "string"
-                },
-                "resolution": {
-                  "type": "string",
-                  "enum": [
-                    "keep_guest",
-                    "keep_account",
-                    "manual_required"
-                  ]
-                }
-              }
-            }
-          },
-          "groupChoices": {
-            "type": "array",
-            "maxItems": 1000,
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "groupId",
-                "resolution"
-              ],
-              "properties": {
-                "groupId": {
-                  "type": "string"
-                },
-                "resolution": {
-                  "type": "string",
-                  "enum": [
-                    "keep_guest",
-                    "keep_account"
-                  ]
-                }
-              }
-            }
-          }
-        }
-      },
-      "AdoptionTransferApply": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "deviceId"
-        ],
-        "properties": {
-          "canonicalVersion": {
-            "type": "string",
-            "const": "canonical-json-v1",
-            "default": "canonical-json-v1"
-          },
-          "idempotencyKey": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "deviceId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "decisionFingerprint": {
-            "type": "string",
-            "pattern": "^[a-f0-9]{64}$"
-          },
-          "expectedGeneration": {
-            "type": "integer",
-            "minimum": 0
-          }
-        }
-      },
-      "AdoptionTransferStatus": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "version",
-          "accountId",
-          "sessionId",
-          "state",
-          "recordCount",
-          "chunkCount",
-          "generation"
-        ],
-        "properties": {
-          "version": {
-            "type": "integer",
-            "const": 3
-          },
-          "accountId": {
-            "type": "string"
-          },
-          "sessionId": {
-            "type": "string"
-          },
-          "guestUserId": {
-            "type": "string"
-          },
-          "state": {
-            "type": "string",
-            "enum": [
-              "collecting",
-              "sealing",
-              "sealed",
-              "result_building",
-              "preview_ready",
-              "applying",
-              "complete",
-              "failed"
-            ]
-          },
-          "expectedGeneration": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "generation": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "recordCount": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 1000
-          },
-          "chunkCount": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 1000
-          },
-          "snapshotFingerprint": {
-            "anyOf": [
-              {
+            "properties": {
+              "canonicalVersion": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "const": "canonical-json-v1",
+                "default": "canonical-json-v1"
               },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "previewFingerprint": {
-            "anyOf": [
-              {
+              "idempotencyKey": {
                 "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
+                "minLength": 1,
+                "maxLength": 128
               },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "operationId": {
-            "anyOf": [
-              {
+              "deviceId": {
                 "type": "string",
                 "format": "uuid"
               },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "decisionFingerprint": {
-            "anyOf": [
-              {
+              "operationId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "previewFingerprint": {
                 "type": "string",
                 "pattern": "^[a-f0-9]{64}$"
               },
-              {
-                "type": "null"
+              "decisionFingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "protocolVersion": {
+                "type": "integer",
+                "const": 4
+              },
+              "resolutions": {
+                "type": "array",
+                "maxItems": 1000,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "conflictId",
+                    "resolution"
+                  ],
+                  "properties": {
+                    "conflictId": {
+                      "type": "string"
+                    },
+                    "resolution": {
+                      "type": "string",
+                      "enum": [
+                        "keep_guest",
+                        "keep_account",
+                        "manual_required"
+                      ]
+                    }
+                  }
+                }
+              },
+              "groupChoices": {
+                "type": "array",
+                "maxItems": 1000,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "groupId",
+                    "resolution"
+                  ],
+                  "properties": {
+                    "groupId": {
+                      "type": "string"
+                    },
+                    "resolution": {
+                      "type": "string",
+                      "enum": [
+                        "keep_guest",
+                        "keep_account"
+                      ]
+                    }
+                  }
+                }
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
               }
-            ]
+            }
+          }
+        ]
+      },
+      "AdoptionTransferApply": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "deviceId"
+            ],
+            "properties": {
+              "canonicalVersion": {
+                "type": "string",
+                "const": "canonical-json-v1",
+                "default": "canonical-json-v1"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "deviceId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "decisionFingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "expectedGeneration": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
           },
-          "targetGeneration": {
-            "anyOf": [
-              {
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "contentIdentitySchema",
+              "deviceId"
+            ],
+            "properties": {
+              "canonicalVersion": {
+                "type": "string",
+                "const": "canonical-json-v1",
+                "default": "canonical-json-v1"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "deviceId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "decisionFingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "expectedGeneration": {
                 "type": "integer",
                 "minimum": 0
               },
-              {
-                "type": "null"
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
               }
-            ]
-          },
-          "applyCursor": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "applyTotal": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 0
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "accountRevision": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 0
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "failureCode": {
-            "anyOf": [
-              {
+            }
+          }
+        ]
+      },
+      "AdoptionTransferStatus": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "version",
+              "protocolVersion",
+              "accountId",
+              "sessionId",
+              "state",
+              "recordCount",
+              "chunkCount",
+              "generation"
+            ],
+            "properties": {
+              "accountId": {
                 "type": "string"
               },
-              {
-                "type": "null"
+              "sessionId": {
+                "type": "string"
+              },
+              "guestUserId": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "collecting",
+                  "sealing",
+                  "sealed",
+                  "result_building",
+                  "preview_ready",
+                  "applying",
+                  "complete",
+                  "failed"
+                ]
+              },
+              "expectedGeneration": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "recordCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "chunkCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "snapshotFingerprint": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "previewFingerprint": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "operationId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "decisionFingerprint": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "targetGeneration": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "applyCursor": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "applyTotal": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "accountRevision": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "failureCode": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "version": {
+                "type": "integer",
+                "const": 3
+              },
+              "protocolVersion": {
+                "type": "integer",
+                "const": 3
               }
-            ]
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "version",
+              "protocolVersion",
+              "contentIdentitySchema",
+              "accountId",
+              "sessionId",
+              "state",
+              "recordCount",
+              "chunkCount",
+              "generation"
+            ],
+            "properties": {
+              "accountId": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "guestUserId": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "collecting",
+                  "sealing",
+                  "sealed",
+                  "result_building",
+                  "preview_ready",
+                  "applying",
+                  "complete",
+                  "failed"
+                ]
+              },
+              "expectedGeneration": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "recordCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "chunkCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "snapshotFingerprint": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "previewFingerprint": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "operationId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "decisionFingerprint": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "targetGeneration": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "applyCursor": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "applyTotal": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "accountRevision": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "failureCode": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "version": {
+                "type": "integer",
+                "const": 4
+              },
+              "protocolVersion": {
+                "type": "integer",
+                "const": 4
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
+              }
+            }
           }
-        }
+        ]
       },
       "EmptyRequest": {
         "type": "object",
@@ -8596,72 +9986,149 @@
           "applied": {
             "type": "array",
             "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "kind",
-                "recordType",
-                "trackId",
-                "targetId",
-                "version",
-                "fingerprint",
-                "state",
-                "lastMutationId",
-                "updatedAt"
-              ],
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "enum": [
-                    "node",
-                    "item"
-                  ]
-                },
-                "recordType": {
-                  "type": "string",
-                  "enum": [
-                    "active_track",
-                    "training_session_summary",
-                    "training_session_result",
-                    "training_attempt",
-                    "review_queue_entry",
-                    "goal",
-                    "learning_plan"
-                  ]
-                },
-                "trackId": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 128
-                },
-                "targetId": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 256
-                },
-                "version": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "fingerprint": {
-                  "type": "string",
-                  "pattern": "^[a-f0-9]{64}$"
-                },
-                "state": {
+              "oneOf": [
+                {
                   "type": "object",
-                  "additionalProperties": true,
-                  "properties": {}
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "recordType",
+                    "trackId",
+                    "targetId",
+                    "version",
+                    "fingerprint",
+                    "state",
+                    "lastMutationId",
+                    "updatedAt"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "node",
+                        "item"
+                      ]
+                    },
+                    "recordType": {
+                      "type": "string",
+                      "enum": [
+                        "active_track",
+                        "training_session_summary",
+                        "training_session_result",
+                        "training_attempt",
+                        "review_queue_entry",
+                        "goal",
+                        "learning_plan"
+                      ]
+                    },
+                    "trackId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "targetId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "fingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "state": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {}
+                    },
+                    "lastMutationId": {
+                      "type": "string",
+                      "minLength": 16,
+                      "maxLength": 128
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
                 },
-                "lastMutationId": {
-                  "type": "string",
-                  "minLength": 16,
-                  "maxLength": 128
-                },
-                "updatedAt": {
-                  "type": "string",
-                  "format": "date-time"
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "recordType",
+                    "trackId",
+                    "targetId",
+                    "version",
+                    "fingerprint",
+                    "state",
+                    "lastMutationId",
+                    "updatedAt",
+                    "contentIdentitySchema"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "node",
+                        "item"
+                      ]
+                    },
+                    "recordType": {
+                      "type": "string",
+                      "enum": [
+                        "active_track",
+                        "training_session_summary",
+                        "training_session_result",
+                        "training_attempt",
+                        "review_queue_entry",
+                        "goal",
+                        "learning_plan"
+                      ]
+                    },
+                    "trackId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "targetId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "fingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "state": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {}
+                    },
+                    "lastMutationId": {
+                      "type": "string",
+                      "minLength": 16,
+                      "maxLength": 128
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "contentIdentitySchema": {
+                      "type": "string",
+                      "const": "patternly:content-identity:v2"
+                    }
+                  }
                 }
-              }
+              ]
             }
           },
           "duplicates": {
@@ -8673,98 +10140,350 @@
           "conflicts": {
             "type": "array",
             "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "mutationId",
-                "code",
-                "current"
-              ],
-              "properties": {
-                "mutationId": {
-                  "type": "string",
-                  "minLength": 16,
-                  "maxLength": 128
-                },
-                "code": {
-                  "const": "version_conflict"
-                },
-                "current": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "kind",
-                        "recordType",
-                        "trackId",
-                        "targetId",
-                        "version",
-                        "fingerprint",
-                        "state",
-                        "lastMutationId",
-                        "updatedAt"
-                      ],
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": [
-                            "node",
-                            "item"
-                          ]
-                        },
-                        "recordType": {
-                          "type": "string",
-                          "enum": [
-                            "active_track",
-                            "training_session_summary",
-                            "training_session_result",
-                            "training_attempt",
-                            "review_queue_entry",
-                            "goal",
-                            "learning_plan"
-                          ]
-                        },
-                        "trackId": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 128
-                        },
-                        "targetId": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 256
-                        },
-                        "version": {
-                          "type": "integer",
-                          "minimum": 0
-                        },
-                        "fingerprint": {
-                          "type": "string",
-                          "pattern": "^[a-f0-9]{64}$"
-                        },
-                        "state": {
-                          "type": "object",
-                          "additionalProperties": true,
-                          "properties": {}
-                        },
-                        "lastMutationId": {
-                          "type": "string",
-                          "minLength": 16,
-                          "maxLength": 128
-                        },
-                        "updatedAt": {
-                          "type": "string",
-                          "format": "date-time"
-                        }
-                      }
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mutationId",
+                    "code",
+                    "current"
+                  ],
+                  "properties": {
+                    "mutationId": {
+                      "type": "string",
+                      "minLength": 16,
+                      "maxLength": 128
                     },
-                    {
-                      "type": "null"
+                    "code": {
+                      "const": "version_conflict"
+                    },
+                    "current": {
+                      "anyOf": [
+                        {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "kind",
+                                "recordType",
+                                "trackId",
+                                "targetId",
+                                "version",
+                                "fingerprint",
+                                "state",
+                                "lastMutationId",
+                                "updatedAt"
+                              ],
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "node",
+                                    "item"
+                                  ]
+                                },
+                                "recordType": {
+                                  "type": "string",
+                                  "enum": [
+                                    "active_track",
+                                    "training_session_summary",
+                                    "training_session_result",
+                                    "training_attempt",
+                                    "review_queue_entry",
+                                    "goal",
+                                    "learning_plan"
+                                  ]
+                                },
+                                "trackId": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128
+                                },
+                                "targetId": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "version": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "fingerprint": {
+                                  "type": "string",
+                                  "pattern": "^[a-f0-9]{64}$"
+                                },
+                                "state": {
+                                  "type": "object",
+                                  "additionalProperties": true,
+                                  "properties": {}
+                                },
+                                "lastMutationId": {
+                                  "type": "string",
+                                  "minLength": 16,
+                                  "maxLength": 128
+                                },
+                                "updatedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "kind",
+                                "recordType",
+                                "trackId",
+                                "targetId",
+                                "version",
+                                "fingerprint",
+                                "state",
+                                "lastMutationId",
+                                "updatedAt",
+                                "contentIdentitySchema"
+                              ],
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "node",
+                                    "item"
+                                  ]
+                                },
+                                "recordType": {
+                                  "type": "string",
+                                  "enum": [
+                                    "active_track",
+                                    "training_session_summary",
+                                    "training_session_result",
+                                    "training_attempt",
+                                    "review_queue_entry",
+                                    "goal",
+                                    "learning_plan"
+                                  ]
+                                },
+                                "trackId": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128
+                                },
+                                "targetId": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "version": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "fingerprint": {
+                                  "type": "string",
+                                  "pattern": "^[a-f0-9]{64}$"
+                                },
+                                "state": {
+                                  "type": "object",
+                                  "additionalProperties": true,
+                                  "properties": {}
+                                },
+                                "lastMutationId": {
+                                  "type": "string",
+                                  "minLength": 16,
+                                  "maxLength": 128
+                                },
+                                "updatedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                },
+                                "contentIdentitySchema": {
+                                  "type": "string",
+                                  "const": "patternly:content-identity:v2"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
-                  ]
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mutationId",
+                    "code",
+                    "current"
+                  ],
+                  "properties": {
+                    "mutationId": {
+                      "type": "string",
+                      "minLength": 16,
+                      "maxLength": 128
+                    },
+                    "code": {
+                      "const": "content_identity_schema_conflict"
+                    },
+                    "current": {
+                      "anyOf": [
+                        {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "kind",
+                                "recordType",
+                                "trackId",
+                                "targetId",
+                                "version",
+                                "fingerprint",
+                                "state",
+                                "lastMutationId",
+                                "updatedAt"
+                              ],
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "node",
+                                    "item"
+                                  ]
+                                },
+                                "recordType": {
+                                  "type": "string",
+                                  "enum": [
+                                    "active_track",
+                                    "training_session_summary",
+                                    "training_session_result",
+                                    "training_attempt",
+                                    "review_queue_entry",
+                                    "goal",
+                                    "learning_plan"
+                                  ]
+                                },
+                                "trackId": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128
+                                },
+                                "targetId": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "version": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "fingerprint": {
+                                  "type": "string",
+                                  "pattern": "^[a-f0-9]{64}$"
+                                },
+                                "state": {
+                                  "type": "object",
+                                  "additionalProperties": true,
+                                  "properties": {}
+                                },
+                                "lastMutationId": {
+                                  "type": "string",
+                                  "minLength": 16,
+                                  "maxLength": 128
+                                },
+                                "updatedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "kind",
+                                "recordType",
+                                "trackId",
+                                "targetId",
+                                "version",
+                                "fingerprint",
+                                "state",
+                                "lastMutationId",
+                                "updatedAt",
+                                "contentIdentitySchema"
+                              ],
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "node",
+                                    "item"
+                                  ]
+                                },
+                                "recordType": {
+                                  "type": "string",
+                                  "enum": [
+                                    "active_track",
+                                    "training_session_summary",
+                                    "training_session_result",
+                                    "training_attempt",
+                                    "review_queue_entry",
+                                    "goal",
+                                    "learning_plan"
+                                  ]
+                                },
+                                "trackId": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128
+                                },
+                                "targetId": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "version": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "fingerprint": {
+                                  "type": "string",
+                                  "pattern": "^[a-f0-9]{64}$"
+                                },
+                                "state": {
+                                  "type": "object",
+                                  "additionalProperties": true,
+                                  "properties": {}
+                                },
+                                "lastMutationId": {
+                                  "type": "string",
+                                  "minLength": 16,
+                                  "maxLength": 128
+                                },
+                                "updatedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                },
+                                "contentIdentitySchema": {
+                                  "type": "string",
+                                  "const": "patternly:content-identity:v2"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
                 }
-              }
+              ]
             }
           },
           "accountRevisionConflict": {
@@ -8804,138 +10523,278 @@
         ],
         "properties": {
           "preview": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "accountSnapshotVersion",
-              "accountUserId",
-              "conflicts",
-              "fingerprint",
-              "guestSnapshotVersion",
-              "guestUserId",
-              "operationId",
-              "protocolVersion"
-            ],
-            "properties": {
-              "accountSnapshotVersion": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "accountUserId": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "conflicts": {
-                "type": "array",
-                "maxItems": 1000,
-                "items": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": [
-                    "accountVersion",
-                    "conflictId",
-                    "guestVersion",
-                    "recordId",
-                    "recordType"
-                  ],
-                  "properties": {
-                    "accountVersion": {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    "conflictId": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 768
-                    },
-                    "guestVersion": {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    "recordId": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 256
-                    },
-                    "recordType": {
-                      "type": "string",
-                      "enum": [
-                        "active_track",
-                        "training_session_summary",
-                        "training_session_result",
-                        "training_attempt",
-                        "review_queue_entry",
-                        "goal",
-                        "learning_plan"
-                      ]
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "accountSnapshotVersion",
+                  "accountUserId",
+                  "conflicts",
+                  "fingerprint",
+                  "guestSnapshotVersion",
+                  "guestUserId",
+                  "operationId",
+                  "protocolVersion"
+                ],
+                "properties": {
+                  "accountSnapshotVersion": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "accountUserId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "conflicts": {
+                    "type": "array",
+                    "maxItems": 1000,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "accountVersion",
+                        "conflictId",
+                        "guestVersion",
+                        "recordId",
+                        "recordType"
+                      ],
+                      "properties": {
+                        "accountVersion": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "conflictId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 768
+                        },
+                        "guestVersion": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "recordId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "recordType": {
+                          "type": "string",
+                          "enum": [
+                            "active_track",
+                            "training_session_summary",
+                            "training_session_result",
+                            "training_attempt",
+                            "review_queue_entry",
+                            "goal",
+                            "learning_plan"
+                          ]
+                        }
+                      }
                     }
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "guestSnapshotVersion": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "guestUserId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "operationId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "goalPlanConflictGroups": {
+                    "type": "array",
+                    "maxItems": 1000,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "groupId",
+                        "trackId",
+                        "localRecordIds",
+                        "accountRecordIds"
+                      ],
+                      "properties": {
+                        "groupId": {
+                          "type": "string",
+                          "pattern": "^track:.+",
+                          "maxLength": 192
+                        },
+                        "trackId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "localRecordIds": {
+                          "type": "array",
+                          "maxItems": 2,
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "accountRecordIds": {
+                          "type": "array",
+                          "maxItems": 2,
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "protocolVersion": {
+                    "type": "integer",
+                    "enum": [
+                      1,
+                      2
+                    ]
                   }
                 }
               },
-              "fingerprint": {
-                "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
-              },
-              "guestSnapshotVersion": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "guestUserId": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "operationId": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "protocolVersion": {
-                "type": "integer",
-                "enum": [
-                  1,
-                  2
-                ]
-              },
-              "goalPlanConflictGroups": {
-                "type": "array",
-                "maxItems": 1000,
-                "items": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": [
-                    "groupId",
-                    "trackId",
-                    "localRecordIds",
-                    "accountRecordIds"
-                  ],
-                  "properties": {
-                    "groupId": {
-                      "type": "string",
-                      "pattern": "^track:.+",
-                      "maxLength": 192
-                    },
-                    "trackId": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 128
-                    },
-                    "localRecordIds": {
-                      "type": "array",
-                      "maxItems": 2,
-                      "items": {
-                        "type": "string"
-                      }
-                    },
-                    "accountRecordIds": {
-                      "type": "array",
-                      "maxItems": 2,
-                      "items": {
-                        "type": "string"
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "accountSnapshotVersion",
+                  "accountUserId",
+                  "conflicts",
+                  "fingerprint",
+                  "guestSnapshotVersion",
+                  "guestUserId",
+                  "operationId",
+                  "protocolVersion",
+                  "contentIdentitySchema"
+                ],
+                "properties": {
+                  "accountSnapshotVersion": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "accountUserId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "conflicts": {
+                    "type": "array",
+                    "maxItems": 1000,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "accountVersion",
+                        "conflictId",
+                        "guestVersion",
+                        "recordId",
+                        "recordType"
+                      ],
+                      "properties": {
+                        "accountVersion": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "conflictId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 768
+                        },
+                        "guestVersion": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "recordId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "recordType": {
+                          "type": "string",
+                          "enum": [
+                            "active_track",
+                            "training_session_summary",
+                            "training_session_result",
+                            "training_attempt",
+                            "review_queue_entry",
+                            "goal",
+                            "learning_plan"
+                          ]
+                        }
                       }
                     }
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "guestSnapshotVersion": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "guestUserId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "operationId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "goalPlanConflictGroups": {
+                    "type": "array",
+                    "maxItems": 1000,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "groupId",
+                        "trackId",
+                        "localRecordIds",
+                        "accountRecordIds"
+                      ],
+                      "properties": {
+                        "groupId": {
+                          "type": "string",
+                          "pattern": "^track:.+",
+                          "maxLength": 192
+                        },
+                        "trackId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "localRecordIds": {
+                          "type": "array",
+                          "maxItems": 2,
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "accountRecordIds": {
+                          "type": "array",
+                          "maxItems": 2,
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "protocolVersion": {
+                    "type": "integer",
+                    "const": 4
+                  },
+                  "contentIdentitySchema": {
+                    "type": "string",
+                    "const": "patternly:content-identity:v2"
                   }
                 }
               }
-            }
+            ]
           },
           "plan": {
             "type": "object",
@@ -9013,53 +10872,111 @@
           "remoteRecords": {
             "type": "array",
             "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "fingerprint",
-                "recordId",
-                "recordType",
-                "state",
-                "trackId",
-                "version"
-              ],
-              "properties": {
-                "fingerprint": {
-                  "type": "string",
-                  "pattern": "^[a-f0-9]{64}$"
-                },
-                "recordId": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 256
-                },
-                "recordType": {
-                  "type": "string",
-                  "enum": [
-                    "active_track",
-                    "training_session_summary",
-                    "training_session_result",
-                    "training_attempt",
-                    "review_queue_entry",
-                    "goal",
-                    "learning_plan"
-                  ]
-                },
-                "state": {
+              "oneOf": [
+                {
                   "type": "object",
-                  "additionalProperties": true,
-                  "properties": {}
+                  "additionalProperties": false,
+                  "required": [
+                    "fingerprint",
+                    "recordId",
+                    "recordType",
+                    "state",
+                    "trackId",
+                    "version"
+                  ],
+                  "properties": {
+                    "fingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "recordId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "recordType": {
+                      "type": "string",
+                      "enum": [
+                        "active_track",
+                        "training_session_summary",
+                        "training_session_result",
+                        "training_attempt",
+                        "review_queue_entry",
+                        "goal",
+                        "learning_plan"
+                      ]
+                    },
+                    "state": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {}
+                    },
+                    "trackId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
                 },
-                "trackId": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 128
-                },
-                "version": {
-                  "type": "integer",
-                  "minimum": 0
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "fingerprint",
+                    "recordId",
+                    "recordType",
+                    "state",
+                    "trackId",
+                    "version",
+                    "contentIdentitySchema"
+                  ],
+                  "properties": {
+                    "fingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "recordId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "recordType": {
+                      "type": "string",
+                      "enum": [
+                        "active_track",
+                        "training_session_summary",
+                        "training_session_result",
+                        "training_attempt",
+                        "review_queue_entry",
+                        "goal",
+                        "learning_plan"
+                      ]
+                    },
+                    "state": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {}
+                    },
+                    "trackId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "contentIdentitySchema": {
+                      "type": "string",
+                      "const": "patternly:content-identity:v2"
+                    }
+                  }
                 }
-              }
+              ]
             }
           }
         }
@@ -9092,253 +11009,22 @@
           "records": {
             "type": "array",
             "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "fingerprint",
-                "recordId",
-                "recordType",
-                "state",
-                "trackId",
-                "version"
-              ],
-              "properties": {
-                "fingerprint": {
-                  "type": "string",
-                  "pattern": "^[a-f0-9]{64}$"
-                },
-                "recordId": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 256
-                },
-                "recordType": {
-                  "type": "string",
-                  "enum": [
-                    "active_track",
-                    "training_session_summary",
-                    "training_session_result",
-                    "training_attempt",
-                    "review_queue_entry",
-                    "goal",
-                    "learning_plan"
-                  ]
-                },
-                "state": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "properties": {}
-                },
-                "trackId": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 128
-                },
-                "version": {
-                  "type": "integer",
-                  "minimum": 0
-                }
-              }
-            }
-          }
-        }
-      },
-      "AdoptionTransferPreviewResponse": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "version",
-          "accountId",
-          "sessionId",
-          "guestUserId",
-          "state",
-          "expectedGeneration",
-          "generation",
-          "targetGeneration",
-          "recordCount",
-          "chunkCount",
-          "snapshotVersion",
-          "snapshotFingerprint",
-          "previewFingerprint",
-          "operationId",
-          "decisionFingerprint",
-          "applyCursor",
-          "applyTotal",
-          "accountRevision",
-          "failureCode",
-          "preview",
-          "plan",
-          "remoteRecords"
-        ],
-        "properties": {
-          "version": {
-            "type": "integer",
-            "const": 3
-          },
-          "accountId": {
-            "type": "string"
-          },
-          "sessionId": {
-            "type": "string"
-          },
-          "guestUserId": {
-            "type": "string"
-          },
-          "state": {
-            "type": "string"
-          },
-          "expectedGeneration": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "generation": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "targetGeneration": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "recordCount": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "chunkCount": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "snapshotVersion": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "snapshotFingerprint": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "previewFingerprint": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "operationId": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "decisionFingerprint": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "applyCursor": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "applyTotal": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 0
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "accountRevision": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 0
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "failureCode": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "preview": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "accountSnapshotVersion",
-              "accountUserId",
-              "conflicts",
-              "fingerprint",
-              "guestSnapshotVersion",
-              "guestUserId",
-              "operationId",
-              "protocolVersion"
-            ],
-            "properties": {
-              "accountSnapshotVersion": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "accountUserId": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "conflicts": {
-                "type": "array",
-                "maxItems": 1000,
-                "items": {
+              "oneOf": [
+                {
                   "type": "object",
                   "additionalProperties": false,
                   "required": [
-                    "accountVersion",
-                    "conflictId",
-                    "guestVersion",
+                    "fingerprint",
                     "recordId",
-                    "recordType"
+                    "recordType",
+                    "state",
+                    "trackId",
+                    "version"
                   ],
                   "properties": {
-                    "accountVersion": {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    "conflictId": {
+                    "fingerprint": {
                       "type": "string",
-                      "minLength": 1,
-                      "maxLength": 768
-                    },
-                    "guestVersion": {
-                      "type": "integer",
-                      "minimum": 0
+                      "pattern": "^[a-f0-9]{64}$"
                     },
                     "recordId": {
                       "type": "string",
@@ -9356,201 +11042,1314 @@
                         "goal",
                         "learning_plan"
                       ]
-                    }
-                  }
-                }
-              },
-              "fingerprint": {
-                "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
-              },
-              "guestSnapshotVersion": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "guestUserId": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "operationId": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "protocolVersion": {
-                "type": "integer",
-                "enum": [
-                  1,
-                  2
-                ]
-              },
-              "goalPlanConflictGroups": {
-                "type": "array",
-                "maxItems": 1000,
-                "items": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": [
-                    "groupId",
-                    "trackId",
-                    "localRecordIds",
-                    "accountRecordIds"
-                  ],
-                  "properties": {
-                    "groupId": {
-                      "type": "string",
-                      "pattern": "^track:.+",
-                      "maxLength": 192
+                    },
+                    "state": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {}
                     },
                     "trackId": {
                       "type": "string",
                       "minLength": 1,
                       "maxLength": 128
                     },
-                    "localRecordIds": {
-                      "type": "array",
-                      "maxItems": 2,
-                      "items": {
-                        "type": "string"
-                      }
+                    "version": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "fingerprint",
+                    "recordId",
+                    "recordType",
+                    "state",
+                    "trackId",
+                    "version",
+                    "contentIdentitySchema"
+                  ],
+                  "properties": {
+                    "fingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
                     },
-                    "accountRecordIds": {
-                      "type": "array",
-                      "maxItems": 2,
-                      "items": {
-                        "type": "string"
-                      }
+                    "recordId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "recordType": {
+                      "type": "string",
+                      "enum": [
+                        "active_track",
+                        "training_session_summary",
+                        "training_session_result",
+                        "training_attempt",
+                        "review_queue_entry",
+                        "goal",
+                        "learning_plan"
+                      ]
+                    },
+                    "state": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {}
+                    },
+                    "trackId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "contentIdentitySchema": {
+                      "type": "string",
+                      "const": "patternly:content-identity:v2"
                     }
                   }
                 }
-              }
+              ]
             }
-          },
-          "plan": {
+          }
+        }
+      },
+      "AdoptionTransferPreviewResponse": {
+        "oneOf": [
+          {
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "caseId",
-              "localRecordCount",
-              "remoteRecordCount",
-              "uploadRecordIds",
-              "restoreRecordIds",
-              "deduplicatedRecordIds",
-              "conflictRecordIds",
-              "blockingReason"
+              "version",
+              "protocolVersion",
+              "accountId",
+              "sessionId",
+              "guestUserId",
+              "state",
+              "expectedGeneration",
+              "generation",
+              "targetGeneration",
+              "recordCount",
+              "chunkCount",
+              "snapshotVersion",
+              "snapshotFingerprint",
+              "previewFingerprint",
+              "operationId",
+              "decisionFingerprint",
+              "applyCursor",
+              "applyTotal",
+              "accountRevision",
+              "failureCode",
+              "preview",
+              "plan",
+              "remoteRecords"
             ],
             "properties": {
-              "caseId": {
-                "type": "string",
-                "enum": [
-                  "emptyLocalEmptyRemote",
-                  "populatedLocalEmptyRemote",
-                  "emptyLocalPopulatedRemote",
-                  "populatedLocalPopulatedRemote",
-                  "divergentRecord",
-                  "blocked"
-                ]
+              "accountId": {
+                "type": "string"
               },
-              "localRecordCount": {
+              "sessionId": {
+                "type": "string"
+              },
+              "guestUserId": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "expectedGeneration": {
                 "type": "integer",
                 "minimum": 0
               },
-              "remoteRecordCount": {
+              "generation": {
                 "type": "integer",
                 "minimum": 0
               },
-              "uploadRecordIds": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
+              "targetGeneration": {
+                "type": "integer",
+                "minimum": 0
               },
-              "restoreRecordIds": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
+              "recordCount": {
+                "type": "integer",
+                "minimum": 0
               },
-              "deduplicatedRecordIds": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
+              "chunkCount": {
+                "type": "integer",
+                "minimum": 0
               },
-              "conflictRecordIds": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
+              "snapshotVersion": {
+                "type": "integer",
+                "minimum": 0
               },
-              "blockingReason": {
+              "snapshotFingerprint": {
                 "anyOf": [
                   {
                     "type": "string",
-                    "enum": [
-                      "active_session",
-                      "journal_recovery"
-                    ]
+                    "pattern": "^[a-f0-9]{64}$"
                   },
                   {
                     "type": "null"
                   }
                 ]
+              },
+              "previewFingerprint": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "operationId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "decisionFingerprint": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "applyCursor": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "applyTotal": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "accountRevision": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "failureCode": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "preview": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "accountSnapshotVersion",
+                      "accountUserId",
+                      "conflicts",
+                      "fingerprint",
+                      "guestSnapshotVersion",
+                      "guestUserId",
+                      "operationId",
+                      "protocolVersion"
+                    ],
+                    "properties": {
+                      "accountSnapshotVersion": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "accountUserId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "conflicts": {
+                        "type": "array",
+                        "maxItems": 1000,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "accountVersion",
+                            "conflictId",
+                            "guestVersion",
+                            "recordId",
+                            "recordType"
+                          ],
+                          "properties": {
+                            "accountVersion": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "conflictId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 768
+                            },
+                            "guestVersion": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "recordId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "recordType": {
+                              "type": "string",
+                              "enum": [
+                                "active_track",
+                                "training_session_summary",
+                                "training_session_result",
+                                "training_attempt",
+                                "review_queue_entry",
+                                "goal",
+                                "learning_plan"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "fingerprint": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "guestSnapshotVersion": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "guestUserId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "operationId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "goalPlanConflictGroups": {
+                        "type": "array",
+                        "maxItems": 1000,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "groupId",
+                            "trackId",
+                            "localRecordIds",
+                            "accountRecordIds"
+                          ],
+                          "properties": {
+                            "groupId": {
+                              "type": "string",
+                              "pattern": "^track:.+",
+                              "maxLength": 192
+                            },
+                            "trackId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            },
+                            "localRecordIds": {
+                              "type": "array",
+                              "maxItems": 2,
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "accountRecordIds": {
+                              "type": "array",
+                              "maxItems": 2,
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "protocolVersion": {
+                        "type": "integer",
+                        "enum": [
+                          1,
+                          2
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "accountSnapshotVersion",
+                      "accountUserId",
+                      "conflicts",
+                      "fingerprint",
+                      "guestSnapshotVersion",
+                      "guestUserId",
+                      "operationId",
+                      "protocolVersion",
+                      "contentIdentitySchema"
+                    ],
+                    "properties": {
+                      "accountSnapshotVersion": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "accountUserId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "conflicts": {
+                        "type": "array",
+                        "maxItems": 1000,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "accountVersion",
+                            "conflictId",
+                            "guestVersion",
+                            "recordId",
+                            "recordType"
+                          ],
+                          "properties": {
+                            "accountVersion": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "conflictId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 768
+                            },
+                            "guestVersion": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "recordId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "recordType": {
+                              "type": "string",
+                              "enum": [
+                                "active_track",
+                                "training_session_summary",
+                                "training_session_result",
+                                "training_attempt",
+                                "review_queue_entry",
+                                "goal",
+                                "learning_plan"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "fingerprint": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "guestSnapshotVersion": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "guestUserId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "operationId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "goalPlanConflictGroups": {
+                        "type": "array",
+                        "maxItems": 1000,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "groupId",
+                            "trackId",
+                            "localRecordIds",
+                            "accountRecordIds"
+                          ],
+                          "properties": {
+                            "groupId": {
+                              "type": "string",
+                              "pattern": "^track:.+",
+                              "maxLength": 192
+                            },
+                            "trackId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            },
+                            "localRecordIds": {
+                              "type": "array",
+                              "maxItems": 2,
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "accountRecordIds": {
+                              "type": "array",
+                              "maxItems": 2,
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "protocolVersion": {
+                        "type": "integer",
+                        "const": 4
+                      },
+                      "contentIdentitySchema": {
+                        "type": "string",
+                        "const": "patternly:content-identity:v2"
+                      }
+                    }
+                  }
+                ]
+              },
+              "plan": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "caseId",
+                  "localRecordCount",
+                  "remoteRecordCount",
+                  "uploadRecordIds",
+                  "restoreRecordIds",
+                  "deduplicatedRecordIds",
+                  "conflictRecordIds",
+                  "blockingReason"
+                ],
+                "properties": {
+                  "caseId": {
+                    "type": "string",
+                    "enum": [
+                      "emptyLocalEmptyRemote",
+                      "populatedLocalEmptyRemote",
+                      "emptyLocalPopulatedRemote",
+                      "populatedLocalPopulatedRemote",
+                      "divergentRecord",
+                      "blocked"
+                    ]
+                  },
+                  "localRecordCount": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "remoteRecordCount": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "uploadRecordIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "restoreRecordIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "deduplicatedRecordIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "conflictRecordIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "blockingReason": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "active_session",
+                          "journal_recovery"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              },
+              "remoteRecords": {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "fingerprint",
+                        "recordId",
+                        "recordType",
+                        "state",
+                        "trackId",
+                        "version"
+                      ],
+                      "properties": {
+                        "fingerprint": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "recordId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "recordType": {
+                          "type": "string",
+                          "enum": [
+                            "active_track",
+                            "training_session_summary",
+                            "training_session_result",
+                            "training_attempt",
+                            "review_queue_entry",
+                            "goal",
+                            "learning_plan"
+                          ]
+                        },
+                        "state": {
+                          "type": "object",
+                          "additionalProperties": true,
+                          "properties": {}
+                        },
+                        "trackId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "version": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "fingerprint",
+                        "recordId",
+                        "recordType",
+                        "state",
+                        "trackId",
+                        "version",
+                        "contentIdentitySchema"
+                      ],
+                      "properties": {
+                        "fingerprint": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "recordId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "recordType": {
+                          "type": "string",
+                          "enum": [
+                            "active_track",
+                            "training_session_summary",
+                            "training_session_result",
+                            "training_attempt",
+                            "review_queue_entry",
+                            "goal",
+                            "learning_plan"
+                          ]
+                        },
+                        "state": {
+                          "type": "object",
+                          "additionalProperties": true,
+                          "properties": {}
+                        },
+                        "trackId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "version": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "contentIdentitySchema": {
+                          "type": "string",
+                          "const": "patternly:content-identity:v2"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "version": {
+                "type": "integer",
+                "const": 3
+              },
+              "protocolVersion": {
+                "type": "integer",
+                "const": 3
               }
             }
           },
-          "remoteRecords": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "fingerprint",
-                "recordId",
-                "recordType",
-                "state",
-                "trackId",
-                "version"
-              ],
-              "properties": {
-                "fingerprint": {
-                  "type": "string",
-                  "pattern": "^[a-f0-9]{64}$"
-                },
-                "recordId": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 256
-                },
-                "recordType": {
-                  "type": "string",
-                  "enum": [
-                    "active_track",
-                    "training_session_summary",
-                    "training_session_result",
-                    "training_attempt",
-                    "review_queue_entry",
-                    "goal",
-                    "learning_plan"
-                  ]
-                },
-                "state": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "properties": {}
-                },
-                "trackId": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 128
-                },
-                "version": {
-                  "type": "integer",
-                  "minimum": 0
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "version",
+              "protocolVersion",
+              "contentIdentitySchema",
+              "accountId",
+              "sessionId",
+              "guestUserId",
+              "state",
+              "expectedGeneration",
+              "generation",
+              "targetGeneration",
+              "recordCount",
+              "chunkCount",
+              "snapshotVersion",
+              "snapshotFingerprint",
+              "previewFingerprint",
+              "operationId",
+              "decisionFingerprint",
+              "applyCursor",
+              "applyTotal",
+              "accountRevision",
+              "failureCode",
+              "preview",
+              "plan",
+              "remoteRecords"
+            ],
+            "properties": {
+              "accountId": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "guestUserId": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "expectedGeneration": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "targetGeneration": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "recordCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "chunkCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "snapshotVersion": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "snapshotFingerprint": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "previewFingerprint": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "operationId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "decisionFingerprint": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "applyCursor": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "applyTotal": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "accountRevision": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "failureCode": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "preview": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "accountSnapshotVersion",
+                      "accountUserId",
+                      "conflicts",
+                      "fingerprint",
+                      "guestSnapshotVersion",
+                      "guestUserId",
+                      "operationId",
+                      "protocolVersion"
+                    ],
+                    "properties": {
+                      "accountSnapshotVersion": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "accountUserId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "conflicts": {
+                        "type": "array",
+                        "maxItems": 1000,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "accountVersion",
+                            "conflictId",
+                            "guestVersion",
+                            "recordId",
+                            "recordType"
+                          ],
+                          "properties": {
+                            "accountVersion": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "conflictId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 768
+                            },
+                            "guestVersion": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "recordId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "recordType": {
+                              "type": "string",
+                              "enum": [
+                                "active_track",
+                                "training_session_summary",
+                                "training_session_result",
+                                "training_attempt",
+                                "review_queue_entry",
+                                "goal",
+                                "learning_plan"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "fingerprint": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "guestSnapshotVersion": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "guestUserId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "operationId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "goalPlanConflictGroups": {
+                        "type": "array",
+                        "maxItems": 1000,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "groupId",
+                            "trackId",
+                            "localRecordIds",
+                            "accountRecordIds"
+                          ],
+                          "properties": {
+                            "groupId": {
+                              "type": "string",
+                              "pattern": "^track:.+",
+                              "maxLength": 192
+                            },
+                            "trackId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            },
+                            "localRecordIds": {
+                              "type": "array",
+                              "maxItems": 2,
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "accountRecordIds": {
+                              "type": "array",
+                              "maxItems": 2,
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "protocolVersion": {
+                        "type": "integer",
+                        "enum": [
+                          1,
+                          2
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "accountSnapshotVersion",
+                      "accountUserId",
+                      "conflicts",
+                      "fingerprint",
+                      "guestSnapshotVersion",
+                      "guestUserId",
+                      "operationId",
+                      "protocolVersion",
+                      "contentIdentitySchema"
+                    ],
+                    "properties": {
+                      "accountSnapshotVersion": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "accountUserId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "conflicts": {
+                        "type": "array",
+                        "maxItems": 1000,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "accountVersion",
+                            "conflictId",
+                            "guestVersion",
+                            "recordId",
+                            "recordType"
+                          ],
+                          "properties": {
+                            "accountVersion": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "conflictId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 768
+                            },
+                            "guestVersion": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "recordId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "recordType": {
+                              "type": "string",
+                              "enum": [
+                                "active_track",
+                                "training_session_summary",
+                                "training_session_result",
+                                "training_attempt",
+                                "review_queue_entry",
+                                "goal",
+                                "learning_plan"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "fingerprint": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "guestSnapshotVersion": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "guestUserId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "operationId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "goalPlanConflictGroups": {
+                        "type": "array",
+                        "maxItems": 1000,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "groupId",
+                            "trackId",
+                            "localRecordIds",
+                            "accountRecordIds"
+                          ],
+                          "properties": {
+                            "groupId": {
+                              "type": "string",
+                              "pattern": "^track:.+",
+                              "maxLength": 192
+                            },
+                            "trackId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            },
+                            "localRecordIds": {
+                              "type": "array",
+                              "maxItems": 2,
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "accountRecordIds": {
+                              "type": "array",
+                              "maxItems": 2,
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "protocolVersion": {
+                        "type": "integer",
+                        "const": 4
+                      },
+                      "contentIdentitySchema": {
+                        "type": "string",
+                        "const": "patternly:content-identity:v2"
+                      }
+                    }
+                  }
+                ]
+              },
+              "plan": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "caseId",
+                  "localRecordCount",
+                  "remoteRecordCount",
+                  "uploadRecordIds",
+                  "restoreRecordIds",
+                  "deduplicatedRecordIds",
+                  "conflictRecordIds",
+                  "blockingReason"
+                ],
+                "properties": {
+                  "caseId": {
+                    "type": "string",
+                    "enum": [
+                      "emptyLocalEmptyRemote",
+                      "populatedLocalEmptyRemote",
+                      "emptyLocalPopulatedRemote",
+                      "populatedLocalPopulatedRemote",
+                      "divergentRecord",
+                      "blocked"
+                    ]
+                  },
+                  "localRecordCount": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "remoteRecordCount": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "uploadRecordIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "restoreRecordIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "deduplicatedRecordIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "conflictRecordIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "blockingReason": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "active_session",
+                          "journal_recovery"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
                 }
+              },
+              "remoteRecords": {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "fingerprint",
+                        "recordId",
+                        "recordType",
+                        "state",
+                        "trackId",
+                        "version"
+                      ],
+                      "properties": {
+                        "fingerprint": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "recordId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "recordType": {
+                          "type": "string",
+                          "enum": [
+                            "active_track",
+                            "training_session_summary",
+                            "training_session_result",
+                            "training_attempt",
+                            "review_queue_entry",
+                            "goal",
+                            "learning_plan"
+                          ]
+                        },
+                        "state": {
+                          "type": "object",
+                          "additionalProperties": true,
+                          "properties": {}
+                        },
+                        "trackId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "version": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "fingerprint",
+                        "recordId",
+                        "recordType",
+                        "state",
+                        "trackId",
+                        "version",
+                        "contentIdentitySchema"
+                      ],
+                      "properties": {
+                        "fingerprint": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "recordId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "recordType": {
+                          "type": "string",
+                          "enum": [
+                            "active_track",
+                            "training_session_summary",
+                            "training_session_result",
+                            "training_attempt",
+                            "review_queue_entry",
+                            "goal",
+                            "learning_plan"
+                          ]
+                        },
+                        "state": {
+                          "type": "object",
+                          "additionalProperties": true,
+                          "properties": {}
+                        },
+                        "trackId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "version": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "contentIdentitySchema": {
+                          "type": "string",
+                          "const": "patternly:content-identity:v2"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "version": {
+                "type": "integer",
+                "const": 4
+              },
+              "protocolVersion": {
+                "type": "integer",
+                "const": 4
+              },
+              "contentIdentitySchema": {
+                "type": "string",
+                "const": "patternly:content-identity:v2"
               }
             }
           }
-        }
+        ]
       },
       "DeletionOperationStatus": {
         "type": "object",

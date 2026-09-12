@@ -7,10 +7,15 @@ import {
   guestMergeSnapshotSchema,
 } from "../src/modules/users/merge.js";
 import {
+  CONTENT_IDENTITY_SCHEMA,
+  createProgressPageToken,
   isSyncRequestWithinBudget,
+  parseProgressPageToken,
   progressMutationSchema,
+  progressMutationV4Schema,
   syncRequestSchema,
 } from "../src/modules/progress/contracts.js";
+import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
 import { canonicalJson, canonicalJsonBytes } from "../src/infrastructure/identity/canonicalJson.js";
 import { MAX_SERIALIZED_JSON_UTF16_CODE_UNITS } from "../src/modules/progress/serializedJsonLimits.js";
 
@@ -115,4 +120,33 @@ test("protocol-v3 sync carries durable batch metadata and enforces the complete 
   const oversized = { ...request, mutations: [mutation({ value: "x".repeat(520_000) })] };
   assert.equal(syncRequestSchema.safeParse(oversized).success, false);
   assert.equal(isSyncRequestWithinBudget(oversized), false);
+});
+
+test("protocol-v4 accepts only resolved content identity leaves and binds schema to fingerprints", () => {
+  const state = {
+    answer: {
+      trackId: "coding-interview-dsa-problem-solving",
+      questionId: "q-1",
+      contentVersion: "2026.09.1",
+      artifactSha256: "a".repeat(64),
+    },
+  };
+  const base = { mutationId: "mutation-v4-00000001", kind: "item" as const, recordType: "training_attempt" as const, trackId: "coding-interview-dsa-problem-solving", targetId: "attempt-v4", expectedVersion: null, state };
+  const mutationV4 = { ...base, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA, fingerprint: createMergeRecordFingerprint({ recordId: base.targetId, recordType: base.recordType, state, trackId: base.trackId, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA }) };
+  assert.equal(progressMutationV4Schema.safeParse(mutationV4).success, true);
+  assert.equal(syncRequestSchema.safeParse({ protocolVersion: 4, canonicalVersion: "canonical-json-v1", contentIdentitySchema: CONTENT_IDENTITY_SCHEMA, expectedAccountRevision: 0, deviceId: "00000000-0000-4000-8000-000000000000", sessionId: "session-v4", batchId: "batch-v4", planVersion: 4, highWatermark: 1, mutations: [mutationV4] }).success, true);
+  assert.equal(progressMutationV4Schema.safeParse({ ...mutationV4, state: { answer: { ...state.answer, contentPackagePin: "legacy" } } }).success, false);
+  assert.equal(progressMutationV4Schema.safeParse({ ...mutationV4, state: { answer: { ...state.answer, itemId: "legacy" } } }).success, false);
+  assert.equal(progressMutationV4Schema.safeParse({ ...mutationV4, state: { answer: { trackId: base.trackId, questionId: "q-1", contentVersion: "2026.09.1", artifactSha256: "not-a-sha" } } }).success, false);
+  assert.equal(syncRequestSchema.safeParse({ protocolVersion: 4, canonicalVersion: "canonical-json-v1", contentIdentitySchema: "patternly:content-identity:v1", expectedAccountRevision: 0, deviceId: "00000000-0000-4000-8000-000000000000", sessionId: "session-v4", batchId: "batch-v4", planVersion: 4, highWatermark: 1, mutations: [mutationV4] }).success, false);
+});
+
+test("v4 pagination tokens carry and verify the identity schema", () => {
+  const token = createProgressPageToken({ version: 1, userId: guestUserId, generation: 2, accountRevision: 3, cursor: "cursor", protocolVersion: 4, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA });
+  assert.deepEqual(parseProgressPageToken(token), { version: 1, userId: guestUserId, generation: 2, accountRevision: 3, cursor: "cursor", protocolVersion: 4, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA });
+  const [encoded, checksum] = token.split(".");
+  const payload = JSON.parse(Buffer.from(encoded!, "base64url").toString("utf8")) as Record<string, unknown>;
+  payload.contentIdentitySchema = "patternly:content-identity:v1";
+  const tampered = `${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}.${checksum}`;
+  assert.throws(() => parseProgressPageToken(tampered), /progress_pagination_token_invalid/u);
 });

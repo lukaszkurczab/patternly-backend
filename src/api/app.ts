@@ -8,7 +8,7 @@ import type { AppCheckTokenVerifier } from "../infrastructure/firebase/appCheckV
 import { OPENAPI_DOCUMENT } from "./openapi.js";
 import { authenticateRequest } from "../modules/auth/request.js";
 import type { BackendStores } from "../infrastructure/firestore/stores.js";
-import { createProgressPageToken, isSyncRequestWithinBudget, parseProgressPageToken, syncRequestSchema, type ProgressRecord, type SyncBatchMetadata } from "../modules/progress/contracts.js";
+import { CONTENT_IDENTITY_SCHEMA, createProgressPageToken, isSyncRequestWithinBudget, parseProgressPageToken, syncRequestSchema, type ProgressRecord, type SyncBatchMetadata } from "../modules/progress/contracts.js";
 import { guestMergeConfirmationSchema, guestMergeSnapshotSchema } from "../modules/users/merge.js";
 import { createContentReportSchema, transitionContentReportSchema } from "../modules/content-reports/contracts.js";
 import { accountRecoveryCodeConsumeSchema, accountRecoveryCodeIssueSchema, accountSessionRevokeSchema, accountDeletionRequestSchema, publicDeletionStatusSchema } from "../modules/account-lifecycle/contracts.js";
@@ -93,6 +93,7 @@ const errorCode = (error: unknown): string => {
   if (message === "sync_request_too_large") return "sync_request_too_large";
   if (message === "progress_pagination_token_invalid") return "progress_pagination_token_invalid";
   if (message === "progress_generation_conflict") return "progress_generation_conflict";
+  if (message === "content_identity_schema_conflict") return "content_identity_schema_conflict";
   if (message.startsWith("adoption_transfer_")) return message;
   if (message === "firestore_not_ready") return "firestore_not_ready";
   if (message === "authentication_required") return "authentication_required";
@@ -137,6 +138,7 @@ const ACCOUNT_SYNC_REJECTION_CODES = new Set([
   "progress_pagination_token_invalid",
   "progress_generation_conflict",
   "mutation_id_reuse",
+  "content_identity_schema_conflict",
   "merge_preview_mismatch",
   "merge_resolution_incomplete",
   "merge_resolution_mismatch",
@@ -171,11 +173,11 @@ function requireStores(dependencies: ApplicationDependencies): BackendStores {
 
 function adoptionTransferErrorResponse(error: unknown, reply: FastifyReply): boolean {
   const message = error instanceof Error ? error.message : "internal_error";
-  if (!message.startsWith("adoption_transfer_") && !["active_session_adoption_blocked", "journal_recovery_required", "progress_fingerprint_mismatch", "goal_plan_bundle_invalid"].includes(message)) return false;
+  if (!message.startsWith("adoption_transfer_") && !["active_session_adoption_blocked", "journal_recovery_required", "progress_fingerprint_mismatch", "goal_plan_bundle_invalid", "content_identity_schema_conflict"].includes(message)) return false;
   const notFound = message === "adoption_transfer_not_found";
   const tooLarge = message === "adoption_transfer_record_limit" || message.includes("too_large");
   const conflict = message.includes("conflict") || message.includes("mismatch") || message.includes("stale") || message.includes("precondition") || message.includes("duplicate") || message.includes("generation") || message.includes("cursor") || message.includes("incomplete") || message.includes("sequence");
-  const status = notFound ? 404 : tooLarge ? 413 : conflict || message === "active_session_adoption_blocked" || message === "journal_recovery_required" ? 409 : 400;
+  const status = notFound ? 404 : tooLarge ? 413 : conflict || message === "active_session_adoption_blocked" || message === "journal_recovery_required" || message === "content_identity_schema_conflict" ? 409 : 400;
   reply.code(status).send({ error: { code: errorCode(error) } });
   return true;
 }
@@ -438,8 +440,8 @@ export function buildApplication(dependencies: ApplicationDependencies) {
 
   app.get("/v1/progress", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const requested = (request.query as { protocolVersion?: unknown }).protocolVersion;
-    if (requested !== undefined && requested !== "1" && requested !== "2") return reply.code(400).send({ error: { code: "invalid_request" } });
-    const protocolVersion = requested === "2" ? 2 : 1;
+    if (requested !== undefined && requested !== "1" && requested !== "2" && requested !== "4") return reply.code(400).send({ error: { code: "invalid_request" } });
+    const protocolVersion = requested === "4" ? 4 : requested === "2" ? 2 : 1;
     const snapshot = await requireStores(dependencies).progress.readSnapshot(request.userId!, protocolVersion);
     const query = request.query as { pageSize?: unknown; pageToken?: unknown };
     if (query.pageSize === undefined && query.pageToken === undefined) return { accountRevision: snapshot.accountRevision, generation: snapshot.generation ?? 0, records: snapshot.records };
@@ -451,6 +453,8 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       try {
         const token = parseProgressPageToken(query.pageToken);
         if (token.userId !== request.userId || token.accountRevision !== snapshot.accountRevision || token.generation !== (snapshot.generation ?? 0)) return reply.code(409).send({ error: { code: "progress_generation_conflict" } });
+        if (protocolVersion === 4 && (token.protocolVersion !== 4 || token.contentIdentitySchema !== CONTENT_IDENTITY_SCHEMA)) return reply.code(409).send({ error: { code: "content_identity_schema_conflict" } });
+        if (protocolVersion !== 4 && token.protocolVersion !== undefined && token.protocolVersion !== protocolVersion) return reply.code(409).send({ error: { code: "progress_generation_conflict" } });
         cursor = token.cursor;
       } catch (error) {
         if (error instanceof Error && error.message === "progress_pagination_token_invalid") return reply.code(400).send({ error: { code: "progress_pagination_token_invalid" } });
@@ -464,7 +468,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     const page = records.slice(start, start + pageSize);
     const last = page.at(-1);
     const nextPageToken = start + page.length < records.length && last
-      ? createProgressPageToken({ version: 1, userId: request.userId!, generation: snapshot.generation ?? 0, accountRevision: snapshot.accountRevision, cursor: progressRecordIdentity(last) })
+      ? createProgressPageToken({ version: 1, userId: request.userId!, generation: snapshot.generation ?? 0, accountRevision: snapshot.accountRevision, cursor: progressRecordIdentity(last), ...(protocolVersion === 4 ? { protocolVersion: 4, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : { protocolVersion }) })
       : null;
     return { accountRevision: snapshot.accountRevision, generation: snapshot.generation ?? 0, records: page, nextPageToken };
   });
@@ -581,14 +585,17 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     const withinBudget = isSyncRequestWithinBudget(request.body);
     if (!parsed.success || !withinBudget) {
       const recordTooLarge = parsed.success === false && parsed.error.issues.some((issue) => issue.message === "progress_state_too_large");
+      const identitySchemaConflict = parsed.success === false && parsed.error.issues.some((issue) => issue.message === "content_identity_schema_conflict");
       const envelopeTooLarge = parsed.success && !withinBudget;
-      const code = recordTooLarge ? "progress_state_too_large" : envelopeTooLarge ? "sync_request_too_large" : "invalid_request";
+      const code = identitySchemaConflict ? "content_identity_schema_conflict" : recordTooLarge ? "progress_state_too_large" : envelopeTooLarge ? "sync_request_too_large" : "invalid_request";
       logAccountSyncRejection(request, "sync", code);
-      return reply.code(recordTooLarge || envelopeTooLarge ? 413 : 400).send({ error: { code, ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
+      return reply.code(identitySchemaConflict ? 409 : recordTooLarge || envelopeTooLarge ? 413 : 400).send({ error: { code, ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
     }
     try {
-      const metadata: SyncBatchMetadata | undefined = parsed.data.protocolVersion === 3
-        ? { sessionId: parsed.data.sessionId, batchId: parsed.data.batchId, planVersion: 3, highWatermark: parsed.data.highWatermark }
+      const metadata: SyncBatchMetadata | undefined = parsed.data.protocolVersion === 4
+        ? { sessionId: parsed.data.sessionId, batchId: parsed.data.batchId, planVersion: 4, highWatermark: parsed.data.highWatermark, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA }
+        : parsed.data.protocolVersion === 3
+          ? { sessionId: parsed.data.sessionId, batchId: parsed.data.batchId, planVersion: 3, highWatermark: parsed.data.highWatermark }
         : undefined;
       const result = await requireStores(dependencies).progress.applyBatch(request.userId!, parsed.data.deviceId, parsed.data.expectedAccountRevision, parsed.data.mutations, metadata);
       if (result.conflicts.length > 0 || result.accountRevisionConflict) {
@@ -598,6 +605,10 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       return reply.code(200).send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : "internal_error";
+      if (message === "content_identity_schema_conflict") {
+        logAccountSyncRejection(request, "sync", message);
+        return reply.code(409).send({ error: { code: errorCode(error) } });
+      }
       if (message === "progress_fingerprint_mismatch" || message === "goal_plan_bundle_invalid") {
         logAccountSyncRejection(request, "sync", message);
         return reply.code(400).send({ error: { code: errorCode(error) } });
@@ -620,6 +631,10 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       return reply.code(200).send(await requireStores(dependencies).progress.previewAdoption(request.userId!, parsed.data));
     } catch (error) {
       const message = error instanceof Error ? error.message : "internal_error";
+      if (message === "content_identity_schema_conflict") {
+        logAccountSyncRejection(request, "preview", message);
+        return reply.code(409).send({ error: { code: errorCode(error) } });
+      }
       if (message === "progress_fingerprint_mismatch" || message === "goal_plan_bundle_invalid") {
         logAccountSyncRejection(request, "preview", message);
         return reply.code(400).send({ error: { code: errorCode(error) } });
@@ -641,7 +656,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       return reply.code(200).send(await requireStores(dependencies).progress.confirmAdoption(request.userId!, deviceId, snapshot.data, confirmation.data));
     } catch (error) {
       const message = error instanceof Error ? error.message : "internal_error";
-      if (["merge_preview_mismatch", "merge_resolution_incomplete", "merge_resolution_mismatch", "merge_conflict_requires_manual_resolution", "merge_group_choice_incomplete", "merge_group_choice_mismatch", "active_session_adoption_blocked", "journal_recovery_required", "mutation_id_reuse"].includes(message)) {
+      if (["merge_preview_mismatch", "merge_resolution_incomplete", "merge_resolution_mismatch", "merge_conflict_requires_manual_resolution", "merge_group_choice_incomplete", "merge_group_choice_mismatch", "active_session_adoption_blocked", "journal_recovery_required", "mutation_id_reuse", "content_identity_schema_conflict"].includes(message)) {
         logAccountSyncRejection(request, "confirm", message);
         return reply.code(409).send({ error: { code: errorCode(error) } });
       }

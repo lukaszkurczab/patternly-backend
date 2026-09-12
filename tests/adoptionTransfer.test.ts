@@ -13,11 +13,13 @@ import {
   createAdoptionSnapshotSeal,
   createAdoptionTransfer,
   createAdoptionTransferChunkFingerprint,
+  adoptionTransferRecordSchema,
   adoptionTransferRecordKey,
   markAdoptionPreviewReady,
   sealAdoptionTransfer,
 } from "../src/modules/users/adoptionTransfer.js";
 import { buildGuestMergePreview, createMergeRecordFingerprint } from "../src/modules/users/merge.js";
+import { CONTENT_IDENTITY_SCHEMA } from "../src/modules/progress/contracts.js";
 
 const accountId = "11111111-1111-4111-8111-111111111111";
 const guestUserId = "22222222-2222-4222-8222-222222222222";
@@ -101,4 +103,18 @@ test("protocol-v3 full identity remains collision-safe for separator-bearing ids
   });
   assert.equal(preview.plan.uploadRecordIds.length, 2);
   assert.deepEqual(new Set(preview.plan.uploadRecordIds), new Set([adoptionTransferRecordKey(first), adoptionTransferRecordKey(second)]));
+});
+
+test("protocol-v4 adoption preserves the identity schema and rejects legacy records", () => {
+  const state = { ref: { trackId, questionId: "q-v4", contentVersion: "2026.09.1", artifactSha256: "b".repeat(64) } };
+  const base = { recordType: "training_attempt" as const, recordId: "attempt-v4", trackId, state, version: 0, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA };
+  const v4Record = { ...base, fingerprint: createMergeRecordFingerprint(base) };
+  assert.equal(adoptionTransferRecordSchema.safeParse(v4Record).success, true);
+  const transfer = createAdoptionTransfer({ accountId, sessionId: "session-v4", guestUserId, snapshotVersion: 3, expectedGeneration: 0, protocolVersion: 4, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA });
+  const appended = appendAdoptionTransferRecord(transfer, v4Record);
+  assert.equal(appended.contentIdentitySchema, CONTENT_IDENTITY_SCHEMA);
+  assert.equal(appended.operationFingerprint, transfer.operationFingerprint);
+  assert.throws(() => appendAdoptionTransferRecord(appended, record("training_attempt", "legacy")), /content_identity_schema_conflict/u);
+  assert.throws(() => appendAdoptionTransferRecord(createAdoptionTransfer({ accountId, sessionId: "session-v3", guestUserId, snapshotVersion: 3, expectedGeneration: 0 }), v4Record), /content_identity_schema_conflict/u);
+  assert.equal(createAdoptionSnapshotSeal({ guestUserId, snapshotVersion: 3, records: [v4Record], chunks: [], contentIdentitySchema: CONTENT_IDENTITY_SCHEMA }), createAdoptionSnapshotSeal({ guestUserId, snapshotVersion: 3, records: [v4Record], chunks: [], contentIdentitySchema: CONTENT_IDENTITY_SCHEMA }));
 });

@@ -1,6 +1,17 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { legacySyncableRecordTypeSchema, syncableRecordTypeSchema, type ProgressRecord, type SyncableRecordType } from "../progress/contracts.js";
+import {
+  CONTENT_IDENTITY_SCHEMA,
+  contentIdentitySchema,
+  legacySyncableRecordTypeSchema,
+  progressMutationV4Schema,
+  resolvedContentRefSchema,
+  syncableRecordTypeSchema,
+  assertV4ContentIdentityState,
+  type ContentIdentitySchema,
+  type ProgressRecord,
+  type SyncableRecordType,
+} from "../progress/contracts.js";
 import { MAX_SERIALIZED_JSON_UTF16_CODE_UNITS } from "../progress/serializedJsonLimits.js";
 import { canonicalJson as canonicalJsonV3 } from "../../infrastructure/identity/canonicalJson.js";
 
@@ -26,33 +37,48 @@ const planSchema = z.object({
   createdAt: z.string().datetime({ offset: true }), updatedAt: z.string().datetime({ offset: true }), planRevision: revision, commandId: z.string().min(1),
   slots: z.array(z.object({ slotId: z.string().min(1), day: days, localTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/u), sessionLength: z.number().int().positive() }).strict()).min(1).max(7),
 }).strict();
+/** C1a plan projection: the legacy package pin is replaced by the exact SHA. */
+const planSchemaV4 = z.object({
+  schemaVersion: z.literal(1), planId: z.string().min(1), trackId, goalRevision: revision,
+  status: z.enum(["accepted", "paused", "completed"]), timezone: z.string().min(1), contentVersion: z.string().min(1), artifactSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  acceptedTarget: z.object({ meaning: z.enum(["event", "deadline", "checkpoint", "none"]), targetDate: z.string().nullable() }).strict(),
+  createdAt: z.string().datetime({ offset: true }), updatedAt: z.string().datetime({ offset: true }), planRevision: revision, commandId: z.string().min(1),
+  slots: z.array(z.object({ slotId: z.string().min(1), day: days, localTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/u), sessionLength: z.number().int().positive() }).strict()).min(1).max(7),
+}).strict();
 const goalStateSchema = z.object({ schemaVersion: z.literal(1), revision, record: goalSchema }).strict();
 const planStateSchema = z.object({ schemaVersion: z.literal(1), revision, plan: planSchema }).strict();
+const planStateSchemaV4 = z.object({ schemaVersion: z.literal(1), revision, plan: planSchemaV4 }).strict();
 const tombstoneSchema = z.object({ deleted: z.literal(true) }).strict();
 
 const recordShape = { fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), recordId: id, state: stateSchema, trackId, version: z.number().int().nonnegative() } as const;
 export const legacyGuestMergeRecordSchema = z.object({ ...recordShape, recordType: legacySyncableRecordTypeSchema }).strict();
 export const guestMergeRecordSchema = z.object({ ...recordShape, recordType: syncableRecordTypeSchema }).strict();
+const guestMergeRecordV4Schema = z.object({ ...recordShape, recordType: syncableRecordTypeSchema, contentIdentitySchema, state: z.record(z.unknown()).superRefine((value, context) => {
+  try { assertV4ContentIdentityState(value); } catch (error) { context.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : "content_identity_schema_conflict" }); }
+}) }).strict();
 const snapshotShape = { guestSnapshotVersion: z.number().int().nonnegative(), guestUserId: uuid, activeSession: z.boolean(), pendingJournal: z.boolean() } as const;
 const snapshotV1 = z.object({ ...snapshotShape, protocolVersion: z.literal(1).optional().default(1), records: z.array(legacyGuestMergeRecordSchema).max(1_000) }).strict();
 const snapshotV2 = z.object({ ...snapshotShape, protocolVersion: z.literal(2), records: z.array(guestMergeRecordSchema).max(1_000) }).strict();
-export const guestMergeSnapshotSchema = z.union([snapshotV2, snapshotV1]);
+const snapshotV4 = z.object({ ...snapshotShape, protocolVersion: z.literal(4), contentIdentitySchema, records: z.array(guestMergeRecordV4Schema).max(1_000) }).strict();
+export const guestMergeSnapshotSchema = z.union([snapshotV4, snapshotV2, snapshotV1]);
 export const guestMergeConflictSchema = z.object({ accountVersion: z.number().int().nonnegative(), conflictId: z.string().min(1).max(768), guestVersion: z.number().int().nonnegative(), recordId: id, recordType: syncableRecordTypeSchema }).strict();
 export const goalPlanConflictGroupSchema = z.object({ groupId: z.string().regex(/^track:.+/u).max(192), trackId, localRecordIds: z.array(z.string()).max(2), accountRecordIds: z.array(z.string()).max(2) }).strict();
 const previewShape = { accountSnapshotVersion: z.number().int().nonnegative(), accountUserId: uuid, conflicts: z.array(guestMergeConflictSchema).max(1_000), fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), guestSnapshotVersion: z.number().int().nonnegative(), guestUserId: uuid, operationId: uuid } as const;
 const previewV1 = z.object({ ...previewShape, protocolVersion: z.literal(1) }).strict();
 const previewV2 = z.object({ ...previewShape, protocolVersion: z.literal(2), goalPlanConflictGroups: z.array(goalPlanConflictGroupSchema).max(1_000) }).strict();
-export const guestMergePreviewSchema = z.union([previewV2, previewV1]).superRefine((value, context) => { if (value.guestUserId === value.accountUserId) context.addIssue({ code: z.ZodIssueCode.custom, message: "guest_and_account_must_differ" }); });
+const previewV4 = z.object({ ...previewShape, protocolVersion: z.literal(4), contentIdentitySchema, goalPlanConflictGroups: z.array(goalPlanConflictGroupSchema).max(1_000) }).strict();
+export const guestMergePreviewSchema = z.union([previewV4, previewV2, previewV1]).superRefine((value, context) => { if (value.guestUserId === value.accountUserId) context.addIssue({ code: z.ZodIssueCode.custom, message: "guest_and_account_must_differ" }); });
 export const guestMergeResolutionSchema = z.object({ conflictId: z.string().min(1).max(768), resolution: z.enum(["keep_guest", "keep_account", "manual_required"]) }).strict();
 export const goalPlanGroupChoiceSchema = z.object({ groupId: z.string().regex(/^track:.+/u).max(192), resolution: z.enum(["keep_guest", "keep_account"]) }).strict();
 const confirmationShape = { operationId: uuid, previewFingerprint: z.string().regex(/^[a-f0-9]{64}$/u), resolutions: z.array(guestMergeResolutionSchema).max(1_000) } as const;
 const confirmationV1 = z.object({ ...confirmationShape, protocolVersion: z.literal(1) }).strict();
 const confirmationV2 = z.object({ ...confirmationShape, protocolVersion: z.literal(2), groupChoices: z.array(goalPlanGroupChoiceSchema).max(1_000) }).strict();
-export const guestMergeConfirmationSchema = z.union([confirmationV2, confirmationV1]);
+const confirmationV4 = z.object({ ...confirmationShape, protocolVersion: z.literal(4), contentIdentitySchema, groupChoices: z.array(goalPlanGroupChoiceSchema).max(1_000) }).strict();
+export const guestMergeConfirmationSchema = z.union([confirmationV4, confirmationV2, confirmationV1]);
 
 export type GuestMergePreview = z.infer<typeof guestMergePreviewSchema>;
 export type GuestMergeConfirmation = z.infer<typeof guestMergeConfirmationSchema>;
-export type GuestMergeRecord = z.infer<typeof guestMergeRecordSchema>;
+export type GuestMergeRecord = z.infer<typeof guestMergeRecordSchema> & Partial<Readonly<{ contentIdentitySchema: ContentIdentitySchema }>>;
 export type GuestMergeSnapshot = z.input<typeof guestMergeSnapshotSchema>;
 export type ParsedGuestMergeSnapshot = z.output<typeof guestMergeSnapshotSchema>;
 export type GoalPlanConflictGroup = z.infer<typeof goalPlanConflictGroupSchema>;
@@ -66,13 +92,15 @@ export type MergeIdentityMode = "legacy" | "full";
 export function buildGuestMergePreview(input: Readonly<{ accountUserId: string; accountSnapshotVersion: number; guestSnapshot: GuestMergeSnapshot; remoteRecords: readonly GuestMergeRecord[]; identityMode?: MergeIdentityMode }>): AdoptionPreview {
   const guestSnapshot = guestMergeSnapshotSchema.parse(input.guestSnapshot);
   const protocolVersion = guestSnapshot.protocolVersion;
-  const identityMode = input.identityMode ?? "legacy";
-  const remoteRecords = input.remoteRecords.filter((record) => protocolVersion === 2 || isLegacy(record));
+  const identityMode = input.identityMode ?? (protocolVersion === 4 ? "full" : "legacy");
+  const remoteRecords = input.remoteRecords.filter((record) => protocolVersion === 4
+    ? record.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA
+    : record.contentIdentitySchema === undefined && (protocolVersion === 2 || isLegacy(record)));
   for (const record of [...guestSnapshot.records, ...remoteRecords]) assertIntegrity(record);
-  if (protocolVersion === 2) { assertGoalPlanBundles(guestSnapshot.records); assertGoalPlanBundles(remoteRecords); }
+  if (protocolVersion === 2 || protocolVersion === 4) { assertGoalPlanBundles(guestSnapshot.records, protocolVersion); assertGoalPlanBundles(remoteRecords, protocolVersion); }
   const localByKey = new Map(guestSnapshot.records.map((record) => [mergeRecordKey(record, identityMode), record]));
   const remoteByKey = new Map(remoteRecords.map((record) => [mergeRecordKey(record, identityMode), record]));
-  const groups = protocolVersion === 2 ? buildGroups(guestSnapshot.records, remoteRecords, identityMode) : [];
+  const groups = protocolVersion === 2 || protocolVersion === 4 ? buildGroups(guestSnapshot.records, remoteRecords, identityMode) : [];
   const groupedKeys = new Set(groups.flatMap((group) => [...group.localRecordIds, ...group.accountRecordIds]));
   const upload: string[] = [], restore: string[] = [], dedup: string[] = [], conflictIds: string[] = [];
   const conflicts: Array<z.infer<typeof guestMergeConflictSchema>> = [];
@@ -89,9 +117,11 @@ export function buildGuestMergePreview(input: Readonly<{ accountUserId: string; 
   const caseId = blockingReason ? "blocked" : guestSnapshot.records.length === 0 && remoteRecords.length === 0 ? "emptyLocalEmptyRemote" : guestSnapshot.records.length > 0 && remoteRecords.length === 0 ? "populatedLocalEmptyRemote" : guestSnapshot.records.length === 0 && remoteRecords.length > 0 ? "emptyLocalPopulatedRemote" : hasConflict ? "divergentRecord" : "populatedLocalPopulatedRemote";
   const plan = Object.freeze({ caseId, localRecordCount: guestSnapshot.records.length, remoteRecordCount: remoteRecords.length, uploadRecordIds: Object.freeze(upload), restoreRecordIds: Object.freeze(restore), deduplicatedRecordIds: Object.freeze(dedup), conflictRecordIds: Object.freeze(conflictIds), blockingReason });
   const base = { accountSnapshotVersion: input.accountSnapshotVersion, accountUserId: input.accountUserId, conflicts: conflicts.sort((a, b) => a.conflictId.localeCompare(b.conflictId)), guestSnapshotVersion: guestSnapshot.guestSnapshotVersion, guestUserId: guestSnapshot.guestUserId, protocolVersion };
-  const fingerprint = sha256(canonicalJson({ preview: base, ...(protocolVersion === 2 ? { goalPlanConflictGroups: groups } : {}), plan, localRecords: guestSnapshot.records, remoteRecords }));
+  const fingerprint = sha256(canonicalJson({ preview: base, ...(protocolVersion === 2 || protocolVersion === 4 ? { goalPlanConflictGroups: groups } : {}), ...(protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}), plan, localRecords: guestSnapshot.records, remoteRecords }));
   const common = { ...base, fingerprint, operationId: operationId(fingerprint) };
-  const preview: GuestMergePreview = protocolVersion === 2 ? { ...common, protocolVersion: 2, goalPlanConflictGroups: groups } : { ...common, protocolVersion: 1 };
+  const preview: GuestMergePreview = protocolVersion === 4
+    ? { ...common, protocolVersion: 4, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA, goalPlanConflictGroups: groups }
+    : protocolVersion === 2 ? { ...common, protocolVersion: 2, goalPlanConflictGroups: groups } : { ...common, protocolVersion: 1 };
   return Object.freeze({ preview: Object.freeze(preview), plan, remoteRecords: Object.freeze(remoteRecords) });
 }
 
@@ -100,8 +130,8 @@ export function validateGuestMergeConfirmation(preview: GuestMergePreview, confi
   const expected = new Set(preview.conflicts.map((item) => item.conflictId)); const resolved = new Set<string>();
   if (confirmation.resolutions.length !== expected.size) throw new Error("merge_resolution_incomplete");
   for (const item of confirmation.resolutions) { if (!expected.has(item.conflictId) || resolved.has(item.conflictId)) throw new Error("merge_resolution_mismatch"); if (item.resolution === "manual_required") throw new Error("merge_conflict_requires_manual_resolution"); resolved.add(item.conflictId); }
-  if (preview.protocolVersion === 2) {
-    if (confirmation.protocolVersion !== 2 || confirmation.groupChoices.length !== preview.goalPlanConflictGroups.length) throw new Error("merge_group_choice_incomplete");
+  if (preview.protocolVersion === 2 || preview.protocolVersion === 4) {
+    if (confirmation.protocolVersion !== preview.protocolVersion || (preview.protocolVersion === 4 && (!("contentIdentitySchema" in confirmation) || confirmation.contentIdentitySchema !== CONTENT_IDENTITY_SCHEMA)) || confirmation.groupChoices.length !== preview.goalPlanConflictGroups.length) throw new Error("merge_group_choice_incomplete");
     const expectedGroups = new Set(preview.goalPlanConflictGroups.map((group) => group.groupId)); const chosen = new Set<string>();
     for (const item of confirmation.groupChoices) { if (!expectedGroups.has(item.groupId) || chosen.has(item.groupId)) throw new Error("merge_group_choice_mismatch"); chosen.add(item.groupId); }
   }
@@ -111,26 +141,26 @@ export function validateGuestMergeConfirmation(preview: GuestMergePreview, confi
 export function mergeRecordKey(record: Pick<GuestMergeRecord, "recordType" | "recordId" | "trackId">, identityMode: MergeIdentityMode = "legacy"): string {
   return identityMode === "full" ? canonicalJsonV3({ recordId: record.recordId, recordType: record.recordType, trackId: record.trackId }) : `${record.recordType}:${record.recordId}`;
 }
-export function progressRecordToMergeRecord(record: ProgressRecord): GuestMergeRecord { return Object.freeze({ fingerprint: record.fingerprint, recordId: record.targetId, recordType: record.recordType, state: record.state, trackId: record.trackId, version: record.version }); }
-export function createMergeRecordFingerprint(record: Readonly<{ recordId: string; recordType: SyncableRecordType; state: Readonly<Record<string, unknown>>; trackId: string }>): string { return sha256(canonicalJson({ recordId: record.recordId, recordType: record.recordType, state: record.state, trackId: record.trackId })); }
-export function assertGoalPlanBundles(records: readonly GuestMergeRecord[]): void {
-  assertGoalPlanRecordShapes(records);
+export function progressRecordToMergeRecord(record: ProgressRecord): GuestMergeRecord { return Object.freeze({ fingerprint: record.fingerprint, recordId: record.targetId, recordType: record.recordType, state: record.state, trackId: record.trackId, version: record.version, ...(record.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) }); }
+export function createMergeRecordFingerprint(record: Readonly<{ recordId: string; recordType: SyncableRecordType; state: Readonly<Record<string, unknown>>; trackId: string; contentIdentitySchema?: ContentIdentitySchema }>): string { return sha256(canonicalJson({ ...(record.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}), recordId: record.recordId, recordType: record.recordType, state: record.state, trackId: record.trackId })); }
+export function assertGoalPlanBundles(records: readonly GuestMergeRecord[], protocolVersion: 1 | 2 | 4 = 2): void {
+  assertGoalPlanRecordShapes(records, protocolVersion);
   const seen = new Set<string>();
   for (const record of records.filter(isGoalPlan)) {
     const key = mergeRecordKey(record); if (seen.has(key)) throw new Error("goal_plan_bundle_invalid"); seen.add(key);
   }
   for (const id of new Set(records.filter(isGoalPlan).map((record) => record.trackId))) {
     const goal = live(records.find((record) => record.recordType === "goal" && record.trackId === id)); const plan = live(records.find((record) => record.recordType === "learning_plan" && record.trackId === id));
-    if (plan) { if (!goal) throw new Error("goal_plan_bundle_invalid"); const goalState = goalStateSchema.parse(goal.state); const planState = planStateSchema.parse(plan.state); if (planState.plan.goalRevision > goalState.revision) throw new Error("goal_plan_bundle_invalid"); }
+    if (plan) { if (!goal) throw new Error("goal_plan_bundle_invalid"); const goalState = goalStateSchema.parse(goal.state); const planState = (protocolVersion === 4 ? planStateSchemaV4 : planStateSchema).parse(plan.state); if (planState.plan.goalRevision > goalState.revision) throw new Error("goal_plan_bundle_invalid"); }
   }
 }
 
-export function assertGoalPlanRecordShapes(records: readonly GuestMergeRecord[]): void {
+export function assertGoalPlanRecordShapes(records: readonly GuestMergeRecord[], protocolVersion: 1 | 2 | 4 = 2): void {
   for (const record of records.filter(isGoalPlan)) {
     if (record.recordId !== record.trackId) throw new Error("goal_plan_bundle_invalid");
     if (record.state.deleted === true) { if (!tombstoneSchema.safeParse(record.state).success) throw new Error("goal_plan_bundle_invalid"); }
     else if (record.recordType === "goal") { const parsed = goalStateSchema.safeParse(record.state); if (!parsed.success || parsed.data.record.trackId !== record.trackId) throw new Error("goal_plan_bundle_invalid"); }
-    else { const parsed = planStateSchema.safeParse(record.state); if (!parsed.success || parsed.data.plan.trackId !== record.trackId) throw new Error("goal_plan_bundle_invalid"); }
+    else { const parsed = (protocolVersion === 4 ? planStateSchemaV4 : planStateSchema).safeParse(record.state); if (!parsed.success || parsed.data.plan.trackId !== record.trackId) throw new Error("goal_plan_bundle_invalid"); }
   }
 }
 
@@ -148,7 +178,12 @@ function buildGroups(local: readonly GuestMergeRecord[], account: readonly Guest
 function isLegacy(record: GuestMergeRecord): boolean { return legacySyncableRecordTypeSchema.safeParse(record.recordType).success; }
 function isGoalPlan(record: GuestMergeRecord): boolean { return record.recordType === "goal" || record.recordType === "learning_plan"; }
 function live(record: GuestMergeRecord | undefined): GuestMergeRecord | undefined { return record?.state.deleted === true ? undefined : record; }
-function assertIntegrity(record: GuestMergeRecord): void { if (createMergeRecordFingerprint(record) !== record.fingerprint) throw new Error("progress_fingerprint_mismatch"); }
+function assertIntegrity(record: GuestMergeRecord): void {
+  if (record.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA) {
+    try { assertV4ContentIdentityState(record.state); } catch { throw new Error("content_identity_schema_conflict"); }
+  }
+  if (createMergeRecordFingerprint(record) !== record.fingerprint) throw new Error("progress_fingerprint_mismatch");
+}
 function canonicalJson(value: unknown): string { if (value === null || ["string", "boolean", "number"].includes(typeof value)) return JSON.stringify(value); if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`; if (typeof value !== "object") throw new Error("merge_value_not_serializable"); return `{${Object.keys(value as object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`).join(",")}}`; }
 function sha256(value: string): string { return createHash("sha256").update(value, "utf8").digest("hex"); }
 function operationId(fingerprint: string): string { const hex = sha256(`adoption:${fingerprint}`).slice(0, 32); return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20)}`; }

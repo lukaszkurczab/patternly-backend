@@ -28,11 +28,18 @@ const progressMutationProperties = {
   state: { type: "object", additionalProperties: true },
 };
 const progressMutationRequired = ["mutationId", "kind", "recordType", "trackId", "targetId", "expectedVersion", "fingerprint", "state"];
+const contentIdentitySchemaProperty = { type: "string", const: "patternly:content-identity:v2" };
 const progressMutationVariant = (recordType: string, kind: "node" | "item") => ({
   type: "object",
   additionalProperties: false,
   required: progressMutationRequired,
   properties: { ...progressMutationProperties, recordType: { const: recordType }, kind: { const: kind } },
+});
+const progressMutationV4Variant = (recordType: string, kind: "node" | "item") => ({
+  type: "object",
+  additionalProperties: false,
+  required: [...progressMutationRequired, "contentIdentitySchema"],
+  properties: { ...progressMutationProperties, contentIdentitySchema: contentIdentitySchemaProperty, recordType: { const: recordType }, kind: { const: kind } },
 });
 const allProgressMutationVariants = [
   ["active_track", "node"],
@@ -44,6 +51,169 @@ const allProgressMutationVariants = [
   ["learning_plan", "node"],
 ] as const;
 const legacyProgressMutationVariants = allProgressMutationVariants.slice(0, 5);
+
+const adoptionTransferRecordBaseProperties = {
+  recordType: { type: "string", minLength: 1, maxLength: 128 },
+  recordId: { type: "string", minLength: 1, maxLength: 256 },
+  trackId: { type: "string", minLength: 1, maxLength: 128 },
+  fingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
+  state: { type: "object", additionalProperties: true },
+  version: { type: "integer", minimum: 0 },
+};
+const adoptionTransferRecordV3OpenApi = {
+  type: "object",
+  additionalProperties: false,
+  required: ["recordType", "recordId", "trackId", "fingerprint", "state", "version"],
+  properties: adoptionTransferRecordBaseProperties,
+};
+const adoptionTransferRecordV4OpenApi = {
+  type: "object",
+  additionalProperties: false,
+  required: ["recordType", "recordId", "trackId", "fingerprint", "state", "version", "contentIdentitySchema"],
+  properties: { ...adoptionTransferRecordBaseProperties, contentIdentitySchema: contentIdentitySchemaProperty },
+};
+const adoptionTransferRecordOpenApi = { oneOf: [adoptionTransferRecordV3OpenApi, adoptionTransferRecordV4OpenApi] };
+
+const adoptionTransferStartV3OpenApi = {
+  type: "object",
+  additionalProperties: false,
+  required: ["idempotencyKey", "guestUserId", "snapshotVersion", "deviceId"],
+  properties: {
+    protocolVersion: { type: "integer", const: 3, default: 3 },
+    canonicalVersion: { type: "string", const: "canonical-json-v1", default: "canonical-json-v1" },
+    sessionId: { type: "string", minLength: 1, maxLength: 128 },
+    idempotencyKey: { type: "string", minLength: 1, maxLength: 128 },
+    guestUserId: { type: "string", format: "uuid" },
+    snapshotVersion: { type: "integer", minimum: 0 },
+    expectedGeneration: { type: "integer", minimum: 0, default: 0 },
+    deviceId: { type: "string", format: "uuid" },
+    activeSession: { type: "boolean", default: false },
+    pendingJournal: { type: "boolean", default: false },
+  },
+};
+const adoptionTransferStartV4OpenApi = {
+  ...adoptionTransferStartV3OpenApi,
+  required: ["protocolVersion", "contentIdentitySchema", "idempotencyKey", "guestUserId", "snapshotVersion", "deviceId"],
+  properties: { ...adoptionTransferStartV3OpenApi.properties, protocolVersion: { type: "integer", const: 4 }, contentIdentitySchema: contentIdentitySchemaProperty },
+};
+
+const adoptionTransferUploadV3OpenApi = {
+  type: "object",
+  additionalProperties: false,
+  required: ["deviceId", "chunk", "records"],
+  properties: {
+    canonicalVersion: { type: "string", const: "canonical-json-v1", default: "canonical-json-v1" },
+    idempotencyKey: { type: "string", minLength: 1, maxLength: 128 },
+    deviceId: { type: "string", format: "uuid" },
+    chunk: { "$ref": "#/components/schemas/AdoptionTransferChunk" },
+    records: { type: "array", maxItems: 450, items: { "$ref": "#/components/schemas/AdoptionTransferRecordV3" } },
+  },
+};
+const adoptionTransferUploadV4OpenApi = {
+  ...adoptionTransferUploadV3OpenApi,
+  required: ["contentIdentitySchema", "deviceId", "chunk", "records"],
+  properties: { ...adoptionTransferUploadV3OpenApi.properties, contentIdentitySchema: contentIdentitySchemaProperty, records: { type: "array", maxItems: 450, items: { "$ref": "#/components/schemas/AdoptionTransferRecordV4" } } },
+};
+
+const adoptionTransferSealV3OpenApi = {
+  type: "object",
+  additionalProperties: false,
+  required: ["deviceId", "snapshotFingerprint", "recordCount", "chunkCount"],
+  properties: {
+    canonicalVersion: { type: "string", const: "canonical-json-v1", default: "canonical-json-v1" },
+    idempotencyKey: { type: "string", minLength: 1, maxLength: 128 },
+    deviceId: { type: "string", format: "uuid" },
+    snapshotFingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
+    recordCount: { type: "integer", minimum: 0, maximum: 1000 },
+    chunkCount: { type: "integer", minimum: 0, maximum: 1000 },
+  },
+};
+const adoptionTransferSealV4OpenApi = {
+  ...adoptionTransferSealV3OpenApi,
+  required: ["contentIdentitySchema", "deviceId", "snapshotFingerprint", "recordCount", "chunkCount"],
+  properties: { ...adoptionTransferSealV3OpenApi.properties, contentIdentitySchema: contentIdentitySchemaProperty },
+};
+
+const adoptionTransferPreviewV3OpenApi = {
+  type: "object",
+  additionalProperties: false,
+  required: ["deviceId"],
+  properties: {
+    canonicalVersion: { type: "string", const: "canonical-json-v1", default: "canonical-json-v1" },
+    idempotencyKey: { type: "string", minLength: 1, maxLength: 128 },
+    deviceId: { type: "string", format: "uuid" },
+    protocolVersion: { type: "integer", enum: [1, 2], default: 2 },
+  },
+};
+const adoptionTransferPreviewV4OpenApi = {
+  ...adoptionTransferPreviewV3OpenApi,
+  required: ["deviceId", "protocolVersion", "contentIdentitySchema"],
+  properties: { ...adoptionTransferPreviewV3OpenApi.properties, protocolVersion: { type: "integer", const: 4 }, contentIdentitySchema: contentIdentitySchemaProperty },
+};
+
+const adoptionTransferResolutionItems = { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false, required: ["conflictId", "resolution"], properties: { conflictId: { type: "string" }, resolution: { type: "string", enum: ["keep_guest", "keep_account", "manual_required"] } } } };
+const adoptionTransferGroupChoiceItems = { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false, required: ["groupId", "resolution"], properties: { groupId: { type: "string" }, resolution: { type: "string", enum: ["keep_guest", "keep_account"] } } } };
+const adoptionTransferConfirmV3OpenApi = {
+  type: "object",
+  additionalProperties: false,
+  required: ["deviceId", "previewFingerprint", "protocolVersion", "resolutions"],
+  properties: {
+    canonicalVersion: { type: "string", const: "canonical-json-v1", default: "canonical-json-v1" },
+    idempotencyKey: { type: "string", minLength: 1, maxLength: 128 },
+    deviceId: { type: "string", format: "uuid" },
+    operationId: { type: "string", format: "uuid" },
+    previewFingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
+    decisionFingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
+    protocolVersion: { type: "integer", enum: [1, 2] },
+    resolutions: adoptionTransferResolutionItems,
+    groupChoices: adoptionTransferGroupChoiceItems,
+  },
+};
+const adoptionTransferConfirmV4OpenApi = {
+  ...adoptionTransferConfirmV3OpenApi,
+  required: ["deviceId", "previewFingerprint", "protocolVersion", "contentIdentitySchema", "resolutions"],
+  properties: { ...adoptionTransferConfirmV3OpenApi.properties, protocolVersion: { type: "integer", const: 4 }, contentIdentitySchema: contentIdentitySchemaProperty },
+};
+
+const adoptionTransferApplyV3OpenApi = {
+  type: "object",
+  additionalProperties: false,
+  required: ["deviceId"],
+  properties: {
+    canonicalVersion: { type: "string", const: "canonical-json-v1", default: "canonical-json-v1" },
+    idempotencyKey: { type: "string", minLength: 1, maxLength: 128 },
+    deviceId: { type: "string", format: "uuid" },
+    decisionFingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
+    expectedGeneration: { type: "integer", minimum: 0 },
+  },
+};
+const adoptionTransferApplyV4OpenApi = {
+  ...adoptionTransferApplyV3OpenApi,
+  required: ["contentIdentitySchema", "deviceId"],
+  properties: { ...adoptionTransferApplyV3OpenApi.properties, contentIdentitySchema: contentIdentitySchemaProperty },
+};
+
+const adoptionTransferStatusBaseProperties = {
+  accountId: { type: "string" },
+  sessionId: { type: "string" },
+  guestUserId: { type: "string" },
+  state: { type: "string", enum: ["collecting", "sealing", "sealed", "result_building", "preview_ready", "applying", "complete", "failed"] },
+  expectedGeneration: { type: "integer", minimum: 0 },
+  generation: { type: "integer", minimum: 0 },
+  recordCount: { type: "integer", minimum: 0, maximum: 1000 },
+  chunkCount: { type: "integer", minimum: 0, maximum: 1000 },
+  snapshotFingerprint: { anyOf: [{ type: "string", pattern: "^[a-f0-9]{64}$" }, { type: "null" }] },
+  previewFingerprint: { anyOf: [{ type: "string", pattern: "^[a-f0-9]{64}$" }, { type: "null" }] },
+  operationId: { anyOf: [{ type: "string", format: "uuid" }, { type: "null" }] },
+  decisionFingerprint: { anyOf: [{ type: "string", pattern: "^[a-f0-9]{64}$" }, { type: "null" }] },
+  targetGeneration: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
+  applyCursor: { type: "integer", minimum: 0 },
+  applyTotal: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
+  accountRevision: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
+  failureCode: { anyOf: [{ type: "string" }, { type: "null" }] },
+};
+const adoptionTransferStatusV3OpenApi = { type: "object", additionalProperties: false, required: ["version", "protocolVersion", "accountId", "sessionId", "state", "recordCount", "chunkCount", "generation"], properties: { ...adoptionTransferStatusBaseProperties, version: { type: "integer", const: 3 }, protocolVersion: { type: "integer", const: 3 } } };
+const adoptionTransferStatusV4OpenApi = { type: "object", additionalProperties: false, required: ["version", "protocolVersion", "contentIdentitySchema", "accountId", "sessionId", "state", "recordCount", "chunkCount", "generation"], properties: { ...adoptionTransferStatusBaseProperties, version: { type: "integer", const: 4 }, protocolVersion: { type: "integer", const: 4 }, contentIdentitySchema: contentIdentitySchemaProperty } };
 
 const OPENAPI_DOCUMENT_RAW = {
   openapi: "3.1.0",
@@ -59,7 +229,7 @@ const OPENAPI_DOCUMENT_RAW = {
     "/v1/legal-acceptances": { "x-patternly-security-profile": "bearer", "x-patternly-consumer-scope": "mobile", post: { description: "Record an immutable, versioned Terms and minimum-age acceptance for the authenticated account.", responses: { "201": { description: "Acceptance recorded" }, "400": { description: "Invalid acceptance" }, "401": { description: "Authentication required" } } } },
     "/v1/purchase-confirmations": { "x-patternly-security-profile": "bearer", "x-patternly-consumer-scope": "mobile", post: { description: "Record the immutable pre-contract offer and express immediate-start request before opening App Store checkout.", responses: { "201": { description: "Confirmation recorded" }, "400": { description: "Invalid confirmation" }, "401": { description: "Authentication required" } } } },
     "/v1/entitlements": { "x-patternly-security-profile": "bearer", "x-patternly-consumer-scope": "mobile", get: { responses: { "200": { description: "Account entitlement projection" } } } },
-    "/v1/progress": { "x-patternly-security-profile": "bearer", "x-patternly-consumer-scope": "mobile", get: { parameters: [{ name: "protocolVersion", in: "query", required: false, schema: { type: "integer", enum: [1, 2], default: 1 } }, { name: "pageSize", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 100 } }, { name: "pageToken", in: "query", required: false, schema: { type: "string", minLength: 1 } }], responses: { "200": { description: "Canonical progress state and account revision; paged responses include generation and nextPageToken" }, "400": { description: "Unsupported protocol version or invalid pagination token" }, "409": { description: "Progress generation or account revision changed while paging" } } } },
+    "/v1/progress": { "x-patternly-security-profile": "bearer", "x-patternly-consumer-scope": "mobile", get: { parameters: [{ name: "protocolVersion", in: "query", required: false, schema: { type: "integer", enum: [1, 2, 4], default: 1 } }, { name: "pageSize", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 100 } }, { name: "pageToken", in: "query", required: false, schema: { type: "string", minLength: 1 } }], responses: { "200": { description: "Canonical progress state and account revision; paged responses include generation and nextPageToken" }, "400": { description: "Unsupported protocol version or invalid pagination token" }, "409": { description: "Progress generation, account revision, or content identity schema changed while paging" } } } },
     "/v1/account-data/export": { "x-patternly-security-profile": "bearer", "x-patternly-consumer-scope": "mobile", get: { description: "Download a bounded JSON account-data export after recent reauthentication. The response is an attachment and is never persisted as a payload.", responses: { "200": { description: "JSON account-data attachment", headers: { "Cache-Control": { schema: { type: "string", const: "private, no-store" } }, "Content-Disposition": { schema: { type: "string" } } }, content: { "application/json": { schema: { "$ref": "#/components/schemas/AccountDataExport" } } } }, "401": { description: "Authentication or recent reauthentication required", headers: { "Cache-Control": { schema: { type: "string", const: "private, no-store" } } } }, "413": { description: "Serialized export exceeds the configured maximum" }, "429": { description: "Per-account export rate limit exceeded", headers: { "Retry-After": { schema: { type: "integer", minimum: 1 } } } } } } },
     "/v1/privacy-requests": { "x-patternly-security-profile": "bearer", "x-patternly-consumer-scope": "mobile", post: { description: "Create one authenticated privacy-right case", requestBody: { required: true, content: { "application/json": { schema: { "$ref": "#/components/schemas/CreateAccountPrivacyRequest" } } } }, responses: { "201": { description: "Privacy request created" }, "401": { description: "Authentication or recent reauthentication required" } } }, get: { description: "List minimal metadata for the authenticated subject's own privacy requests", responses: { "200": { description: "Privacy request list" } } } },
     "/v1/privacy-requests/{requestId}": { "x-patternly-security-profile": "bearer", "x-patternly-consumer-scope": "mobile", get: { description: "Read one own privacy response after recent reauthentication", parameters: [{ "$ref": "#/components/parameters/PrivacyRequestId" }], responses: { "200": { description: "Privacy response" }, "401": { description: "Recent reauthentication required" }, "404": { description: "Request unavailable" } } } },
@@ -118,6 +288,9 @@ const OPENAPI_DOCUMENT_RAW = {
       ProgressMutation: {
         oneOf: allProgressMutationVariants.map(([recordType, kind]) => progressMutationVariant(recordType, kind)),
       },
+      ProgressMutationV4: {
+        oneOf: allProgressMutationVariants.map(([recordType, kind]) => progressMutationV4Variant(recordType, kind)),
+      },
       LegacyProgressMutation: {
         oneOf: legacyProgressMutationVariants.map(([recordType, kind]) => progressMutationVariant(recordType, kind)),
       },
@@ -161,17 +334,53 @@ const OPENAPI_DOCUMENT_RAW = {
               mutations: { type: "array", minItems: 1, maxItems: 100, items: { "$ref": "#/components/schemas/ProgressMutation" } },
             },
           },
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["protocolVersion", "canonicalVersion", "contentIdentitySchema", "expectedAccountRevision", "deviceId", "sessionId", "batchId", "planVersion", "highWatermark", "mutations"],
+            properties: {
+              protocolVersion: { type: "integer", const: 4 },
+              canonicalVersion: { type: "string", const: "canonical-json-v1" },
+              contentIdentitySchema: contentIdentitySchemaProperty,
+              expectedAccountRevision: { type: "integer", minimum: 0 },
+              deviceId: { type: "string", format: "uuid" },
+              sessionId: { type: "string", minLength: 1, maxLength: 128 },
+              batchId: { type: "string", minLength: 1, maxLength: 128 },
+              planVersion: { type: "integer", const: 4 },
+              highWatermark: { type: "integer", minimum: 0 },
+              mutations: { type: "array", minItems: 1, maxItems: 100, items: { "$ref": "#/components/schemas/ProgressMutationV4" } },
+            },
+          },
         ],
       },
       GuestMergeSnapshot: {
+        oneOf: [
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["guestSnapshotVersion", "guestUserId", "records", "activeSession", "pendingJournal"],
+            properties: {
+              protocolVersion: { type: "integer", enum: [1, 2] },
+              guestSnapshotVersion: { type: "integer", minimum: 0 },
+              guestUserId: { type: "string", format: "uuid" },
+              records: { type: "array", maxItems: 1000, items: { "$ref": "#/components/schemas/GuestMergeRecord" } },
+              activeSession: { type: "boolean" },
+              pendingJournal: { type: "boolean" },
+            },
+          },
+          { "$ref": "#/components/schemas/GuestMergeSnapshotV4" },
+        ],
+      },
+      GuestMergeSnapshotV4: {
         type: "object",
         additionalProperties: false,
-        required: ["guestSnapshotVersion", "guestUserId", "records", "activeSession", "pendingJournal"],
+        required: ["protocolVersion", "contentIdentitySchema", "guestSnapshotVersion", "guestUserId", "records", "activeSession", "pendingJournal"],
         properties: {
-          protocolVersion: { type: "integer", enum: [1, 2] },
+          protocolVersion: { type: "integer", const: 4 },
+          contentIdentitySchema: contentIdentitySchemaProperty,
           guestSnapshotVersion: { type: "integer", minimum: 0 },
           guestUserId: { type: "string", format: "uuid" },
-          records: { type: "array", maxItems: 1000, items: { "$ref": "#/components/schemas/GuestMergeRecord" } },
+          records: { type: "array", maxItems: 1000, items: { "$ref": "#/components/schemas/GuestMergeRecordV4" } },
           activeSession: { type: "boolean" },
           pendingJournal: { type: "boolean" },
         },
@@ -189,6 +398,20 @@ const OPENAPI_DOCUMENT_RAW = {
           version: { type: "integer", minimum: 0 },
         },
       },
+      GuestMergeRecordV4: {
+        type: "object",
+        additionalProperties: false,
+        required: ["contentIdentitySchema", "fingerprint", "recordId", "recordType", "state", "trackId", "version"],
+        properties: {
+          contentIdentitySchema: contentIdentitySchemaProperty,
+          fingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
+          recordId: { type: "string" },
+          recordType: { type: "string", enum: ["active_track", "training_session_summary", "training_session_result", "training_attempt", "review_queue_entry", "goal", "learning_plan"] },
+          state: { type: "object", additionalProperties: true },
+          trackId: { type: "string" },
+          version: { type: "integer", minimum: 0 },
+        },
+      },
       AdoptionConfirmationRequest: {
         type: "object",
         additionalProperties: false,
@@ -197,49 +420,40 @@ const OPENAPI_DOCUMENT_RAW = {
           deviceId: { type: "string", format: "uuid" },
           snapshot: { "$ref": "#/components/schemas/GuestMergeSnapshot" },
           confirmation: {
-            type: "object",
-            additionalProperties: false,
-            required: ["operationId", "previewFingerprint", "protocolVersion", "resolutions"],
-            properties: {
-              operationId: { type: "string", format: "uuid" },
-              previewFingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
-              protocolVersion: { type: "integer", enum: [1, 2] },
-              resolutions: { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false, required: ["conflictId", "resolution"], properties: { conflictId: { type: "string" }, resolution: { type: "string", enum: ["keep_guest", "keep_account", "manual_required"] } } } },
-              groupChoices: { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false, required: ["groupId", "resolution"], properties: { groupId: { type: "string" }, resolution: { type: "string", enum: ["keep_guest", "keep_account"] } } } },
-            },
+            oneOf: [
+              {
+                type: "object",
+                additionalProperties: false,
+                required: ["operationId", "previewFingerprint", "protocolVersion", "resolutions"],
+                properties: {
+                  operationId: { type: "string", format: "uuid" },
+                  previewFingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
+                  protocolVersion: { type: "integer", enum: [1, 2] },
+                  resolutions: { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false, required: ["conflictId", "resolution"], properties: { conflictId: { type: "string" }, resolution: { type: "string", enum: ["keep_guest", "keep_account", "manual_required"] } } } },
+                  groupChoices: { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false, required: ["groupId", "resolution"], properties: { groupId: { type: "string" }, resolution: { type: "string", enum: ["keep_guest", "keep_account"] } } } },
+                },
+              },
+              {
+                type: "object",
+                additionalProperties: false,
+                required: ["operationId", "previewFingerprint", "protocolVersion", "contentIdentitySchema", "resolutions"],
+                properties: {
+                  operationId: { type: "string", format: "uuid" },
+                  previewFingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
+                  protocolVersion: { type: "integer", const: 4 },
+                  contentIdentitySchema: contentIdentitySchemaProperty,
+                  resolutions: { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false, required: ["conflictId", "resolution"], properties: { conflictId: { type: "string" }, resolution: { type: "string", enum: ["keep_guest", "keep_account", "manual_required"] } } } },
+                  groupChoices: { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false, required: ["groupId", "resolution"], properties: { groupId: { type: "string" }, resolution: { type: "string", enum: ["keep_guest", "keep_account"] } } } },
+                },
+              },
+            ],
           },
         },
       },
-      AdoptionTransferStart: {
-        type: "object",
-        additionalProperties: false,
-        required: ["idempotencyKey", "guestUserId", "snapshotVersion", "deviceId"],
-        properties: {
-          protocolVersion: { type: "integer", const: 3, default: 3 },
-          canonicalVersion: { type: "string", const: "canonical-json-v1", default: "canonical-json-v1" },
-          sessionId: { type: "string", minLength: 1, maxLength: 128 },
-          idempotencyKey: { type: "string", minLength: 1, maxLength: 128 },
-          guestUserId: { type: "string", format: "uuid" },
-          snapshotVersion: { type: "integer", minimum: 0 },
-          expectedGeneration: { type: "integer", minimum: 0, default: 0 },
-          deviceId: { type: "string", format: "uuid" },
-          activeSession: { type: "boolean", default: false },
-          pendingJournal: { type: "boolean", default: false },
-        },
-      },
-      AdoptionTransferRecord: {
-        type: "object",
-        additionalProperties: false,
-        required: ["recordType", "recordId", "trackId", "fingerprint", "state", "version"],
-        properties: {
-          recordType: { type: "string", minLength: 1, maxLength: 128 },
-          recordId: { type: "string", minLength: 1, maxLength: 256 },
-          trackId: { type: "string", minLength: 1, maxLength: 128 },
-          fingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
-          state: { type: "object", additionalProperties: true },
-          version: { type: "integer", minimum: 0 },
-        },
-      },
+      AdoptionTransferStart: { oneOf: [adoptionTransferStartV3OpenApi, adoptionTransferStartV4OpenApi] },
+      AdoptionTransferRecordV3: adoptionTransferRecordV3OpenApi,
+      AdoptionTransferRecordV4: adoptionTransferRecordV4OpenApi,
+      AdoptionTransferRecord: adoptionTransferRecordOpenApi,
       AdoptionTransferChunk: {
         type: "object",
         additionalProperties: false,
@@ -252,95 +466,12 @@ const OPENAPI_DOCUMENT_RAW = {
           bytes: { type: "integer", minimum: 0, maximum: 524288 },
         },
       },
-      AdoptionTransferUpload: {
-        type: "object",
-        additionalProperties: false,
-        required: ["deviceId", "chunk", "records"],
-        properties: {
-          canonicalVersion: { type: "string", const: "canonical-json-v1", default: "canonical-json-v1" },
-          idempotencyKey: { type: "string", minLength: 1, maxLength: 128 },
-          deviceId: { type: "string", format: "uuid" },
-          chunk: { "$ref": "#/components/schemas/AdoptionTransferChunk" },
-          records: { type: "array", maxItems: 450, items: { "$ref": "#/components/schemas/AdoptionTransferRecord" } },
-        },
-      },
-      AdoptionTransferSeal: {
-        type: "object",
-        additionalProperties: false,
-        required: ["deviceId", "snapshotFingerprint", "recordCount", "chunkCount"],
-        properties: {
-          canonicalVersion: { type: "string", const: "canonical-json-v1", default: "canonical-json-v1" },
-          idempotencyKey: { type: "string", minLength: 1, maxLength: 128 },
-          deviceId: { type: "string", format: "uuid" },
-          snapshotFingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
-          recordCount: { type: "integer", minimum: 0, maximum: 1000 },
-          chunkCount: { type: "integer", minimum: 0, maximum: 1000 },
-        },
-      },
-      AdoptionTransferPreview: {
-        type: "object",
-        additionalProperties: false,
-        required: ["deviceId"],
-        properties: {
-          canonicalVersion: { type: "string", const: "canonical-json-v1", default: "canonical-json-v1" },
-          idempotencyKey: { type: "string", minLength: 1, maxLength: 128 },
-          deviceId: { type: "string", format: "uuid" },
-          protocolVersion: { type: "integer", enum: [1, 2], default: 2 },
-        },
-      },
-      AdoptionTransferConfirm: {
-        type: "object",
-        additionalProperties: false,
-        required: ["deviceId", "previewFingerprint", "protocolVersion", "resolutions"],
-        properties: {
-          canonicalVersion: { type: "string", const: "canonical-json-v1", default: "canonical-json-v1" },
-          idempotencyKey: { type: "string", minLength: 1, maxLength: 128 },
-          deviceId: { type: "string", format: "uuid" },
-          operationId: { type: "string", format: "uuid" },
-          previewFingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
-          decisionFingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
-          protocolVersion: { type: "integer", enum: [1, 2] },
-          resolutions: { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false, required: ["conflictId", "resolution"], properties: { conflictId: { type: "string" }, resolution: { type: "string", enum: ["keep_guest", "keep_account", "manual_required"] } } } },
-          groupChoices: { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false, required: ["groupId", "resolution"], properties: { groupId: { type: "string" }, resolution: { type: "string", enum: ["keep_guest", "keep_account"] } } } },
-        },
-      },
-      AdoptionTransferApply: {
-        type: "object",
-        additionalProperties: false,
-        required: ["deviceId"],
-        properties: {
-          canonicalVersion: { type: "string", const: "canonical-json-v1", default: "canonical-json-v1" },
-          idempotencyKey: { type: "string", minLength: 1, maxLength: 128 },
-          deviceId: { type: "string", format: "uuid" },
-          decisionFingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
-          expectedGeneration: { type: "integer", minimum: 0 },
-        },
-      },
-      AdoptionTransferStatus: {
-        type: "object",
-        additionalProperties: false,
-        required: ["version", "accountId", "sessionId", "state", "recordCount", "chunkCount", "generation"],
-        properties: {
-          version: { type: "integer", const: 3 },
-          accountId: { type: "string" },
-          sessionId: { type: "string" },
-          guestUserId: { type: "string" },
-          state: { type: "string", enum: ["collecting", "sealing", "sealed", "result_building", "preview_ready", "applying", "complete", "failed"] },
-          expectedGeneration: { type: "integer", minimum: 0 },
-          generation: { type: "integer", minimum: 0 },
-          recordCount: { type: "integer", minimum: 0, maximum: 1000 },
-          chunkCount: { type: "integer", minimum: 0, maximum: 1000 },
-          snapshotFingerprint: { anyOf: [{ type: "string", pattern: "^[a-f0-9]{64}$" }, { type: "null" }] },
-          previewFingerprint: { anyOf: [{ type: "string", pattern: "^[a-f0-9]{64}$" }, { type: "null" }] },
-          operationId: { anyOf: [{ type: "string", format: "uuid" }, { type: "null" }] },
-          decisionFingerprint: { anyOf: [{ type: "string", pattern: "^[a-f0-9]{64}$" }, { type: "null" }] },
-          targetGeneration: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
-          applyCursor: { type: "integer", minimum: 0 },
-          applyTotal: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
-          accountRevision: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
-          failureCode: { anyOf: [{ type: "string" }, { type: "null" }] },
-        },
-      },
+      AdoptionTransferUpload: { oneOf: [adoptionTransferUploadV3OpenApi, adoptionTransferUploadV4OpenApi] },
+      AdoptionTransferSeal: { oneOf: [adoptionTransferSealV3OpenApi, adoptionTransferSealV4OpenApi] },
+      AdoptionTransferPreview: { oneOf: [adoptionTransferPreviewV3OpenApi, adoptionTransferPreviewV4OpenApi] },
+      AdoptionTransferConfirm: { oneOf: [adoptionTransferConfirmV3OpenApi, adoptionTransferConfirmV4OpenApi] },
+      AdoptionTransferApply: { oneOf: [adoptionTransferApplyV3OpenApi, adoptionTransferApplyV4OpenApi] },
+      AdoptionTransferStatus: { oneOf: [adoptionTransferStatusV3OpenApi, adoptionTransferStatusV4OpenApi] },
       EmptyRequest: { type: "object", additionalProperties: false },
       OperationRequest: { type: "object", additionalProperties: false, required: ["operationId"], properties: { operationId: { type: "string", format: "uuid" } } },
       RecoveryCodeConsumeRequest: { type: "object", additionalProperties: false, required: ["code"], properties: { code: { type: "string", pattern: "^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){3}$" } } },
@@ -475,7 +606,7 @@ const objectSchema = (properties: OpenApiRecord, required: readonly string[] = [
 
 /** Dynamic values are used only for user-authored progress/question state. */
 const opaqueObjectSchema = objectSchema({}, [], true);
-const progressRecordSchema = objectSchema({
+const progressRecordProperties = {
   kind: { type: "string", enum: ["node", "item"] },
   recordType: { type: "string", enum: ["active_track", "training_session_summary", "training_session_result", "training_attempt", "review_queue_entry", "goal", "learning_plan"] },
   trackId: { type: "string", minLength: 1, maxLength: 128 },
@@ -485,15 +616,21 @@ const progressRecordSchema = objectSchema({
   state: opaqueObjectSchema,
   lastMutationId: { type: "string", minLength: 16, maxLength: 128 },
   updatedAt: { type: "string", format: "date-time" },
-}, ["kind", "recordType", "trackId", "targetId", "version", "fingerprint", "state", "lastMutationId", "updatedAt"]);
-const guestMergeRecordSchema = objectSchema({
+};
+const progressRecordLegacySchema = objectSchema(progressRecordProperties, ["kind", "recordType", "trackId", "targetId", "version", "fingerprint", "state", "lastMutationId", "updatedAt"]);
+const progressRecordV4Schema = objectSchema({ ...progressRecordProperties, contentIdentitySchema: contentIdentitySchemaProperty }, ["kind", "recordType", "trackId", "targetId", "version", "fingerprint", "state", "lastMutationId", "updatedAt", "contentIdentitySchema"]);
+const progressRecordSchema = { oneOf: [progressRecordLegacySchema, progressRecordV4Schema] };
+const guestMergeRecordProperties = {
   fingerprint: { type: "string", pattern: "^[a-f0-9]{64}$" },
   recordId: { type: "string", minLength: 1, maxLength: 256 },
   recordType: { type: "string", enum: ["active_track", "training_session_summary", "training_session_result", "training_attempt", "review_queue_entry", "goal", "learning_plan"] },
   state: opaqueObjectSchema,
   trackId: { type: "string", minLength: 1, maxLength: 128 },
   version: { type: "integer", minimum: 0 },
-}, ["fingerprint", "recordId", "recordType", "state", "trackId", "version"]);
+};
+const guestMergeRecordLegacySchema = objectSchema(guestMergeRecordProperties, ["fingerprint", "recordId", "recordType", "state", "trackId", "version"]);
+const guestMergeRecordV4Schema = objectSchema({ ...guestMergeRecordProperties, contentIdentitySchema: contentIdentitySchemaProperty }, ["fingerprint", "recordId", "recordType", "state", "trackId", "version", "contentIdentitySchema"]);
+const guestMergeRecordSchema = { oneOf: [guestMergeRecordLegacySchema, guestMergeRecordV4Schema] };
 const guestMergeConflictSchema = objectSchema({
   accountVersion: { type: "integer", minimum: 0 },
   conflictId: { type: "string", minLength: 1, maxLength: 768 },
@@ -501,7 +638,7 @@ const guestMergeConflictSchema = objectSchema({
   recordId: { type: "string", minLength: 1, maxLength: 256 },
   recordType: { type: "string", enum: ["active_track", "training_session_summary", "training_session_result", "training_attempt", "review_queue_entry", "goal", "learning_plan"] },
 }, ["accountVersion", "conflictId", "guestVersion", "recordId", "recordType"]);
-const adoptionPreviewSchema = objectSchema({
+const adoptionPreviewProperties = {
   accountSnapshotVersion: { type: "integer", minimum: 0 },
   accountUserId: { type: "string", format: "uuid" },
   conflicts: { type: "array", maxItems: 1000, items: guestMergeConflictSchema },
@@ -509,14 +646,16 @@ const adoptionPreviewSchema = objectSchema({
   guestSnapshotVersion: { type: "integer", minimum: 0 },
   guestUserId: { type: "string", format: "uuid" },
   operationId: { type: "string", format: "uuid" },
-  protocolVersion: { type: "integer", enum: [1, 2] },
   goalPlanConflictGroups: { type: "array", maxItems: 1000, items: objectSchema({
     groupId: { type: "string", pattern: "^track:.+", maxLength: 192 },
     trackId: { type: "string", minLength: 1, maxLength: 128 },
     localRecordIds: { type: "array", maxItems: 2, items: { type: "string" } },
     accountRecordIds: { type: "array", maxItems: 2, items: { type: "string" } },
   }, ["groupId", "trackId", "localRecordIds", "accountRecordIds"]) },
-}, ["accountSnapshotVersion", "accountUserId", "conflicts", "fingerprint", "guestSnapshotVersion", "guestUserId", "operationId", "protocolVersion"]);
+};
+const adoptionPreviewLegacySchema = objectSchema({ ...adoptionPreviewProperties, protocolVersion: { type: "integer", enum: [1, 2] } }, ["accountSnapshotVersion", "accountUserId", "conflicts", "fingerprint", "guestSnapshotVersion", "guestUserId", "operationId", "protocolVersion"]);
+const adoptionPreviewV4Schema = objectSchema({ ...adoptionPreviewProperties, protocolVersion: { type: "integer", const: 4 }, contentIdentitySchema: contentIdentitySchemaProperty }, ["accountSnapshotVersion", "accountUserId", "conflicts", "fingerprint", "guestSnapshotVersion", "guestUserId", "operationId", "protocolVersion", "contentIdentitySchema"]);
+const adoptionPreviewSchema = { oneOf: [adoptionPreviewLegacySchema, adoptionPreviewV4Schema] };
 const adoptionPlanSchema = objectSchema({
   caseId: { type: "string", enum: ["emptyLocalEmptyRemote", "populatedLocalEmptyRemote", "emptyLocalPopulatedRemote", "populatedLocalPopulatedRemote", "divergentRecord", "blocked"] },
   localRecordCount: { type: "integer", minimum: 0 },
@@ -718,11 +857,41 @@ function enrichOpenApiDocument(document: OpenApiRecord): void {
     objectSchema({ action: { const: "close" }, expectedRevision: { type: "integer", minimum: 0 } }, ["action", "expectedRevision"]),
     objectSchema({ action: { const: "set_legal_hold" }, expectedRevision: { type: "integer", minimum: 0 }, active: { type: "boolean" }, reason: { type: "string", minLength: 1, maxLength: 1_000 } }, ["action", "expectedRevision", "active", "reason"]),
   ] };
-  const progressConflictSchema = objectSchema({ mutationId: { type: "string", minLength: 16, maxLength: 128 }, code: { const: "version_conflict" }, current: { anyOf: [progressRecordSchema, { type: "null" }] } }, ["mutationId", "code", "current"]);
+  const progressConflictSchema = { oneOf: [
+    objectSchema({ mutationId: { type: "string", minLength: 16, maxLength: 128 }, code: { const: "version_conflict" }, current: { anyOf: [progressRecordSchema, { type: "null" }] } }, ["mutationId", "code", "current"]),
+    objectSchema({ mutationId: { type: "string", minLength: 16, maxLength: 128 }, code: { const: "content_identity_schema_conflict" }, current: { anyOf: [progressRecordSchema, { type: "null" }] } }, ["mutationId", "code", "current"]),
+  ] };
   schemas.SyncResponse = objectSchema({ accountRevision: { type: "integer", minimum: 0 }, applied: { type: "array", items: progressRecordSchema }, duplicates: { type: "array", items: { type: "string" } }, conflicts: { type: "array", items: progressConflictSchema }, accountRevisionConflict: { anyOf: [{ type: "object", additionalProperties: false, required: ["code", "currentAccountRevision"], properties: { code: { type: "string", const: "account_revision_conflict" }, currentAccountRevision: { type: "integer", minimum: 0 } } }, { type: "null" }] } }, ["accountRevision", "applied", "duplicates", "conflicts"]);
   schemas.AdoptionPreviewResponse = objectSchema({ preview: adoptionPreviewSchema, plan: adoptionPlanSchema, remoteRecords: { type: "array", items: guestMergeRecordSchema } }, ["preview", "plan", "remoteRecords"]);
   schemas.AdoptionExecutionResponse = objectSchema({ accountRevision: { type: "integer", minimum: 0 }, operationId: { type: "string", format: "uuid" }, mutationIds: { type: "array", items: { type: "string", minLength: 1 } }, records: { type: "array", items: guestMergeRecordSchema } }, ["accountRevision", "operationId", "mutationIds", "records"]);
-  schemas.AdoptionTransferPreviewResponse = objectSchema({ version: { type: "integer", const: 3 }, accountId: { type: "string" }, sessionId: { type: "string" }, guestUserId: { type: "string" }, state: { type: "string" }, expectedGeneration: { type: "integer", minimum: 0 }, generation: { type: "integer", minimum: 0 }, targetGeneration: { type: "integer", minimum: 0 }, recordCount: { type: "integer", minimum: 0 }, chunkCount: { type: "integer", minimum: 0 }, snapshotVersion: { type: "integer", minimum: 0 }, snapshotFingerprint: { anyOf: [{ type: "string", pattern: "^[a-f0-9]{64}$" }, { type: "null" }] }, previewFingerprint: { anyOf: [{ type: "string", pattern: "^[a-f0-9]{64}$" }, { type: "null" }] }, operationId: { anyOf: [{ type: "string", format: "uuid" }, { type: "null" }] }, decisionFingerprint: { anyOf: [{ type: "string", pattern: "^[a-f0-9]{64}$" }, { type: "null" }] }, applyCursor: { type: "integer", minimum: 0 }, applyTotal: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] }, accountRevision: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] }, failureCode: { anyOf: [{ type: "string" }, { type: "null" }] }, preview: adoptionPreviewSchema, plan: adoptionPlanSchema, remoteRecords: { type: "array", items: guestMergeRecordSchema } }, ["version", "accountId", "sessionId", "guestUserId", "state", "expectedGeneration", "generation", "targetGeneration", "recordCount", "chunkCount", "snapshotVersion", "snapshotFingerprint", "previewFingerprint", "operationId", "decisionFingerprint", "applyCursor", "applyTotal", "accountRevision", "failureCode", "preview", "plan", "remoteRecords"]);
+  const adoptionTransferPreviewResponseProperties = {
+    accountId: { type: "string" },
+    sessionId: { type: "string" },
+    guestUserId: { type: "string" },
+    state: { type: "string" },
+    expectedGeneration: { type: "integer", minimum: 0 },
+    generation: { type: "integer", minimum: 0 },
+    targetGeneration: { type: "integer", minimum: 0 },
+    recordCount: { type: "integer", minimum: 0 },
+    chunkCount: { type: "integer", minimum: 0 },
+    snapshotVersion: { type: "integer", minimum: 0 },
+    snapshotFingerprint: { anyOf: [{ type: "string", pattern: "^[a-f0-9]{64}$" }, { type: "null" }] },
+    previewFingerprint: { anyOf: [{ type: "string", pattern: "^[a-f0-9]{64}$" }, { type: "null" }] },
+    operationId: { anyOf: [{ type: "string", format: "uuid" }, { type: "null" }] },
+    decisionFingerprint: { anyOf: [{ type: "string", pattern: "^[a-f0-9]{64}$" }, { type: "null" }] },
+    applyCursor: { type: "integer", minimum: 0 },
+    applyTotal: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
+    accountRevision: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
+    failureCode: { anyOf: [{ type: "string" }, { type: "null" }] },
+    preview: adoptionPreviewSchema,
+    plan: adoptionPlanSchema,
+    remoteRecords: { type: "array", items: guestMergeRecordSchema },
+  };
+  const adoptionTransferPreviewResponseRequired = ["accountId", "sessionId", "guestUserId", "state", "expectedGeneration", "generation", "targetGeneration", "recordCount", "chunkCount", "snapshotVersion", "snapshotFingerprint", "previewFingerprint", "operationId", "decisionFingerprint", "applyCursor", "applyTotal", "accountRevision", "failureCode", "preview", "plan", "remoteRecords"];
+  schemas.AdoptionTransferPreviewResponse = { oneOf: [
+    objectSchema({ ...adoptionTransferPreviewResponseProperties, version: { type: "integer", const: 3 }, protocolVersion: { type: "integer", const: 3 } }, ["version", "protocolVersion", ...adoptionTransferPreviewResponseRequired]),
+    objectSchema({ ...adoptionTransferPreviewResponseProperties, version: { type: "integer", const: 4 }, protocolVersion: { type: "integer", const: 4 }, contentIdentitySchema: contentIdentitySchemaProperty }, ["version", "protocolVersion", "contentIdentitySchema", ...adoptionTransferPreviewResponseRequired]),
+  ] };
   schemas.DeletionOperationStatus = objectSchema({ status: { type: "string", enum: ["pending", "remote_deleted", "complete"] }, operationId: { type: "string", format: "uuid" }, proofId: { anyOf: [{ type: "string" }, { type: "null" }] } }, ["status", "operationId", "proofId"]);
   schemas.ContentReportResponse = objectSchema({ report: contentReportSchema, duplicate: { type: "boolean" } }, ["report", "duplicate"]);
   schemas.AdminContentReportsResponse = objectSchema({ reports: { type: "array", items: contentReportSchema } }, ["reports"]);

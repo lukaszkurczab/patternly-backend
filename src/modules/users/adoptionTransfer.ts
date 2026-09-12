@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { canonicalJson, canonicalJsonBytes, CANONICAL_JSON_VERSION } from "../../infrastructure/identity/canonicalJson.js";
+import { CONTENT_IDENTITY_SCHEMA, assertV4ContentIdentityState, contentIdentitySchema, type ContentIdentitySchema } from "../progress/contracts.js";
 
 /**
  * Protocol-v3 is a durable transfer protocol, rather than a larger version of
@@ -27,21 +28,31 @@ export const ADOPTION_TRANSFER_STATES = Object.freeze([
 ] as const);
 export const adoptionTransferStateSchema = z.enum(ADOPTION_TRANSFER_STATES);
 export const adoptionTransferIdentitySchema = z.object({ recordType: z.string().min(1).max(128), recordId: z.string().min(1).max(256), trackId: z.string().min(1).max(128) }).strict();
-export const adoptionTransferRecordSchema = z.object({ ...adoptionTransferIdentitySchema.shape, fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), state: z.record(z.unknown()), version: z.number().int().nonnegative() }).strict().superRefine((value, context) => {
+const adoptionTransferRecordV3Schema = z.object({ ...adoptionTransferIdentitySchema.shape, fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), state: z.record(z.unknown()), version: z.number().int().nonnegative() }).strict().superRefine((value, context) => {
   try {
     if (JSON.stringify(value.state).length > 128 * 1024 || canonicalJsonBytes(value.state) > ADOPTION_TRANSFER_MAX_CANONICAL_BYTES) context.addIssue({ code: z.ZodIssueCode.custom, message: "adoption_transfer_record_too_large", path: ["state"] });
   } catch {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "adoption_transfer_record_not_canonical", path: ["state"] });
   }
 });
+export const adoptionTransferRecordV4Schema = z.object({ ...adoptionTransferIdentitySchema.shape, contentIdentitySchema, fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), state: z.record(z.unknown()).superRefine((value, context) => {
+  try { assertV4ContentIdentityState(value); } catch (error) { context.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : "content_identity_schema_conflict" }); }
+}), version: z.number().int().nonnegative() }).strict().superRefine((value, context) => {
+  try {
+    if (JSON.stringify(value.state).length > 128 * 1024 || canonicalJsonBytes(value.state) > ADOPTION_TRANSFER_MAX_CANONICAL_BYTES) context.addIssue({ code: z.ZodIssueCode.custom, message: "adoption_transfer_record_too_large", path: ["state"] });
+  } catch {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "adoption_transfer_record_not_canonical", path: ["state"] });
+  }
+});
+export const adoptionTransferRecordSchema = z.union([adoptionTransferRecordV4Schema, adoptionTransferRecordV3Schema]);
 export const adoptionTransferChunkSchema = z.object({ chunkId: z.string().min(1).max(128), index: z.number().int().nonnegative(), recordKeys: z.array(z.string().min(1)).max(ADOPTION_TRANSFER_MAX_CHUNK_RECORDS), fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), bytes: z.number().int().nonnegative().max(ADOPTION_TRANSFER_MAX_CANONICAL_BYTES) }).strict();
 export const adoptionTransferDecisionSchema = z.object({ decisionId: z.string().min(1).max(128), identity: adoptionTransferIdentitySchema, resolution: z.enum(["keep_guest", "keep_account"]), previewFingerprint: z.string().regex(/^[a-f0-9]{64}$/u) }).strict();
 
 const uuid = z.string().uuid();
 const idempotencyKey = z.string().min(1).max(128);
 
-/** HTTP DTOs for the resumable protocol-v3 lifecycle. */
-export const adoptionTransferStartSchema = z.object({
+/** HTTP DTOs for the resumable protocol-v3/v4 lifecycle. */
+const adoptionTransferStartV3Schema = z.object({
   protocolVersion: z.literal(3).optional().default(3),
   canonicalVersion: z.literal(CANONICAL_JSON_VERSION).optional().default(CANONICAL_JSON_VERSION),
   sessionId: idempotencyKey.optional(),
@@ -53,16 +64,39 @@ export const adoptionTransferStartSchema = z.object({
   activeSession: z.boolean().optional().default(false),
   pendingJournal: z.boolean().optional().default(false),
 }).strict();
+const adoptionTransferStartV4Schema = z.object({
+  protocolVersion: z.literal(4),
+  canonicalVersion: z.literal(CANONICAL_JSON_VERSION).optional().default(CANONICAL_JSON_VERSION),
+  contentIdentitySchema,
+  sessionId: idempotencyKey.optional(),
+  idempotencyKey,
+  guestUserId: uuid,
+  snapshotVersion: z.number().int().nonnegative(),
+  expectedGeneration: z.number().int().nonnegative().optional().default(0),
+  deviceId: uuid,
+  activeSession: z.boolean().optional().default(false),
+  pendingJournal: z.boolean().optional().default(false),
+}).strict();
+export const adoptionTransferStartSchema = z.union([adoptionTransferStartV4Schema, adoptionTransferStartV3Schema]);
 
-export const adoptionTransferUploadSchema = z.object({
+const adoptionTransferUploadV3Schema = z.object({
   canonicalVersion: z.literal(CANONICAL_JSON_VERSION).optional().default(CANONICAL_JSON_VERSION),
   idempotencyKey: idempotencyKey.optional(),
   deviceId: uuid,
   chunk: adoptionTransferChunkSchema,
-  records: z.array(adoptionTransferRecordSchema).max(ADOPTION_TRANSFER_MAX_CHUNK_RECORDS),
+  records: z.array(adoptionTransferRecordV3Schema).max(ADOPTION_TRANSFER_MAX_CHUNK_RECORDS),
 }).strict();
+const adoptionTransferUploadV4Schema = z.object({
+  canonicalVersion: z.literal(CANONICAL_JSON_VERSION).optional().default(CANONICAL_JSON_VERSION),
+  contentIdentitySchema,
+  idempotencyKey: idempotencyKey.optional(),
+  deviceId: uuid,
+  chunk: adoptionTransferChunkSchema,
+  records: z.array(adoptionTransferRecordV4Schema).max(ADOPTION_TRANSFER_MAX_CHUNK_RECORDS),
+}).strict();
+export const adoptionTransferUploadSchema = z.union([adoptionTransferUploadV4Schema, adoptionTransferUploadV3Schema]);
 
-export const adoptionTransferSealSchema = z.object({
+const adoptionTransferSealV3Schema = z.object({
   canonicalVersion: z.literal(CANONICAL_JSON_VERSION).optional().default(CANONICAL_JSON_VERSION),
   idempotencyKey: idempotencyKey.optional(),
   deviceId: uuid,
@@ -70,17 +104,35 @@ export const adoptionTransferSealSchema = z.object({
   recordCount: z.number().int().nonnegative().max(ADOPTION_TRANSFER_MAX_RECORDS),
   chunkCount: z.number().int().nonnegative().max(ADOPTION_TRANSFER_MAX_RECORDS),
 }).strict();
+const adoptionTransferSealV4Schema = z.object({
+  canonicalVersion: z.literal(CANONICAL_JSON_VERSION).optional().default(CANONICAL_JSON_VERSION),
+  contentIdentitySchema,
+  idempotencyKey: idempotencyKey.optional(),
+  deviceId: uuid,
+  snapshotFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+  recordCount: z.number().int().nonnegative().max(ADOPTION_TRANSFER_MAX_RECORDS),
+  chunkCount: z.number().int().nonnegative().max(ADOPTION_TRANSFER_MAX_RECORDS),
+}).strict();
+export const adoptionTransferSealSchema = z.union([adoptionTransferSealV4Schema, adoptionTransferSealV3Schema]);
 
-export const adoptionTransferPreviewSchema = z.object({
+const adoptionTransferPreviewV3Schema = z.object({
   canonicalVersion: z.literal(CANONICAL_JSON_VERSION).optional().default(CANONICAL_JSON_VERSION),
   idempotencyKey: idempotencyKey.optional(),
   deviceId: uuid,
   protocolVersion: z.union([z.literal(1), z.literal(2)]).optional().default(2),
 }).strict();
+const adoptionTransferPreviewV4Schema = z.object({
+  canonicalVersion: z.literal(CANONICAL_JSON_VERSION).optional().default(CANONICAL_JSON_VERSION),
+  contentIdentitySchema,
+  idempotencyKey: idempotencyKey.optional(),
+  deviceId: uuid,
+  protocolVersion: z.literal(4),
+}).strict();
+export const adoptionTransferPreviewSchema = z.union([adoptionTransferPreviewV4Schema, adoptionTransferPreviewV3Schema]);
 
 const adoptionTransferResolutionSchema = z.object({ conflictId: z.string().min(1).max(768), resolution: z.enum(["keep_guest", "keep_account", "manual_required"]) }).strict();
 const adoptionTransferGroupChoiceSchema = z.object({ groupId: z.string().min(1).max(512), resolution: z.enum(["keep_guest", "keep_account"]) }).strict();
-export const adoptionTransferConfirmSchema = z.object({
+const adoptionTransferConfirmV3Schema = z.object({
   canonicalVersion: z.literal(CANONICAL_JSON_VERSION).optional().default(CANONICAL_JSON_VERSION),
   idempotencyKey: idempotencyKey.optional(),
   deviceId: uuid,
@@ -91,14 +143,36 @@ export const adoptionTransferConfirmSchema = z.object({
   resolutions: z.array(adoptionTransferResolutionSchema).max(ADOPTION_TRANSFER_MAX_RECORDS),
   groupChoices: z.array(adoptionTransferGroupChoiceSchema).max(ADOPTION_TRANSFER_MAX_RECORDS).optional(),
 }).strict();
+const adoptionTransferConfirmV4Schema = z.object({
+  canonicalVersion: z.literal(CANONICAL_JSON_VERSION).optional().default(CANONICAL_JSON_VERSION),
+  contentIdentitySchema,
+  idempotencyKey: idempotencyKey.optional(),
+  deviceId: uuid,
+  operationId: uuid.optional(),
+  previewFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+  decisionFingerprint: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  protocolVersion: z.literal(4),
+  resolutions: z.array(adoptionTransferResolutionSchema).max(ADOPTION_TRANSFER_MAX_RECORDS),
+  groupChoices: z.array(adoptionTransferGroupChoiceSchema).max(ADOPTION_TRANSFER_MAX_RECORDS).optional(),
+}).strict();
+export const adoptionTransferConfirmSchema = z.union([adoptionTransferConfirmV4Schema, adoptionTransferConfirmV3Schema]);
 
-export const adoptionTransferApplySchema = z.object({
+const adoptionTransferApplyV3Schema = z.object({
   canonicalVersion: z.literal(CANONICAL_JSON_VERSION).optional().default(CANONICAL_JSON_VERSION),
   idempotencyKey: idempotencyKey.optional(),
   deviceId: uuid,
   decisionFingerprint: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   expectedGeneration: z.number().int().nonnegative().optional(),
 }).strict();
+const adoptionTransferApplyV4Schema = z.object({
+  canonicalVersion: z.literal(CANONICAL_JSON_VERSION).optional().default(CANONICAL_JSON_VERSION),
+  contentIdentitySchema,
+  idempotencyKey: idempotencyKey.optional(),
+  deviceId: uuid,
+  decisionFingerprint: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  expectedGeneration: z.number().int().nonnegative().optional(),
+}).strict();
+export const adoptionTransferApplySchema = z.union([adoptionTransferApplyV4Schema, adoptionTransferApplyV3Schema]);
 
 export const adoptionTransferStatusSchema = z.object({
   canonicalVersion: z.literal(CANONICAL_JSON_VERSION).optional().default(CANONICAL_JSON_VERSION),
@@ -118,6 +192,7 @@ export type AdoptionTransferRecord = Readonly<AdoptionTransferIdentity & {
   fingerprint: string;
   state: Readonly<Record<string, unknown>>;
   version: number;
+  contentIdentitySchema?: ContentIdentitySchema;
 }>;
 export type AdoptionTransferChunk = Readonly<{
   chunkId: string;
@@ -139,7 +214,7 @@ export type AdoptionTransferResultChunk = Readonly<{
   fingerprint: string;
 }>;
 export type AdoptionTransfer = Readonly<{
-  version: 3;
+  version: 3 | 4;
   accountId: string;
   sessionId: string;
   guestUserId: string;
@@ -159,6 +234,8 @@ export type AdoptionTransfer = Readonly<{
   operationFingerprint: string;
   idempotencyKey: string;
   updatedAt: string;
+  protocolVersion: 3 | 4;
+  contentIdentitySchema?: ContentIdentitySchema;
 }>;
 
 const stateTransitions: Readonly<Record<AdoptionTransferStateName, readonly AdoptionTransferStateName[]>> = Object.freeze({
@@ -179,9 +256,11 @@ export function adoptionTransferRecordKey(value: AdoptionTransferIdentity): stri
   return canonicalJson({ recordId: value.recordId, recordType: value.recordType, trackId: value.trackId });
 }
 
-export function createAdoptionSnapshotSeal(input: Readonly<{ guestUserId: string; snapshotVersion: number; records: readonly AdoptionTransferRecord[]; chunks: readonly AdoptionTransferChunk[] }>): string {
+export function createAdoptionSnapshotSeal(input: Readonly<{ guestUserId: string; snapshotVersion: number; records: readonly AdoptionTransferRecord[]; chunks: readonly AdoptionTransferChunk[]; contentIdentitySchema?: ContentIdentitySchema }>): string {
+  const schema = input.contentIdentitySchema ?? (input.records.some((record) => record.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA) ? CONTENT_IDENTITY_SCHEMA : undefined);
   return digest({
     schema: CANONICAL_JSON_VERSION,
+    ...(schema === CONTENT_IDENTITY_SCHEMA ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
     guestUserId: input.guestUserId,
     snapshotVersion: input.snapshotVersion,
     records: input.records.slice().sort((a, b) => adoptionTransferRecordKey(a).localeCompare(adoptionTransferRecordKey(b))),
@@ -193,12 +272,14 @@ export function createAdoptionTransferChunkFingerprint(input: Readonly<Pick<Adop
   return digest({ chunkId: input.chunkId, index: input.index, recordKeys: [...input.recordKeys].sort(), bytes: input.bytes });
 }
 
-export function createAdoptionTransfer(input: Readonly<{ accountId: string; sessionId: string; guestUserId: string; snapshotVersion: number; expectedGeneration?: number; targetGeneration?: number; idempotencyKey?: string }>): AdoptionTransfer {
+export function createAdoptionTransfer(input: Readonly<{ accountId: string; sessionId: string; guestUserId: string; snapshotVersion: number; expectedGeneration?: number; targetGeneration?: number; idempotencyKey?: string; protocolVersion?: 3 | 4; contentIdentitySchema?: ContentIdentitySchema }>): AdoptionTransfer {
   const expectedGeneration = input.expectedGeneration ?? 0;
   const targetGeneration = input.targetGeneration ?? expectedGeneration + 1;
   const idempotencyKey = input.idempotencyKey ?? input.sessionId;
   if (!Number.isSafeInteger(targetGeneration) || targetGeneration <= expectedGeneration) throw new Error("adoption_transfer_generation_conflict");
-  const base = { version: 3 as const, accountId: input.accountId, sessionId: input.sessionId, guestUserId: input.guestUserId, state: "collecting" as const, expectedGeneration, generation: expectedGeneration, targetGeneration, snapshotVersion: input.snapshotVersion, recordCount: 0, chunkCount: 0, snapshotFingerprint: null, records: Object.freeze([]), chunks: Object.freeze([]), decisions: Object.freeze([]), resultChunks: Object.freeze([]), failureCode: null, idempotencyKey, updatedAt: isoNow() };
+  const protocolVersion = input.protocolVersion ?? 3;
+  if (protocolVersion === 4 && input.contentIdentitySchema !== CONTENT_IDENTITY_SCHEMA) throw new Error("content_identity_schema_conflict");
+  const base = { version: protocolVersion === 4 ? 4 as const : 3 as const, accountId: input.accountId, sessionId: input.sessionId, guestUserId: input.guestUserId, state: "collecting" as const, expectedGeneration, generation: expectedGeneration, targetGeneration, snapshotVersion: input.snapshotVersion, recordCount: 0, chunkCount: 0, snapshotFingerprint: null, records: Object.freeze([]), chunks: Object.freeze([]), decisions: Object.freeze([]), resultChunks: Object.freeze([]), failureCode: null, idempotencyKey, updatedAt: isoNow(), protocolVersion, ...(protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) };
   return Object.freeze({ ...base, operationFingerprint: digest(base) });
 }
 
@@ -212,6 +293,8 @@ function transition(transfer: AdoptionTransfer, next: AdoptionTransferStateName,
 }
 
 export function appendAdoptionTransferRecord(transfer: AdoptionTransfer, record: AdoptionTransferRecord, idempotencyKey = record.fingerprint): AdoptionTransfer {
+  if (transfer.protocolVersion === 4 && record.contentIdentitySchema !== CONTENT_IDENTITY_SCHEMA) throw new Error("content_identity_schema_conflict");
+  if (transfer.protocolVersion === 3 && record.contentIdentitySchema !== undefined) throw new Error("content_identity_schema_conflict");
   if (transfer.state !== "collecting") {
     if (idempotencyKey === transfer.idempotencyKey) return transfer;
     throw new Error("adoption_transfer_precondition_failed");
@@ -249,7 +332,7 @@ export function sealAdoptionTransfer(transfer: AdoptionTransfer, input: Readonly
   if (sealing.state !== "sealing") throw new Error("adoption_transfer_precondition_failed");
   if (input.recordCount !== sealing.recordCount || input.chunkCount !== sealing.chunkCount) throw new Error("adoption_transfer_snapshot_incomplete");
   if (expectedState !== "collecting" && transfer.state !== expectedState) throw new Error("adoption_transfer_precondition_failed");
-  const expected = createAdoptionSnapshotSeal({ guestUserId: sealing.guestUserId, snapshotVersion: sealing.snapshotVersion, records: sealing.records, chunks: sealing.chunks });
+  const expected = createAdoptionSnapshotSeal({ guestUserId: sealing.guestUserId, snapshotVersion: sealing.snapshotVersion, records: sealing.records, chunks: sealing.chunks, ...(sealing.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) });
   if (expected !== input.snapshotFingerprint) throw new Error("adoption_transfer_snapshot_seal_mismatch");
   return Object.freeze({ ...sealing, state: "sealed", snapshotFingerprint: input.snapshotFingerprint, updatedAt: isoNow() });
 }

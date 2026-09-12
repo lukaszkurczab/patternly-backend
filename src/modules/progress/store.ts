@@ -58,7 +58,20 @@ import {
   type AdoptionTransferStart,
   type AdoptionTransferUpload,
 } from "../users/adoptionTransfer.js";
-import { legacySyncableRecordTypeSchema, syncableRecordTypeSchema, type ProgressMutation, type ProgressRecord, type ProgressSnapshot, type ProgressStore, type SyncBatchMetadata, type SyncBatchResult } from "./contracts.js";
+import {
+  CONTENT_IDENTITY_SCHEMA,
+  assertV4ContentIdentityState,
+  legacySyncableRecordTypeSchema,
+  syncableRecordTypeSchema,
+  type AnyProgressMutation,
+  type ContentIdentitySchema,
+  type ProgressMutation,
+  type ProgressRecord,
+  type ProgressSnapshot,
+  type ProgressStore,
+  type SyncBatchMetadata,
+  type SyncBatchResult,
+} from "./contracts.js";
 
 const ACCOUNT_METADATA_ID = "account";
 const SYNC_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
@@ -93,13 +106,22 @@ function toView(data: Record<string, unknown>): ProgressRecord {
   const parsedRecordType = syncableRecordTypeSchema.safeParse(data.recordType);
   if (kind !== "node" && kind !== "item" || !parsedRecordType.success || typeof trackId !== "string" || typeof targetId !== "string" || typeof version !== "number" || !Number.isSafeInteger(version) || version < 0 || typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(fingerprint) || typeof lastMutationId !== "string") throw new Error("progress_record_invalid");
   const state = asRecord(data.state, "progress_state");
-  if (createMergeRecordFingerprint({ recordId: targetId, recordType: parsedRecordType.data, state, trackId }) !== fingerprint) throw new Error("progress_fingerprint_mismatch");
-  return Object.freeze({ kind, recordType: parsedRecordType.data, trackId, targetId, version, fingerprint, state, lastMutationId, updatedAt: asIsoString(data.updatedAt, "progress_updated_at") });
+  const schema = data.contentIdentitySchema;
+  if (schema !== undefined && schema !== CONTENT_IDENTITY_SCHEMA) throw new Error("content_identity_schema_conflict");
+  if (schema === CONTENT_IDENTITY_SCHEMA) {
+    try { assertV4ContentIdentityState(state); } catch { throw new Error("content_identity_schema_conflict"); }
+  }
+  if (createMergeRecordFingerprint({ recordId: targetId, recordType: parsedRecordType.data, state, trackId, ...(schema === CONTENT_IDENTITY_SCHEMA ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) }) !== fingerprint) throw new Error("progress_fingerprint_mismatch");
+  return Object.freeze({ kind, recordType: parsedRecordType.data, trackId, targetId, version, fingerprint, state, lastMutationId, updatedAt: asIsoString(data.updatedAt, "progress_updated_at"), ...(schema === CONTENT_IDENTITY_SCHEMA ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) });
 }
 
-function mergeRecordToMutation(record: GuestMergeRecord, mutationId: string, expectedVersion: number | null): ProgressMutation {
+function isV4Mutation(mutation: AnyProgressMutation): mutation is Extract<AnyProgressMutation, { contentIdentitySchema: ContentIdentitySchema }> {
+  return "contentIdentitySchema" in mutation && mutation.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA;
+}
+
+function mergeRecordToMutation(record: GuestMergeRecord, mutationId: string, expectedVersion: number | null): AnyProgressMutation {
   const kind = record.recordType === "training_attempt" || record.recordType === "review_queue_entry" ? "item" : "node";
-  return { mutationId, kind, recordType: record.recordType, trackId: record.trackId, targetId: record.recordId, expectedVersion, fingerprint: record.fingerprint, state: record.state };
+  return { mutationId, kind, recordType: record.recordType, trackId: record.trackId, targetId: record.recordId, expectedVersion, fingerprint: record.fingerprint, state: record.state, ...(record.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) } as AnyProgressMutation;
 }
 
 function accountMetadataRef(db: Firestore, userId: string): DocumentReference {
@@ -141,8 +163,8 @@ function adoptionExpiresAt(createdAt: Timestamp): Timestamp {
 
 const adoptionRecordKey = adoptionTransferRecordKey;
 
-function adoptionRecordFingerprint(record: Readonly<{ recordType: string; recordId: string; trackId: string; state: Readonly<Record<string, unknown>> }>): string {
-  return createHash("sha256").update(canonicalJson({ recordId: record.recordId, recordType: record.recordType, state: record.state, trackId: record.trackId }), "utf8").digest("hex");
+function adoptionRecordFingerprint(record: Readonly<{ recordType: string; recordId: string; trackId: string; state: Readonly<Record<string, unknown>>; contentIdentitySchema?: ContentIdentitySchema }>): string {
+  return createHash("sha256").update(canonicalJson({ ...(record.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}), recordId: record.recordId, recordType: record.recordType, state: record.state, trackId: record.trackId }), "utf8").digest("hex");
 }
 
 function adoptionSnapshotEnvelopeBytes(guestUserId: string, snapshotVersion: number, recordCount: number, recordPayloadBytes: number): number {
@@ -154,7 +176,7 @@ function adoptionSnapshotEnvelopeBytes(guestUserId: string, snapshotVersion: num
   return empty - 2 + recordPayloadBytes + Math.max(0, recordCount - 1);
 }
 
-function recordPayloadBytes(record: Readonly<{ recordType: string; recordId: string; trackId: string; fingerprint: string; state: Readonly<Record<string, unknown>>; version: number }>): number {
+function recordPayloadBytes(record: Readonly<{ recordType: string; recordId: string; trackId: string; fingerprint: string; state: Readonly<Record<string, unknown>>; version: number; contentIdentitySchema?: ContentIdentitySchema }>): number {
   return canonicalJsonBytes(record);
 }
 
@@ -175,9 +197,12 @@ function readStoredAdoptionTransfer(data: Record<string, unknown>): AdoptionTran
   const chunkCount = data.chunkCount;
   const operationFingerprint = data.operationFingerprint;
   const idempotencyKey = data.idempotencyKey;
+  const protocolVersion = data.protocolVersion === undefined ? 3 : data.protocolVersion;
+  const storedContentIdentitySchema = data.contentIdentitySchema;
   if (!accountId || !sessionId || !guestUserId || !state.success || !Number.isSafeInteger(expectedGeneration) || !Number.isSafeInteger(generation) || !Number.isSafeInteger(targetGeneration) || Number(targetGeneration) <= Number(expectedGeneration) || !Number.isSafeInteger(snapshotVersion) || !Number.isSafeInteger(recordCount) || !Number.isSafeInteger(chunkCount) || typeof operationFingerprint !== "string" || typeof idempotencyKey !== "string") throw new Error("adoption_transfer_invalid");
+  if (protocolVersion !== 3 && protocolVersion !== 4 || protocolVersion === 4 && storedContentIdentitySchema !== CONTENT_IDENTITY_SCHEMA || protocolVersion === 3 && storedContentIdentitySchema !== undefined) throw new Error("content_identity_schema_conflict");
   return Object.freeze({
-    version: 3,
+    version: protocolVersion,
     accountId,
     sessionId,
     guestUserId,
@@ -196,15 +221,45 @@ function readStoredAdoptionTransfer(data: Record<string, unknown>): AdoptionTran
     failureCode: typeof data.failureCode === "string" ? data.failureCode : null,
     operationFingerprint,
     idempotencyKey,
+    protocolVersion,
+    ...(protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
     updatedAt: data.updatedAt instanceof Timestamp ? data.updatedAt.toDate().toISOString() : typeof data.updatedAt === "string" ? data.updatedAt : new Date(0).toISOString(),
   });
 }
 
 function parseAdoptionRecord(data: Record<string, unknown>): import("../users/adoptionTransfer.js").AdoptionTransferRecord {
-  const parsed = adoptionTransferRecordSchema.safeParse({ recordType: data.recordType, recordId: data.recordId, trackId: data.trackId, fingerprint: data.fingerprint, state: data.state, version: data.version });
+  const parsed = adoptionTransferRecordSchema.safeParse({ recordType: data.recordType, recordId: data.recordId, trackId: data.trackId, fingerprint: data.fingerprint, state: data.state, version: data.version, ...(data.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) });
   if (!parsed.success) throw new Error("adoption_transfer_record_invalid");
   if (adoptionRecordFingerprint(parsed.data) !== parsed.data.fingerprint) throw new Error("progress_fingerprint_mismatch");
   return Object.freeze(parsed.data);
+}
+
+function parseStoredOneShotRecords(data: Record<string, unknown>, protocolVersion: 1 | 2 | 4, guestUserId: string): readonly GuestMergeRecord[] {
+  if (!Array.isArray(data.records)) throw new Error(protocolVersion === 4 ? "content_identity_schema_conflict" : "sync_operation_invalid");
+  const parsed = guestMergeSnapshotSchema.safeParse({
+    protocolVersion,
+    ...(protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
+    guestSnapshotVersion: 0,
+    guestUserId,
+    records: data.records,
+    activeSession: false,
+    pendingJournal: false,
+  });
+  if (!parsed.success) throw new Error(protocolVersion === 4 ? "content_identity_schema_conflict" : "sync_operation_invalid");
+  const records = parsed.data.records.map((record) => {
+    const candidate = record as GuestMergeRecord;
+    const fingerprint = createMergeRecordFingerprint({
+      recordId: candidate.recordId,
+      recordType: candidate.recordType,
+      state: candidate.state,
+      trackId: candidate.trackId,
+      ...(protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
+    });
+    if (fingerprint !== candidate.fingerprint) throw new Error(protocolVersion === 4 ? "content_identity_schema_conflict" : "progress_fingerprint_mismatch");
+    return Object.freeze(candidate);
+  });
+  if (protocolVersion === 2 || protocolVersion === 4) assertGoalPlanBundles(records, protocolVersion);
+  return Object.freeze(records);
 }
 
 function parseAdoptionChunk(data: Record<string, unknown>): import("../users/adoptionTransfer.js").AdoptionTransferChunk {
@@ -222,7 +277,8 @@ function parseAdoptionChunk(data: Record<string, unknown>): import("../users/ado
 
 function adoptionStatusFromData(data: Record<string, unknown>): Readonly<Record<string, unknown>> {
   const status: Record<string, unknown> = {
-    version: 3,
+    version: data.protocolVersion === 4 ? 4 : 3,
+    protocolVersion: data.protocolVersion === 4 ? 4 : 3,
     accountId: data.accountId,
     sessionId: data.sessionId,
     guestUserId: data.guestUserId,
@@ -242,12 +298,15 @@ function adoptionStatusFromData(data: Record<string, unknown>): Readonly<Record<
     accountRevision: data.accountRevision ?? null,
     failureCode: data.failureCode ?? null,
   };
+  if (data.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA) status.contentIdentitySchema = CONTENT_IDENTITY_SCHEMA;
   return Object.freeze(status);
 }
 
 function adoptionOperationFields(transfer: AdoptionTransfer, createdAt: Timestamp, expiresAt: Timestamp, input: AdoptionTransferStart): Record<string, unknown> {
   return {
-    version: 3,
+    version: transfer.version,
+    protocolVersion: transfer.protocolVersion,
+    ...(transfer.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
     accountId: transfer.accountId,
     sessionId: transfer.sessionId,
     guestUserId: transfer.guestUserId,
@@ -276,7 +335,8 @@ export function createAdoptionDecisionFingerprint(input: AdoptionTransferConfirm
   const resolutions = [...input.resolutions].sort((left, right) => left.conflictId.localeCompare(right.conflictId));
   const groupChoices = [...(input.groupChoices ?? [])].sort((left, right) => left.groupId.localeCompare(right.groupId));
   return createHash("sha256").update(canonicalJson({
-    schema: "adoption-transfer-v3-decision",
+    schema: input.protocolVersion === 4 ? "adoption-transfer-v4-decision" : "adoption-transfer-v3-decision",
+    ...(input.protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
     deviceId: input.deviceId,
     previewFingerprint: input.previewFingerprint,
     protocolVersion: input.protocolVersion,
@@ -285,13 +345,14 @@ export function createAdoptionDecisionFingerprint(input: AdoptionTransferConfirm
   }), "utf8").digest("hex");
 }
 
-function adoptionPreviewSnapshot(input: Readonly<{ guestUserId: string; snapshotVersion: number; protocolVersion: 1 | 2; activeSession: boolean; pendingJournal: boolean }>, records: readonly import("../users/adoptionTransfer.js").AdoptionTransferRecord[]): GuestMergeSnapshot {
+function adoptionPreviewSnapshot(input: Readonly<{ guestUserId: string; snapshotVersion: number; protocolVersion: 1 | 2 | 4; activeSession: boolean; pendingJournal: boolean; contentIdentitySchema?: ContentIdentitySchema }>, records: readonly import("../users/adoptionTransfer.js").AdoptionTransferRecord[]): GuestMergeSnapshot {
   return {
     protocolVersion: input.protocolVersion,
     guestSnapshotVersion: input.snapshotVersion,
     guestUserId: input.guestUserId,
     activeSession: input.activeSession,
     pendingJournal: input.pendingJournal,
+    ...(input.protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
     records: records.map((record) => ({
       fingerprint: record.fingerprint,
       recordId: record.recordId,
@@ -299,6 +360,7 @@ function adoptionPreviewSnapshot(input: Readonly<{ guestUserId: string; snapshot
       state: record.state,
       trackId: record.trackId,
       version: record.version,
+      ...(record.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
     })),
   } as GuestMergeSnapshot;
 }
@@ -329,6 +391,7 @@ function parseAdoptionDecisionRows(rows: readonly DocumentSnapshot[]): AdoptionT
     previewFingerprint: first.previewFingerprint,
     decisionFingerprint: first.decisionFingerprint,
     protocolVersion: first.protocolVersion,
+    ...(first.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
     resolutions,
     ...(groupChoices.length > 0 ? { groupChoices } : {}),
   });
@@ -354,9 +417,12 @@ function buildAdoptionMaterialization(operationId: string, guestRecords: readonl
   const changes: Array<{ record: GuestMergeRecord; remote: GuestMergeRecord | undefined; mutationId: string }> = [];
   const groupedKeys = new Set<string>();
 
-  if (confirmation.protocolVersion === 2) {
-    const preview = buildGuestMergePreview({ accountUserId: "00000000-0000-4000-8000-000000000000", accountSnapshotVersion: 0, guestSnapshot: { protocolVersion: 2, guestSnapshotVersion: 0, guestUserId: "11111111-1111-4111-8111-111111111111", records: [...guestRecords], activeSession: false, pendingJournal: false }, remoteRecords, identityMode: "full" });
-    const previewGroups = preview.preview.protocolVersion === 2 ? preview.preview.goalPlanConflictGroups : [];
+  if (confirmation.protocolVersion === 2 || confirmation.protocolVersion === 4) {
+    const guestSnapshot = confirmation.protocolVersion === 4
+      ? { protocolVersion: 4 as const, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA, guestSnapshotVersion: 0, guestUserId: "11111111-1111-4111-8111-111111111111", records: guestRecords.map((record) => ({ ...record, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA })), activeSession: false, pendingJournal: false }
+      : { protocolVersion: 2 as const, guestSnapshotVersion: 0, guestUserId: "11111111-1111-4111-8111-111111111111", records: [...guestRecords], activeSession: false, pendingJournal: false };
+    const preview = buildGuestMergePreview({ accountUserId: "00000000-0000-4000-8000-000000000000", accountSnapshotVersion: 0, guestSnapshot, remoteRecords, identityMode: "full" });
+    const previewGroups = preview.preview.protocolVersion === 2 || preview.preview.protocolVersion === 4 ? preview.preview.goalPlanConflictGroups : [];
     for (const group of previewGroups) {
       for (const key of [...group.localRecordIds, ...group.accountRecordIds]) groupedKeys.add(key);
       const choice = confirmation.groupChoices.find((candidate) => candidate.groupId === group.groupId);
@@ -368,7 +434,15 @@ function buildAdoptionMaterialization(operationId: string, guestRecords: readonl
         if (local && local.state.deleted !== true) queue(local, remote, key);
         else if (remote && remote.state.deleted !== true) {
           const tombstoneState = Object.freeze({ deleted: true });
-          const tombstone: GuestMergeRecord = Object.freeze({ fingerprint: createMergeRecordFingerprint({ recordId: group.trackId, recordType, state: tombstoneState, trackId: group.trackId }), recordId: group.trackId, recordType, state: tombstoneState, trackId: group.trackId, version: remote.version });
+          const tombstone: GuestMergeRecord = Object.freeze({
+            ...(confirmation.protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
+            fingerprint: createMergeRecordFingerprint({ recordId: group.trackId, recordType, state: tombstoneState, trackId: group.trackId, ...(confirmation.protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) }),
+            recordId: group.trackId,
+            recordType,
+            state: tombstoneState,
+            trackId: group.trackId,
+            version: remote.version,
+          });
           queue(tombstone, remote, key);
         }
       }
@@ -383,7 +457,7 @@ function buildAdoptionMaterialization(operationId: string, guestRecords: readonl
     if (remote && resolution?.resolution === "keep_account") continue;
     queue(record, remote, key);
   }
-  if (confirmation.protocolVersion === 2) assertGoalPlanBundles([...resolved.values()]);
+  if (confirmation.protocolVersion === 2 || confirmation.protocolVersion === 4) assertGoalPlanBundles([...resolved.values()], confirmation.protocolVersion);
   return Object.freeze({
     records: Object.freeze([...resolved.values()].sort((left, right) => adoptionRecordKey(left).localeCompare(adoptionRecordKey(right)))),
     changes: Object.freeze(changes),
@@ -408,7 +482,7 @@ function syncBatchRef(db: Firestore, userId: string, metadata: SyncBatchMetadata
   return db.collection(COLLECTIONS.users).doc(userId).collection("syncBatches").doc(id);
 }
 
-function syncBatchFingerprint(metadata: SyncBatchMetadata, expectedAccountRevision: number, mutations: readonly ProgressMutation[]): string {
+function syncBatchFingerprint(metadata: SyncBatchMetadata, expectedAccountRevision: number, mutations: readonly AnyProgressMutation[]): string {
   return createHash("sha256").update(canonicalJson({ metadata, expectedAccountRevision, mutations }), "utf8").digest("hex");
 }
 
@@ -433,18 +507,19 @@ function readAdoptionGenerationCounter(data: Record<string, unknown> | undefined
 export class FirestoreProgressStore implements ProgressStore {
   public constructor(private readonly db: Firestore) {}
 
-  public async read(userId: string, protocolVersion: 1 | 2 = 1): Promise<readonly ProgressRecord[]> {
+  public async read(userId: string, protocolVersion: 1 | 2 | 4 = 1): Promise<readonly ProgressRecord[]> {
     return (await this.readSnapshot(userId, protocolVersion)).records;
   }
 
-  public async readSnapshot(userId: string, protocolVersion: 1 | 2 = 1): Promise<ProgressSnapshot> {
-    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+  public async readSnapshot(userId: string, protocolVersion: 1 | 2 | 4 = 1): Promise<ProgressSnapshot> {
     const meta = await accountMetadataRef(this.db, userId).get();
     const metadata = meta.data() as Record<string, unknown> | undefined;
     const generation = readAccountGeneration(metadata);
     const snapshot = await progressCollectionRef(this.db, userId, generation).get();
     const records = snapshot.docs.map((document) => toView(asRecord(document.data(), "progress")))
-      .filter((record) => protocolVersion === 2 || legacySyncableRecordTypeSchema.safeParse(record.recordType).success);
+      .filter((record) => protocolVersion === 4
+        ? record.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA
+        : record.contentIdentitySchema === undefined && (protocolVersion === 2 || legacySyncableRecordTypeSchema.safeParse(record.recordType).success));
     return Object.freeze({ accountRevision: readAccountRevision(metadata), generation, records: Object.freeze(records) });
   }
 
@@ -476,32 +551,43 @@ export class FirestoreProgressStore implements ProgressStore {
       if (operationSnapshot.exists) {
         const stored = asRecord(operationSnapshot.data(), "sync_operation");
         if (stored.previewFingerprint !== confirmation.previewFingerprint || stored.guestUserId !== parsedGuestSnapshot.guestUserId) throw new Error("mutation_id_reuse");
-        if (stored.protocolVersion !== undefined && stored.protocolVersion !== confirmation.protocolVersion) throw new Error("mutation_id_reuse");
+        const storedProtocolVersion = stored.protocolVersion === undefined ? confirmation.protocolVersion : stored.protocolVersion;
+        if (storedProtocolVersion !== confirmation.protocolVersion) throw new Error("mutation_id_reuse");
+        if (storedProtocolVersion !== 1 && storedProtocolVersion !== 2 && storedProtocolVersion !== 4) throw new Error("sync_operation_invalid");
+        if (storedProtocolVersion === 4
+          ? stored.contentIdentitySchema !== CONTENT_IDENTITY_SCHEMA
+          : stored.contentIdentitySchema !== undefined) throw new Error("content_identity_schema_conflict");
         if (stored.confirmation !== undefined && JSON.stringify(stored.confirmation) !== JSON.stringify(confirmation)) throw new Error("mutation_id_reuse");
         if (!Number.isSafeInteger(stored.accountRevision) || Number(stored.accountRevision) < 0) throw new Error("account_revision_invalid");
-        return Object.freeze({ accountRevision: Number(stored.accountRevision), operationId: confirmation.operationId, mutationIds: Object.freeze(Array.isArray(stored.mutationIds) ? stored.mutationIds.filter((value): value is string => typeof value === "string") : []), records: Object.freeze(Array.isArray(stored.records) ? stored.records.map((value) => value as GuestMergeRecord) : []) });
+        const records = parseStoredOneShotRecords(stored, storedProtocolVersion, parsedGuestSnapshot.guestUserId);
+        if (!Array.isArray(stored.mutationIds) || stored.mutationIds.some((value) => typeof value !== "string")) throw new Error("sync_operation_invalid");
+        return Object.freeze({ accountRevision: Number(stored.accountRevision), operationId: confirmation.operationId, mutationIds: Object.freeze(stored.mutationIds), records });
       }
       const accountRevision = readAccountRevision(metaSnapshot.data() as Record<string, unknown> | undefined);
       const remoteRecords = progressSnapshot.docs.map((document) => progressRecordToMergeRecord(toView(asRecord(document.data(), "progress"))))
-        .filter((record) => parsedGuestSnapshot.protocolVersion === 2 || legacySyncableRecordTypeSchema.safeParse(record.recordType).success);
-      const adoption = buildGuestMergePreview({ accountUserId: userId, accountSnapshotVersion: accountRevision, guestSnapshot: parsedGuestSnapshot, remoteRecords });
+        .filter((record) => parsedGuestSnapshot.protocolVersion === 4
+          ? record.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA
+          : record.contentIdentitySchema === undefined && (parsedGuestSnapshot.protocolVersion === 2 || legacySyncableRecordTypeSchema.safeParse(record.recordType).success));
+      const adoption = buildGuestMergePreview({ accountUserId: userId, accountSnapshotVersion: accountRevision, guestSnapshot: parsedGuestSnapshot, remoteRecords, identityMode: parsedGuestSnapshot.protocolVersion === 4 ? "full" : "legacy" });
       if (adoption.preview.fingerprint !== confirmation.previewFingerprint || adoption.preview.operationId !== confirmation.operationId) throw new Error("merge_preview_mismatch");
       if (adoption.plan.blockingReason === "active_session") throw new Error("active_session_adoption_blocked");
       if (adoption.plan.blockingReason === "journal_recovery") throw new Error("journal_recovery_required");
       const ready = validateGuestMergeConfirmation(adoption.preview, confirmation);
-      const remoteByKey = new Map(remoteRecords.map((record) => [mergeRecordKey(record), record]));
+      const mergeIdentityMode = parsedGuestSnapshot.protocolVersion === 4 ? "full" : "legacy";
+      const remoteByKey = new Map(remoteRecords.map((record) => [mergeRecordKey(record, mergeIdentityMode), record]));
       const resolved = new Map(remoteByKey);
+      const localByKey = new Map(parsedGuestSnapshot.records.map((record) => [mergeRecordKey(record, mergeIdentityMode), record]));
       const mutationIds: string[] = [];
-      const progressWrites: Array<{ mutation: ProgressMutation; ref: DocumentReference; mutationRef: DocumentReference; nextVersion: number; updatedAt: ReturnType<typeof now> }> = [];
+      const progressWrites: Array<{ mutation: AnyProgressMutation; ref: DocumentReference; mutationRef: DocumentReference; nextVersion: number; updatedAt: ReturnType<typeof now> }> = [];
       const groupedKeys = new Set<string>();
-      if (adoption.preview.protocolVersion === 2 && ready.confirmation.protocolVersion === 2) {
-        const localByKey = new Map(parsedGuestSnapshot.records.map((record) => [mergeRecordKey(record), record]));
+      if ((adoption.preview.protocolVersion === 2 || adoption.preview.protocolVersion === 4) && (ready.confirmation.protocolVersion === 2 || ready.confirmation.protocolVersion === 4)) {
+        const identityMode = mergeIdentityMode;
         for (const group of adoption.preview.goalPlanConflictGroups) {
           for (const key of [...group.localRecordIds, ...group.accountRecordIds]) groupedKeys.add(key);
           const choice = ready.confirmation.groupChoices.find((candidate) => candidate.groupId === group.groupId)!;
           if (choice.resolution === "keep_account") continue;
           for (const recordType of ["goal", "learning_plan"] as const) {
-            const key = `${recordType}:${group.trackId}`;
+            const key = mergeRecordKey({ recordType, recordId: group.trackId, trackId: group.trackId }, identityMode);
             const local = localByKey.get(key);
             const remote = remoteByKey.get(key);
             if (local && local.state.deleted !== true) {
@@ -509,21 +595,29 @@ export class FirestoreProgressStore implements ProgressStore {
               queueWrite(local, remote, key);
             } else if (remote && remote.state.deleted !== true) {
               const tombstoneState = Object.freeze({ deleted: true });
-              const tombstone: GuestMergeRecord = Object.freeze({ fingerprint: createMergeRecordFingerprint({ recordId: group.trackId, recordType, state: tombstoneState, trackId: group.trackId }), recordId: group.trackId, recordType, state: tombstoneState, trackId: group.trackId, version: remote.version });
+              const tombstone: GuestMergeRecord = Object.freeze({
+                ...(parsedGuestSnapshot.protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
+                fingerprint: createMergeRecordFingerprint({ recordId: group.trackId, recordType, state: tombstoneState, trackId: group.trackId, ...(parsedGuestSnapshot.protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) }),
+                recordId: group.trackId,
+                recordType,
+                state: tombstoneState,
+                trackId: group.trackId,
+                version: remote.version,
+              });
               queueWrite(tombstone, remote, key);
             }
           }
         }
       }
       for (const record of parsedGuestSnapshot.records) {
-        const key = mergeRecordKey(record);
+        const key = mergeRecordKey(record, parsedGuestSnapshot.protocolVersion === 4 ? "full" : "legacy");
         if (groupedKeys.has(key)) continue;
         const remote = remoteByKey.get(key);
         if (remote?.fingerprint === record.fingerprint) continue;
         if (remote && ready.confirmation.resolutions.find((resolution) => resolution.conflictId === key)?.resolution === "keep_account") continue;
         queueWrite(record, remote, key);
       }
-      if (parsedGuestSnapshot.protocolVersion === 2) assertGoalPlanBundles([...resolved.values()]);
+      if (parsedGuestSnapshot.protocolVersion === 2 || parsedGuestSnapshot.protocolVersion === 4) assertGoalPlanBundles([...resolved.values()], parsedGuestSnapshot.protocolVersion);
       for (const write of progressWrites) {
         transaction.set(write.ref, {
           kind: write.mutation.kind,
@@ -535,6 +629,7 @@ export class FirestoreProgressStore implements ProgressStore {
           state: write.mutation.state,
           lastMutationId: write.mutation.mutationId,
           updatedAt: write.updatedAt,
+          ...(isV4Mutation(write.mutation) ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
         });
         transaction.create(write.mutationRef, {
           deviceId,
@@ -544,6 +639,7 @@ export class FirestoreProgressStore implements ProgressStore {
           createdAt: write.updatedAt,
           expiresAt: expiresAfterSyncRetention(write.updatedAt),
           operationId: confirmation.operationId,
+          ...(isV4Mutation(write.mutation) ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
         });
       }
       const nextAccountRevision = accountRevision + progressWrites.length;
@@ -559,6 +655,7 @@ export class FirestoreProgressStore implements ProgressStore {
         mutationIds,
         previewFingerprint: confirmation.previewFingerprint,
         protocolVersion: confirmation.protocolVersion,
+        ...(confirmation.protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
         confirmation,
         records,
       });
@@ -567,7 +664,7 @@ export class FirestoreProgressStore implements ProgressStore {
       function queueWrite(record: GuestMergeRecord, remote: GuestMergeRecord | undefined, key: string): void {
         const mutationId = adoptionMutationId(confirmation.operationId, key, record.fingerprint);
         const mutation = mergeRecordToMutation(record, mutationId, remote?.version ?? null);
-        const ref = progressCollectionRef(db, userId, activeGeneration).doc(legacyProgressDocumentId(mutation));
+        const ref = progressCollectionRef(db, userId, activeGeneration).doc(isV4Mutation(mutation) ? progressDocumentId(mutation) : legacyProgressDocumentId(mutation));
         const mutationRef = userRef.collection("syncMutations").doc(mutationId);
         const nextVersion = (remote?.version ?? 0) + 1;
         const updatedAt = now();
@@ -601,13 +698,14 @@ export class FirestoreProgressStore implements ProgressStore {
       if (existing.exists) {
         const stored = asRecord(existing.data(), "adoption_transfer");
         if (stored.idempotencyKey !== idempotencyKey || stored.guestUserId !== parsed.guestUserId || stored.snapshotVersion !== parsed.snapshotVersion || stored.expectedGeneration !== parsed.expectedGeneration || stored.deviceId !== parsed.deviceId) throw new Error("adoption_transfer_idempotency_mismatch");
+        if ((parsed.protocolVersion === 4) !== (stored.protocolVersion === 4) || parsed.protocolVersion === 4 && stored.contentIdentitySchema !== CONTENT_IDENTITY_SCHEMA) throw new Error("content_identity_schema_conflict");
         if (!idempotency.exists) transaction.create(idempotencyRef, { accountId: userId, idempotencyKey, sessionId, targetGeneration: stored.targetGeneration ?? Number(stored.expectedGeneration) + 1, createdAt, updatedAt: createdAt, expiresAt: stored.expiresAt ?? expiresAt });
         return adoptionStatusFromData(stored);
       }
       if (currentGeneration !== parsed.expectedGeneration) throw new Error("adoption_transfer_generation_conflict");
       if (idempotency.exists) throw new Error("adoption_transfer_idempotency_mismatch");
       const targetGeneration = Math.max(currentGeneration, readAdoptionGenerationCounter(metadataData, currentGeneration)) + 1;
-      const transfer = createAdoptionTransfer({ accountId: userId, sessionId, guestUserId: parsed.guestUserId, snapshotVersion: parsed.snapshotVersion, expectedGeneration: parsed.expectedGeneration, targetGeneration, idempotencyKey });
+      const transfer = createAdoptionTransfer({ accountId: userId, sessionId, guestUserId: parsed.guestUserId, snapshotVersion: parsed.snapshotVersion, expectedGeneration: parsed.expectedGeneration, targetGeneration, idempotencyKey, protocolVersion: parsed.protocolVersion, ...(parsed.protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) });
       transaction.set(this.db.collection(COLLECTIONS.accounts).doc(userId), { accountId: userId, updatedAt: createdAt }, { merge: true });
       transaction.set(metadataRef, { adoptionGenerationCounter: targetGeneration, updatedAt: createdAt }, { merge: true });
       transaction.create(idempotencyRef, { accountId: userId, idempotencyKey, sessionId, targetGeneration, createdAt, updatedAt: createdAt, expiresAt });
@@ -633,6 +731,7 @@ export class FirestoreProgressStore implements ProgressStore {
       const storedData = asRecord(operationSnapshot.data(), "adoption_transfer");
       const transfer = readStoredAdoptionTransfer(storedData);
       if (storedData.deviceId !== parsed.deviceId) throw new Error("adoption_transfer_device_mismatch");
+      if ((transfer.protocolVersion === 4) !== ("contentIdentitySchema" in parsed && parsed.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA)) throw new Error("content_identity_schema_conflict");
       if (transfer.state !== "collecting") {
         const existingChunk = await transaction.get(adoptionChildRef(this.db, userId, sessionId, ADOPTION_CHUNKS_SUBCOLLECTION, adoptionTransferChunkDocumentId(parsed.chunk.chunkId)));
         if (existingChunk.exists && parseAdoptionChunk(asRecord(existingChunk.data(), "adoption_chunk")).fingerprint === parsed.chunk.fingerprint) return adoptionStatusFromData(storedData);
@@ -681,9 +780,12 @@ export class FirestoreProgressStore implements ProgressStore {
       const snapshot = await transaction.get(operation);
       if (!snapshot.exists) throw new Error("adoption_transfer_not_found");
       const data = asRecord(snapshot.data(), "adoption_transfer");
+      const storedTransfer = readStoredAdoptionTransfer(data);
       if (data.deviceId !== parsed.deviceId) throw new Error("adoption_transfer_device_mismatch");
       if (data.state === "sealed" || data.state === "result_building" || data.state === "preview_ready" || data.state === "applying" || data.state === "complete") {
         if (data.snapshotFingerprint !== parsed.snapshotFingerprint) throw new Error("adoption_transfer_snapshot_seal_mismatch");
+        const parsedV4 = "contentIdentitySchema" in parsed && parsed.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA;
+        if ((storedTransfer.protocolVersion === 4) !== parsedV4) throw new Error("content_identity_schema_conflict");
         return false;
       }
       if (data.state !== "collecting" && data.state !== "sealing") throw new Error("adoption_transfer_precondition_failed");
@@ -696,8 +798,9 @@ export class FirestoreProgressStore implements ProgressStore {
     }
     const operationSnapshot = await operation.get();
     const operationData = asRecord(operationSnapshot.data(), "adoption_transfer");
-    const transfer = readStoredAdoptionTransfer(operationData);
-    if (operationData.deviceId !== parsed.deviceId) throw new Error("adoption_transfer_device_mismatch");
+      const transfer = readStoredAdoptionTransfer(operationData);
+      if (operationData.deviceId !== parsed.deviceId) throw new Error("adoption_transfer_device_mismatch");
+      if ((transfer.protocolVersion === 4) !== ("contentIdentitySchema" in parsed && parsed.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA)) throw new Error("content_identity_schema_conflict");
     const recordsSnapshot = await operation.collection(ADOPTION_RECORDS_SUBCOLLECTION).get();
     const chunksSnapshot = await operation.collection(ADOPTION_CHUNKS_SUBCOLLECTION).get();
     const records = recordsSnapshot.docs.map((document) => parseAdoptionRecord(asRecord(document.data(), "adoption_record"))).sort((left, right) => adoptionRecordKey(left).localeCompare(adoptionRecordKey(right)));
@@ -713,7 +816,7 @@ export class FirestoreProgressStore implements ProgressStore {
       }
     }
     if (seenChunkKeys.size !== records.length || records.some((record) => !seenChunkKeys.has(adoptionRecordKey(record)))) throw new Error("adoption_transfer_chunk_records_mismatch");
-    const expected = createAdoptionSnapshotSeal({ guestUserId: transfer.guestUserId, snapshotVersion: transfer.snapshotVersion, records, chunks });
+    const expected = createAdoptionSnapshotSeal({ guestUserId: transfer.guestUserId, snapshotVersion: transfer.snapshotVersion, records, chunks, ...(transfer.protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) });
     if (expected !== parsed.snapshotFingerprint) throw new Error("adoption_transfer_snapshot_seal_mismatch");
     const sealed = sealAdoptionTransfer(Object.freeze({ ...transfer, records, chunks, recordCount: records.length, chunkCount: chunks.length }), { snapshotFingerprint: parsed.snapshotFingerprint, recordCount: parsed.recordCount, chunkCount: parsed.chunkCount, expectedState: "sealing", ...(parsed.idempotencyKey === undefined ? {} : { idempotencyKey: parsed.idempotencyKey }) });
     await this.db.runTransaction(async (transaction) => {
@@ -739,6 +842,8 @@ export class FirestoreProgressStore implements ProgressStore {
     const operationData = asRecord(operationSnapshot.data(), "adoption_transfer");
     const transfer = readStoredAdoptionTransfer(operationData);
     if (operationData.deviceId !== parsed.deviceId) throw new Error("adoption_transfer_device_mismatch");
+    if ((transfer.protocolVersion === 4) !== ("contentIdentitySchema" in parsed && parsed.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA)) throw new Error("content_identity_schema_conflict");
+    if ((transfer.protocolVersion === 4) !== (parsed.protocolVersion === 4) || parsed.protocolVersion === 4 && parsed.contentIdentitySchema !== CONTENT_IDENTITY_SCHEMA) throw new Error("content_identity_schema_conflict");
     if (!["sealed", "result_building", "preview_ready", "applying", "complete"].includes(transfer.state)) throw new Error("adoption_transfer_precondition_failed");
     const records = (await operation.collection(ADOPTION_RECORDS_SUBCOLLECTION).get()).docs.map((document) => parseAdoptionRecord(asRecord(document.data(), "adoption_record"))).sort((left, right) => adoptionRecordKey(left).localeCompare(adoptionRecordKey(right)));
     const active = await this.readSnapshot(userId, parsed.protocolVersion);
@@ -747,7 +852,7 @@ export class FirestoreProgressStore implements ProgressStore {
     // merge layer compares fingerprints and keeps one copy.
     ensureFullIdentityUniqueness(records);
     ensureFullIdentityUniqueness(remoteRecords);
-    const guestSnapshot = adoptionPreviewSnapshot({ guestUserId: transfer.guestUserId, snapshotVersion: transfer.snapshotVersion, protocolVersion: parsed.protocolVersion, activeSession: operationData.activeSession === true, pendingJournal: operationData.pendingJournal === true }, records);
+    const guestSnapshot = adoptionPreviewSnapshot({ guestUserId: transfer.guestUserId, snapshotVersion: transfer.snapshotVersion, protocolVersion: parsed.protocolVersion, activeSession: operationData.activeSession === true, pendingJournal: operationData.pendingJournal === true, ...(transfer.protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) }, records);
     const adoption = buildGuestMergePreview({ accountUserId: userId, accountSnapshotVersion: active.accountRevision, guestSnapshot, remoteRecords, identityMode: "full" });
     if (operationData.snapshotFingerprint !== transfer.snapshotFingerprint) throw new Error("adoption_transfer_snapshot_seal_mismatch");
     const storedPreviewFingerprint = typeof operationData.previewFingerprint === "string" ? operationData.previewFingerprint : null;
@@ -769,7 +874,7 @@ export class FirestoreProgressStore implements ProgressStore {
       for (let index = start; index < Math.min(start + ADOPTION_TRANSFER_FIRESTORE_BATCH_SIZE, resultChunks.length); index += 1) {
         const result = resultChunks[index]!;
         const recordKeys = result.map(adoptionRecordKey);
-        const fingerprint = createHash("sha256").update(canonicalJson({ index, recordKeys, records: result.map((record) => record.fingerprint) }), "utf8").digest("hex");
+        const fingerprint = createHash("sha256").update(canonicalJson({ index, recordKeys, records: result.map((record) => record.fingerprint), ...(transfer.protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) }), "utf8").digest("hex");
         if (resultExisting[index]?.exists) {
           const existing = asRecord(resultExisting[index]!.data(), "adoption_result");
           if (existing.fingerprint !== fingerprint || canonicalJson(existing.recordKeys) !== canonicalJson(recordKeys)) throw new Error("adoption_transfer_result_chunk_conflict");
@@ -797,6 +902,7 @@ export class FirestoreProgressStore implements ProgressStore {
         previewFingerprint: adoption.preview.fingerprint,
         previewOperationId: adoption.preview.operationId,
         previewProtocolVersion: parsed.protocolVersion,
+        ...(transfer.protocolVersion === 4 ? { previewContentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
         previewAccountRevision: active.accountRevision,
         previewGeneration: active.generation ?? 0,
         previewConflictCount: adoption.preview.conflicts.length,
@@ -823,6 +929,7 @@ export class FirestoreProgressStore implements ProgressStore {
     const operationData = asRecord(operationSnapshot.data(), "adoption_transfer");
     const transfer = readStoredAdoptionTransfer(operationData);
     if (operationData.deviceId !== parsed.deviceId) throw new Error("adoption_transfer_device_mismatch");
+    if ((transfer.protocolVersion === 4) !== (parsed.protocolVersion === 4) || parsed.protocolVersion === 4 && parsed.contentIdentitySchema !== CONTENT_IDENTITY_SCHEMA) throw new Error("content_identity_schema_conflict");
     if (parsed.operationId !== undefined && operationData.previewOperationId !== parsed.operationId) throw new Error("adoption_transfer_preview_mismatch");
     if (typeof operationData.previewFingerprint !== "string" || operationData.previewFingerprint !== parsed.previewFingerprint) throw new Error("adoption_transfer_preview_mismatch");
     if (transfer.state !== "preview_ready" && transfer.state !== "applying" && transfer.state !== "complete") throw new Error("adoption_transfer_precondition_failed");
@@ -839,7 +946,9 @@ export class FirestoreProgressStore implements ProgressStore {
       if (adoption.plan.blockingReason === "journal_recovery") throw new Error("journal_recovery_required");
       const confirmation: GuestMergeConfirmation = parsed.protocolVersion === 2
         ? { operationId: adoption.preview.operationId, previewFingerprint: parsed.previewFingerprint, protocolVersion: 2, resolutions: parsed.resolutions, groupChoices: parsed.groupChoices ?? [] }
-        : { operationId: adoption.preview.operationId, previewFingerprint: parsed.previewFingerprint, protocolVersion: 1, resolutions: parsed.resolutions };
+        : parsed.protocolVersion === 4
+          ? { operationId: adoption.preview.operationId, previewFingerprint: parsed.previewFingerprint, protocolVersion: 4, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA, resolutions: parsed.resolutions, groupChoices: parsed.groupChoices ?? [] }
+          : { operationId: adoption.preview.operationId, previewFingerprint: parsed.previewFingerprint, protocolVersion: 1, resolutions: parsed.resolutions };
       validateGuestMergeConfirmation(adoption.preview, confirmation);
     }
     // Reserve the immutable fingerprint before writing children. If a later
@@ -863,9 +972,10 @@ export class FirestoreProgressStore implements ProgressStore {
     const addDecisionWrite = (id: string, value: Record<string, unknown>): void => {
       decisionWrites.push({ id, ref: adoptionChildRef(this.db, userId, sessionId, ADOPTION_DECISIONS_SUBCOLLECTION, adoptionTransferDecisionDocumentId(id)), value });
     };
-    addDecisionWrite("meta", { kind: "meta", deviceId: parsed.deviceId, previewFingerprint: parsed.previewFingerprint, decisionFingerprint: suppliedDecisionFingerprint, protocolVersion: parsed.protocolVersion, createdAt, updatedAt: createdAt, expiresAt: operationData.expiresAt });
-    for (const resolution of parsed.resolutions) addDecisionWrite(`resolution:${resolution.conflictId}`, { kind: "resolution", conflictId: resolution.conflictId, resolution: resolution.resolution, deviceId: parsed.deviceId, previewFingerprint: parsed.previewFingerprint, decisionFingerprint: suppliedDecisionFingerprint, protocolVersion: parsed.protocolVersion, createdAt, updatedAt: createdAt, expiresAt: operationData.expiresAt });
-    for (const choice of parsed.groupChoices ?? []) addDecisionWrite(`group:${choice.groupId}`, { kind: "group_choice", groupId: choice.groupId, resolution: choice.resolution, deviceId: parsed.deviceId, previewFingerprint: parsed.previewFingerprint, decisionFingerprint: suppliedDecisionFingerprint, protocolVersion: parsed.protocolVersion, createdAt, updatedAt: createdAt, expiresAt: operationData.expiresAt });
+    const decisionSchema = parsed.protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {};
+    addDecisionWrite("meta", { kind: "meta", deviceId: parsed.deviceId, previewFingerprint: parsed.previewFingerprint, decisionFingerprint: suppliedDecisionFingerprint, protocolVersion: parsed.protocolVersion, ...decisionSchema, createdAt, updatedAt: createdAt, expiresAt: operationData.expiresAt });
+    for (const resolution of parsed.resolutions) addDecisionWrite(`resolution:${resolution.conflictId}`, { kind: "resolution", conflictId: resolution.conflictId, resolution: resolution.resolution, deviceId: parsed.deviceId, previewFingerprint: parsed.previewFingerprint, decisionFingerprint: suppliedDecisionFingerprint, protocolVersion: parsed.protocolVersion, ...decisionSchema, createdAt, updatedAt: createdAt, expiresAt: operationData.expiresAt });
+    for (const choice of parsed.groupChoices ?? []) addDecisionWrite(`group:${choice.groupId}`, { kind: "group_choice", groupId: choice.groupId, resolution: choice.resolution, deviceId: parsed.deviceId, previewFingerprint: parsed.previewFingerprint, decisionFingerprint: suppliedDecisionFingerprint, protocolVersion: parsed.protocolVersion, ...decisionSchema, createdAt, updatedAt: createdAt, expiresAt: operationData.expiresAt });
 
     const existingDecisionRows = (await operation.collection(ADOPTION_DECISIONS_SUBCOLLECTION).get()).docs;
     const expectedById = new Map(decisionWrites.map((write) => [write.ref.id, write.value]));
@@ -891,6 +1001,7 @@ export class FirestoreProgressStore implements ProgressStore {
     let operationData = asRecord(operationSnapshot.data(), "adoption_transfer");
     const transfer = readStoredAdoptionTransfer(operationData);
     if (operationData.deviceId !== parsed.deviceId) throw new Error("adoption_transfer_device_mismatch");
+    if ((transfer.protocolVersion === 4) !== ("contentIdentitySchema" in parsed && parsed.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA)) throw new Error("content_identity_schema_conflict");
     if (typeof operationData.decisionFingerprint !== "string") throw new Error("adoption_transfer_confirmation_required");
     if (parsed.decisionFingerprint !== undefined && parsed.decisionFingerprint !== operationData.decisionFingerprint) throw new Error("adoption_transfer_decision_mismatch");
     if (transfer.state === "complete") return adoptionStatusFromData(operationData);
@@ -904,14 +1015,16 @@ export class FirestoreProgressStore implements ProgressStore {
     const active = await this.readSnapshot(userId, protocolVersion);
     if (operationData.previewAccountRevision !== undefined && operationData.previewAccountRevision !== active.accountRevision) throw new Error("adoption_transfer_preview_stale");
     if (operationData.previewGeneration !== undefined && operationData.previewGeneration !== (active.generation ?? 0)) throw new Error("adoption_transfer_preview_stale");
-    const guestSnapshot = adoptionPreviewSnapshot({ guestUserId: transfer.guestUserId, snapshotVersion: transfer.snapshotVersion, protocolVersion, activeSession: operationData.activeSession === true, pendingJournal: operationData.pendingJournal === true }, records);
+    const guestSnapshot = adoptionPreviewSnapshot({ guestUserId: transfer.guestUserId, snapshotVersion: transfer.snapshotVersion, protocolVersion, activeSession: operationData.activeSession === true, pendingJournal: operationData.pendingJournal === true, ...(transfer.protocolVersion === 4 ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) }, records);
     const adoption = buildGuestMergePreview({ accountUserId: userId, accountSnapshotVersion: active.accountRevision, guestSnapshot, remoteRecords: active.records.map(progressRecordToMergeRecord), identityMode: "full" });
     if (adoption.preview.fingerprint !== operationData.previewFingerprint || adoption.preview.operationId !== operationData.previewOperationId) throw new Error("adoption_transfer_preview_stale");
     if (adoption.plan.blockingReason === "active_session") throw new Error("active_session_adoption_blocked");
     if (adoption.plan.blockingReason === "journal_recovery") throw new Error("journal_recovery_required");
     const domainConfirmation: GuestMergeConfirmation = storedConfirmation.protocolVersion === 2
       ? { operationId: adoption.preview.operationId, previewFingerprint: String(operationData.previewFingerprint), protocolVersion: 2, resolutions: storedConfirmation.resolutions, groupChoices: storedConfirmation.groupChoices ?? [] }
-      : { operationId: adoption.preview.operationId, previewFingerprint: String(operationData.previewFingerprint), protocolVersion: 1, resolutions: storedConfirmation.resolutions };
+      : storedConfirmation.protocolVersion === 4
+        ? { operationId: adoption.preview.operationId, previewFingerprint: String(operationData.previewFingerprint), protocolVersion: 4, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA, resolutions: storedConfirmation.resolutions, groupChoices: storedConfirmation.groupChoices ?? [] }
+        : { operationId: adoption.preview.operationId, previewFingerprint: String(operationData.previewFingerprint), protocolVersion: 1, resolutions: storedConfirmation.resolutions };
     validateGuestMergeConfirmation(adoption.preview, domainConfirmation);
     const materialization = buildAdoptionMaterialization(sessionId, guestSnapshot.records as GuestMergeRecord[], active.records.map(progressRecordToMergeRecord), domainConfirmation);
     const expectedGeneration = parsed.expectedGeneration ?? transfer.expectedGeneration;
@@ -958,7 +1071,7 @@ export class FirestoreProgressStore implements ProgressStore {
         const key = adoptionRecordKey(record);
         const mutationId = changedMutationIds.get(key) ?? `adoption_carry_${sessionId.replaceAll("-", "")}_${createHash("sha256").update(key, "utf8").digest("hex").slice(0, 24)}`;
         const ref = targetCollection.doc(progressDocumentId({ kind: adoptionKind(record.recordType), recordType: record.recordType as ProgressMutation["recordType"], targetId: record.recordId, trackId: record.trackId }));
-        batch.set(ref, { kind: adoptionKind(record.recordType), recordType: record.recordType, trackId: record.trackId, targetId: record.recordId, version: record.version, fingerprint: record.fingerprint, state: record.state, lastMutationId: mutationId, generation: targetGeneration, sourceSessionId: sessionId, updatedAt: now(), expiresAt: operationData.expiresAt });
+        batch.set(ref, { kind: adoptionKind(record.recordType), recordType: record.recordType, trackId: record.trackId, targetId: record.recordId, version: record.version, fingerprint: record.fingerprint, state: record.state, lastMutationId: mutationId, generation: targetGeneration, sourceSessionId: sessionId, updatedAt: now(), expiresAt: operationData.expiresAt, ...(record.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) });
       }
       await batch.commit();
       await this.db.runTransaction(async (transaction) => {
@@ -1030,13 +1143,25 @@ export class FirestoreProgressStore implements ProgressStore {
     if (!snapshot.exists) return null;
     const data = asRecord(snapshot.data(), "adoption_transfer");
     if (data.deviceId !== deviceId) throw new Error("adoption_transfer_device_mismatch");
+    readStoredAdoptionTransfer(data);
     return adoptionStatusFromData(data);
   }
 
-  public async applyBatch(userId: string, deviceId: string | null, expectedAccountRevision: number, mutations: readonly ProgressMutation[], metadata?: SyncBatchMetadata): Promise<SyncBatchResult> {
-    assertGoalPlanRecordShapes(mutations.map((mutation) => ({ fingerprint: mutation.fingerprint, recordId: mutation.targetId, recordType: mutation.recordType, state: mutation.state, trackId: mutation.trackId, version: mutation.expectedVersion ?? 0 })));
+  public async applyBatch(userId: string, deviceId: string | null, expectedAccountRevision: number, mutations: readonly AnyProgressMutation[], metadata?: SyncBatchMetadata): Promise<SyncBatchResult> {
+    const hasV4 = mutations.some(isV4Mutation);
+    if (hasV4 && mutations.some((mutation) => !isV4Mutation(mutation))) throw new Error("content_identity_schema_conflict");
+    if (hasV4 && (!metadata || metadata.planVersion !== 4 || metadata.contentIdentitySchema !== CONTENT_IDENTITY_SCHEMA)) throw new Error("content_identity_schema_conflict");
+    if (metadata?.planVersion === 4 && (!hasV4 || metadata.contentIdentitySchema !== CONTENT_IDENTITY_SCHEMA)) throw new Error("content_identity_schema_conflict");
+    if (metadata?.planVersion === 3 && (hasV4 || metadata.contentIdentitySchema !== undefined)) throw new Error("content_identity_schema_conflict");
     for (const mutation of mutations) {
-      if (createMergeRecordFingerprint({ recordId: mutation.targetId, recordType: mutation.recordType, state: mutation.state, trackId: mutation.trackId }) !== mutation.fingerprint) throw new Error("progress_fingerprint_mismatch");
+      if (isV4Mutation(mutation)) {
+        try { assertV4ContentIdentityState(mutation.state); } catch { throw new Error("content_identity_schema_conflict"); }
+      }
+    }
+    const validationProtocol = hasV4 ? 4 : 2;
+    assertGoalPlanRecordShapes(mutations.map((mutation) => ({ fingerprint: mutation.fingerprint, recordId: mutation.targetId, recordType: mutation.recordType, state: mutation.state, trackId: mutation.trackId, version: mutation.expectedVersion ?? 0, ...(isV4Mutation(mutation) ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) })), validationProtocol);
+    for (const mutation of mutations) {
+      if (createMergeRecordFingerprint({ recordId: mutation.targetId, recordType: mutation.recordType, state: mutation.state, trackId: mutation.trackId, ...(isV4Mutation(mutation) ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) }) !== mutation.fingerprint) throw new Error("progress_fingerprint_mismatch");
     }
     return this.db.runTransaction(async (transaction) => {
       const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
@@ -1047,54 +1172,78 @@ export class FirestoreProgressStore implements ProgressStore {
       const metaSnapshot = await transaction.get(metaRef);
       const metadataSnapshot = metaSnapshot.data() as Record<string, unknown> | undefined;
       const activeGeneration = readAccountGeneration(metadataSnapshot);
-      const progressRefs = mutations.map((mutation) => progressCollectionRef(this.db, userId, activeGeneration).doc(metadata ? progressDocumentId(mutation) : legacyProgressDocumentId(mutation)));
+      const progressCollection = progressCollectionRef(this.db, userId, activeGeneration);
+      const currentRefs = mutations.map((mutation) => progressCollection.doc(progressDocumentId(mutation)));
+      const legacyRefs = mutations.map((mutation) => progressCollection.doc(legacyProgressDocumentId(mutation)));
       const mutationRefs = mutations.map((mutation) => userRef.collection("syncMutations").doc(mutation.mutationId));
       const batchSnapshot = batchRef ? await transaction.get(batchRef) : undefined;
-      const snapshots = await transaction.getAll(...progressRefs, ...mutationRefs);
+      const snapshots = await transaction.getAll(...currentRefs, ...legacyRefs, ...mutationRefs);
       const accountRevision = readAccountRevision(metadataSnapshot);
-      const progressSnapshots = snapshots.slice(0, mutations.length);
-      const mutationSnapshots = snapshots.slice(mutations.length);
+      const currentSnapshots = snapshots.slice(0, mutations.length);
+      const legacySnapshots = snapshots.slice(mutations.length, mutations.length * 2);
+      const mutationSnapshots = snapshots.slice(mutations.length * 2);
       if (batchSnapshot?.exists && metadata) {
         const stored = asRecord(batchSnapshot.data(), "sync_batch");
         const fingerprint = syncBatchFingerprint(metadata, expectedAccountRevision, mutations);
         if (stored.fingerprint !== fingerprint) throw new Error("mutation_id_reuse");
+        if (stored.planVersion !== metadata.planVersion || (metadata.planVersion === 4
+          ? stored.contentIdentitySchema !== CONTENT_IDENTITY_SCHEMA
+          : stored.contentIdentitySchema !== undefined)) throw new Error("content_identity_schema_conflict");
         const storedResult = stored.result;
         if (!storedResult || typeof storedResult !== "object" || Array.isArray(storedResult)) throw new Error("sync_batch_invalid");
-        return parseStoredBatchResult(storedResult);
+        return parseStoredBatchResult(storedResult, metadata);
       }
       const applied: ProgressRecord[] = [];
       const duplicates: string[] = [];
       const conflicts: Array<SyncBatchResult["conflicts"][number]> = [];
-      const newMutations: Array<{ mutation: ProgressMutation; index: number; current: ProgressRecord | null }> = [];
+      const newMutations: Array<{ mutation: AnyProgressMutation; index: number; current: ProgressRecord | null; ref: DocumentReference }> = [];
       for (let index = 0; index < mutations.length; index += 1) {
         const mutation = mutations[index]!;
-        const current = progressSnapshots[index]!.exists ? toView(asRecord(progressSnapshots[index]!.data(), "progress")) : null;
+        const currentCandidate = currentSnapshots[index]!.exists ? toView(asRecord(currentSnapshots[index]!.data(), "progress")) : null;
+        const legacyCandidate = legacySnapshots[index]!.exists ? toView(asRecord(legacySnapshots[index]!.data(), "progress")) : null;
+        const incompatible = isV4Mutation(mutation)
+          ? [currentCandidate, legacyCandidate].find((record) => record !== null && record.contentIdentitySchema !== CONTENT_IDENTITY_SCHEMA)
+          : [currentCandidate, legacyCandidate].find((record) => record !== null && record.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA);
+        if (incompatible) {
+          conflicts.push({ mutationId: mutation.mutationId, code: "content_identity_schema_conflict", current: incompatible });
+          continue;
+        }
+        const current = isV4Mutation(mutation) ? currentCandidate ?? legacyCandidate : legacyCandidate ?? currentCandidate;
+        const progressRef = isV4Mutation(mutation)
+          ? currentCandidate ? currentRefs[index]! : legacyCandidate ? legacyRefs[index]! : currentRefs[index]!
+          : legacyCandidate ? legacyRefs[index]! : currentCandidate ? currentRefs[index]! : legacyRefs[index]!;
         const mutationSnapshot = mutationSnapshots[index]!;
         if (mutationSnapshot.exists || current?.lastMutationId === mutation.mutationId) {
           const stored = mutationSnapshot.exists ? asRecord(mutationSnapshot.data(), "sync_mutation") : {};
+          const storedSchema = stored.contentIdentitySchema;
+          const requestSchema = isV4Mutation(mutation) ? CONTENT_IDENTITY_SCHEMA : undefined;
+          if (storedSchema !== requestSchema) {
+            conflicts.push({ mutationId: mutation.mutationId, code: "content_identity_schema_conflict", current });
+            continue;
+          }
           if (stored.fingerprint !== undefined && (stored.fingerprint !== mutation.fingerprint || stored.targetId !== mutation.targetId || stored.recordType !== mutation.recordType)) throw new Error("mutation_id_reuse");
           if (current && (current.fingerprint !== mutation.fingerprint || current.targetId !== mutation.targetId || current.recordType !== mutation.recordType)) throw new Error("mutation_id_reuse");
           duplicates.push(mutation.mutationId);
           continue;
         }
-        newMutations.push({ mutation, index, current });
+        newMutations.push({ mutation, index, current, ref: progressRef });
       }
-      if (newMutations.length > 0 && expectedAccountRevision !== accountRevision) return Object.freeze({ accountRevision, applied: Object.freeze([]), duplicates: Object.freeze(duplicates), conflicts: Object.freeze([]), accountRevisionConflict: { code: "account_revision_conflict", currentAccountRevision: accountRevision } });
+      if (newMutations.length > 0 && expectedAccountRevision !== accountRevision) return Object.freeze({ accountRevision, applied: Object.freeze([]), duplicates: Object.freeze(duplicates), conflicts: Object.freeze(conflicts), accountRevisionConflict: { code: "account_revision_conflict", currentAccountRevision: accountRevision } });
       for (const { mutation, current } of newMutations) {
         if ((current?.version ?? null) !== mutation.expectedVersion) conflicts.push({ mutationId: mutation.mutationId, code: "version_conflict", current });
       }
       if (conflicts.length > 0) return Object.freeze({ accountRevision, applied: Object.freeze([]), duplicates: Object.freeze(duplicates), conflicts: Object.freeze(conflicts) });
-      for (const { mutation, index, current } of newMutations) {
+      for (const { mutation, current, index, ref } of newMutations) {
         const nextVersion = (current?.version ?? 0) + 1;
         const updatedAt = now();
-        const updated: ProgressRecord = Object.freeze({ kind: mutation.kind, recordType: mutation.recordType, trackId: mutation.trackId, targetId: mutation.targetId, version: nextVersion, fingerprint: mutation.fingerprint, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt: updatedAt.toDate().toISOString() });
-        const progressRef = progressRefs[index]!;
-        transaction.set(progressRef, { kind: mutation.kind, recordType: mutation.recordType, trackId: mutation.trackId, targetId: mutation.targetId, version: nextVersion, fingerprint: mutation.fingerprint, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt, ...(activeGeneration === 0 ? {} : { generation: activeGeneration }) });
+        const updated: ProgressRecord = Object.freeze({ kind: mutation.kind, recordType: mutation.recordType, trackId: mutation.trackId, targetId: mutation.targetId, version: nextVersion, fingerprint: mutation.fingerprint, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt: updatedAt.toDate().toISOString(), ...(isV4Mutation(mutation) ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}) });
+        transaction.set(ref, { kind: mutation.kind, recordType: mutation.recordType, trackId: mutation.trackId, targetId: mutation.targetId, version: nextVersion, fingerprint: mutation.fingerprint, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt, ...(isV4Mutation(mutation) ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}), ...(activeGeneration === 0 ? {} : { generation: activeGeneration }) });
         transaction.create(mutationRefs[index]!, {
           ...(deviceId === null ? {} : { deviceId }),
           mutationId: mutation.mutationId,
           recordType: mutation.recordType,
           appliedVersion: nextVersion,
+          ...(isV4Mutation(mutation) ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
           createdAt: updatedAt,
           expiresAt: expiresAfterSyncRetention(updatedAt),
         });
@@ -1110,6 +1259,7 @@ export class FirestoreProgressStore implements ProgressStore {
           batchId: metadata.batchId,
           planVersion: metadata.planVersion,
           highWatermark: metadata.highWatermark,
+          ...(metadata.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA ? { contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : {}),
           fingerprint: syncBatchFingerprint(metadata, expectedAccountRevision, mutations),
           expectedAccountRevision,
           result,
@@ -1122,17 +1272,46 @@ export class FirestoreProgressStore implements ProgressStore {
   }
 }
 
-function parseStoredBatchResult(value: object): SyncBatchResult {
+function parseStoredBatchResult(value: object, metadata?: SyncBatchMetadata): SyncBatchResult {
   const candidate = value as Record<string, unknown>;
   if (!Number.isSafeInteger(candidate.accountRevision) || !Array.isArray(candidate.applied) || !Array.isArray(candidate.duplicates) || !Array.isArray(candidate.conflicts)) throw new Error("sync_batch_invalid");
+  const isV4 = metadata?.planVersion === 4;
+  const applied = candidate.applied.map((value) => {
+    const data = asRecord(value, "sync_batch_applied");
+    if (isV4 ? data.contentIdentitySchema !== CONTENT_IDENTITY_SCHEMA : data.contentIdentitySchema !== undefined) throw new Error("content_identity_schema_conflict");
+    return toView(data);
+  });
+  const duplicates = candidate.duplicates.map((item) => {
+    if (typeof item !== "string") throw new Error("sync_batch_invalid");
+    return item;
+  });
+  const conflicts = candidate.conflicts.map((value) => {
+    const data = asRecord(value, "sync_batch_conflict");
+    if (typeof data.mutationId !== "string" || (data.code !== "version_conflict" && data.code !== "content_identity_schema_conflict")) throw new Error("sync_batch_invalid");
+    let current: ProgressRecord | null;
+    if (data.current === null) current = null;
+    else {
+      const currentData = asRecord(data.current, "sync_batch_conflict_current");
+      const schemaMatchesBatch = isV4 ? currentData.contentIdentitySchema === CONTENT_IDENTITY_SCHEMA : currentData.contentIdentitySchema === undefined;
+      // A schema-conflict result is precisely the case where the stored
+      // current record belongs to the opposite protocol.  Revalidate that
+      // record, but do not reject the durable conflict merely because its
+      // schema differs from the replaying batch.
+      if (data.code !== "content_identity_schema_conflict" && !schemaMatchesBatch) throw new Error("content_identity_schema_conflict");
+      current = toView(currentData);
+    }
+    return Object.freeze({ mutationId: data.mutationId, code: data.code, current });
+  });
   const base = {
     accountRevision: Number(candidate.accountRevision),
-    applied: Object.freeze(candidate.applied as ProgressRecord[]),
-    duplicates: Object.freeze(candidate.duplicates.filter((item): item is string => typeof item === "string")),
-    conflicts: Object.freeze(candidate.conflicts as SyncBatchResult["conflicts"]),
+    applied: Object.freeze(applied),
+    duplicates: Object.freeze(duplicates),
+    conflicts: Object.freeze(conflicts),
   };
   if (candidate.accountRevisionConflict === undefined) return Object.freeze(base);
-  return Object.freeze({ ...base, accountRevisionConflict: candidate.accountRevisionConflict as NonNullable<SyncBatchResult["accountRevisionConflict"]> });
+  const accountRevisionConflict = asRecord(candidate.accountRevisionConflict, "sync_batch_account_revision_conflict");
+  if (accountRevisionConflict.code !== "account_revision_conflict" || !Number.isSafeInteger(accountRevisionConflict.currentAccountRevision)) throw new Error("sync_batch_invalid");
+  return Object.freeze({ ...base, accountRevisionConflict: { code: "account_revision_conflict" as const, currentAccountRevision: Number(accountRevisionConflict.currentAccountRevision) } });
 }
 
 function adoptionMutationId(operationId: string, key: string, fingerprint: string): string {
