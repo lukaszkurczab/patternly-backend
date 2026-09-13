@@ -9,7 +9,7 @@ import { buildApplication } from "../src/api/app.js";
 import { loadEnvironment } from "../src/config/environment.js";
 import { OPENAPI_DOCUMENT } from "../src/api/openapi.js";
 import { assertOpenApiContract, assertRuntimeParity, collectOpenApiContractErrors, operationKey, runtimeRoute, type RuntimeRouteDescriptor } from "../src/api/openapi-validator.js";
-import { assertSecurityProbes, buildSecurityProbeApplication } from "../src/api/security-probes.js";
+import { assertSecurityProbes, buildSecurityProbeApplication, SECURITY_PROBE_REGISTRATION_PAYLOAD, type SecurityProbeRegistrationCall } from "../src/api/security-probes.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -65,7 +65,8 @@ test("GATE-02 source OpenAPI document is complete", () => {
 
 test("runtime parity uses the real app, normalizes parameters, and ignores automatic HEAD", async () => {
   const routes = await runtimeInventory();
-  assert.equal(routes.length, 54);
+  assert.equal(routes.length, 55);
+  assert.equal(routes.find((route) => operationKey(route.method, route.path) === "POST /v1/account/registration")?.securityProfile, "verify_only_bearer");
   assert.equal(routes.find((route) => operationKey(route.method, route.path) === "GET /v1/admin/overview")?.securityProfile, "admin");
   assert.equal(routes.find((route) => operationKey(route.method, route.path) === "POST /v1/content/reports")?.securityProfile, "app_check_optional_bearer");
   const health = routes.find((route) => operationKey(route.method, route.path) === "GET /health");
@@ -97,13 +98,35 @@ test("runtime parity rejects a wrong method", async () => {
 });
 
 test("behavioral security probes exercise every protected profile", async () => {
-  const app = buildSecurityProbeApplication(testEnvironment());
+  const registrationCalls: SecurityProbeRegistrationCall[] = [];
+  const app = buildSecurityProbeApplication(testEnvironment(), (call) => { registrationCalls.push(call); });
   await app.ready();
   try {
     await assertSecurityProbes(app, OPENAPI_DOCUMENT);
+    assert.equal(registrationCalls.length, 1);
+    assert.deepEqual(registrationCalls[0]?.input, SECURITY_PROBE_REGISTRATION_PAYLOAD);
+    assert.equal(registrationCalls[0]?.identity.subject, "security-probe-subject");
   } finally {
     await app.close();
   }
+});
+
+test("every account-resolving operation documents account_not_found", () => {
+  const documented: string[] = [];
+  for (const [path, pathItem] of Object.entries(documentCopy().paths)) {
+    for (const [method, candidate] of Object.entries(pathItem)) {
+      if (!["get", "post", "put", "patch", "delete"].includes(method)) continue;
+      const profile = candidate["x-patternly-security-profile"];
+      if (profile !== "bearer" && profile !== "app_check_optional_bearer") continue;
+      const response = (candidate.responses as Record<string, Record<string, unknown>> | undefined)?.["404"];
+      assert.ok(response, `${method.toUpperCase()} ${path} must document 404 account_not_found`);
+      assert.match(String(response.description), /account_not_found/u);
+      assert.ok(Array.isArray(response["x-patternly-error-codes"]));
+      assert.ok(response["x-patternly-error-codes"].includes("account_not_found"));
+      documented.push(`${method.toUpperCase()} ${path}`);
+    }
+  }
+  assert.ok(documented.length > 0);
 });
 
 test("behavioral security probes reject a no-op guard fixture", async () => {

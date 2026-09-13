@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { after, beforeEach } from "node:test";
 import { getFirestore } from "firebase-admin/firestore";
-import { clearFirestore, createEmulatorContext, createVerifiedAuthUser } from "./support.js";
+import { clearFirestore, createEmulatorContext, createVerifiedAuthUser, registerAuthUser } from "./support.js";
 
 const context = createEmulatorContext();
 after(async () => context.close());
@@ -11,15 +11,13 @@ const auth = (token: string) => ({ authorization: `Bearer ${token}` });
 
 async function provision(email?: string) {
   const user = await createVerifiedAuthUser(email);
-  const response = await context.app.inject({ method: "GET", url: "/v1/me", headers: auth(user.idToken) });
-  assert.equal(response.statusCode, 200);
-  return { ...user, userId: response.json().user.id as string };
+  return registerAuthUser(context, user);
 }
 
 test("account request has an isolated lifecycle and serves a prepared response only to its owner", async () => {
   const subject = await provision();
   const other = await provision();
-  const administrator = await provision("lukasz.kurczab@gmail.com");
+  const administrator = await createVerifiedAuthUser("lukasz.kurczab@gmail.com");
   const created = await context.app.inject({ method: "POST", url: "/v1/privacy-requests", headers: auth(subject.idToken), payload: { right: "access", narrative: "Please provide my data" } });
   assert.equal(created.statusCode, 201);
   const requestId = created.json().request.requestId as string;
@@ -81,7 +79,7 @@ test("account request has an isolated lifecycle and serves a prepared response o
 });
 
 test("public lifecycle exchanges fragment tokens and remains non-enumerating", async () => {
-  const administrator = await provision("lukasz.kurczab@gmail.com");
+  const administrator = await createVerifiedAuthUser("lukasz.kurczab@gmail.com");
   const intake = await context.app.inject({ method: "POST", url: "/v1/public/privacy-requests", payload: { email: "guest@example.com", right: "portability", reportSubmissionIds: [] } });
   assert.equal(intake.statusCode, 202);
   assert.deepEqual(intake.json(), { status: "accepted" });
@@ -134,7 +132,7 @@ test("public lifecycle exchanges fragment tokens and remains non-enumerating", a
 
 test("admin transitions are revision guarded and require complaint information plus execution evidence", async () => {
   const subject = await provision();
-  const administrator = await provision("lukasz.kurczab@gmail.com");
+  const administrator = await createVerifiedAuthUser("lukasz.kurczab@gmail.com");
   const created = await context.app.inject({ method: "POST", url: "/v1/privacy-requests", headers: auth(subject.idToken), payload: { right: "objection" } });
   const requestId = created.json().request.requestId as string;
   const headers = auth(administrator.idToken);

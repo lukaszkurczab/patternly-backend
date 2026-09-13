@@ -225,7 +225,8 @@ const OPENAPI_DOCUMENT_RAW = {
     "/ready": { "x-patternly-security-profile": "public", "x-patternly-consumer-scope": "diagnostic", get: { security: [], responses: { "200": { description: "Dependencies are ready" }, "503": { description: "Dependency unavailable" } } } },
     "/openapi.json": { "x-patternly-security-profile": "public", "x-patternly-consumer-scope": "diagnostic", get: { security: [], responses: { "200": { description: "OpenAPI document" } } } },
     "/v1/webhooks/revenuecat": { "x-patternly-security-profile": "webhook", "x-patternly-consumer-scope": "backend-only", post: { security: [], description: "Receive one authenticated, idempotent RevenueCat lifecycle event, bind an initial purchase to the active attempt, deliver its durable receipt, and update the canonical Premium projection.", parameters: [{ name: "Authorization", in: "header", required: true, schema: { type: "string", minLength: 1 } }], requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["event"], properties: { event: { type: "object", additionalProperties: true } } } } } }, responses: { "200": { description: "Event processed, ignored, or replayed" }, "400": { description: "Malformed event" }, "401": { description: "Webhook authorization failed" }, "503": { description: "Webhook or durable receipt delivery is unavailable; sender should retry" } } } },
-    "/v1/me": { "x-patternly-security-profile": "bearer", "x-patternly-consumer-scope": "mobile", get: { responses: { "200": { description: "Canonical account identity" }, "401": { description: "Authentication required" } } } },
+    "/v1/account/registration": { "x-patternly-security-profile": "verify_only_bearer", "x-patternly-consumer-scope": "mobile", post: { description: "Atomically register the verified identity and immutable Terms acceptance plus Privacy Policy acknowledgement. Replays for an existing account never alter legal evidence.", responses: { "200": { description: "Identity already has a Patternly account; no legal evidence changed" }, "201": { description: "Account and registration evidence created atomically" }, "400": { description: "Invalid registration evidence" }, "401": { description: "Authentication failed or an active deletion tombstone blocks registration" } } } },
+    "/v1/me": { "x-patternly-security-profile": "bearer", "x-patternly-consumer-scope": "mobile", get: { responses: { "200": { description: "Canonical account identity" }, "401": { description: "Authentication required or account deleted" }, "404": { description: "Verified identity has no Patternly account" } } } },
     "/v1/legal-acceptances": { "x-patternly-security-profile": "bearer", "x-patternly-consumer-scope": "mobile", post: { description: "Record an immutable, versioned Terms and minimum-age acceptance for the authenticated account.", responses: { "201": { description: "Acceptance recorded" }, "400": { description: "Invalid acceptance" }, "401": { description: "Authentication required" } } } },
     "/v1/purchase-confirmations": { "x-patternly-security-profile": "bearer", "x-patternly-consumer-scope": "mobile", post: { description: "Record the immutable pre-contract offer and express immediate-start request before opening App Store checkout.", responses: { "201": { description: "Confirmation recorded" }, "400": { description: "Invalid confirmation" }, "401": { description: "Authentication required" } } } },
     "/v1/entitlements": { "x-patternly-security-profile": "bearer", "x-patternly-consumer-scope": "mobile", get: { responses: { "200": { description: "Account entitlement projection" } } } },
@@ -722,6 +723,7 @@ const successSchemas: Readonly<Record<string, OpenApiRecord>> = {
   "GET /ready": objectSchema({ status: { type: "string", enum: ["ready", "not_ready"] }, checks: objectSchema({ database: { type: "boolean" }, authentication: { type: "boolean" } }, ["database", "authentication"]) }, ["status", "checks"]),
   "GET /openapi.json": objectSchema({ openapi: { type: "string", minLength: 1 }, paths: objectSchema({}, [], true) }, ["openapi", "paths"], true),
   "POST /v1/webhooks/revenuecat": objectSchema({ outcome: { type: "string", minLength: 1 }, duplicate: { type: "boolean" } }, ["outcome", "duplicate"]),
+  "POST /v1/account/registration": objectSchema({ registration: objectSchema({ created: { type: "boolean" }, user: userProfileSchema, acceptance: { anyOf: [objectSchema({ termsVersion: { type: "string" }, termsLocale: { type: "string", enum: ["en", "pl"] }, privacyPolicyVersion: { type: "string" }, privacyPolicyLocale: { type: "string", enum: ["en", "pl"] }, privacyPolicyAcknowledged: { type: "boolean", const: true }, acceptedAt: { type: "string", format: "date-time" } }, ["termsVersion", "termsLocale", "privacyPolicyVersion", "privacyPolicyLocale", "privacyPolicyAcknowledged", "acceptedAt"]), { type: "null" }] } }, ["created", "user", "acceptance"]) }, ["registration"]),
   "GET /v1/me": objectSchema({ user: userProfileSchema }, ["user"]),
   "POST /v1/legal-acceptances": objectSchema({ acceptance: objectSchema({ termsVersion: { type: "string" }, acceptedAt: { type: "string", format: "date-time" } }, ["termsVersion", "acceptedAt"]) }, ["acceptance"]),
   "POST /v1/purchase-confirmations": objectSchema({ confirmation: objectSchema({ confirmationId: { type: "string", format: "uuid" }, acceptedAt: { type: "string", format: "date-time" }, attemptExpiresAt: { type: "string", format: "date-time" } }, ["confirmationId", "acceptedAt", "attemptExpiresAt"]) }, ["confirmation"]),
@@ -776,6 +778,7 @@ const successSchemas: Readonly<Record<string, OpenApiRecord>> = {
 
 const requestSchemas: Readonly<Record<string, OpenApiRecord>> = {
   "POST /v1/webhooks/revenuecat": objectSchema({ event: objectSchema({}, [], true) }, ["event"], false),
+  "POST /v1/account/registration": objectSchema({ termsVersion: { type: "string", pattern: "^[A-Za-z0-9._-]{1,80}$" }, termsLocale: { type: "string", enum: ["en", "pl"] }, privacyPolicyVersion: { type: "string", pattern: "^[A-Za-z0-9._-]{1,80}$" }, privacyPolicyLocale: { type: "string", enum: ["en", "pl"] }, privacyPolicyAcknowledged: { type: "boolean", const: true } }, ["termsVersion", "termsLocale", "privacyPolicyVersion", "privacyPolicyLocale", "privacyPolicyAcknowledged"]),
   "POST /v1/legal-acceptances": objectSchema({ termsVersion: { type: "string", pattern: "^[A-Za-z0-9._-]{1,80}$" }, minimumAgeConfirmed: { type: "integer", const: 18 } }, ["termsVersion", "minimumAgeConfirmed"]),
   "POST /v1/purchase-confirmations": objectSchema({ confirmationId: { type: "string", format: "uuid" }, termsVersion: { type: "string", pattern: "^[A-Za-z0-9._-]{1,80}$" }, productIdentifier: { type: "string", minLength: 1, maxLength: 200 }, storefrontPrice: { type: "string", minLength: 1, maxLength: 80 }, locale: { type: "string", enum: ["en", "pl"] }, immediateStartRequested: { type: "boolean", const: true } }, ["confirmationId", "termsVersion", "productIdentifier", "storefrontPrice", "locale", "immediateStartRequested"]),
   "POST /v1/privacy-requests": ref("CreateAccountPrivacyRequest"),
@@ -938,6 +941,20 @@ function enrichOpenApiDocument(document: OpenApiRecord): void {
       }
       const responses = (operation.responses as OpenApiRecord | undefined) ?? {};
       operation.responses = responses;
+      if (securityProfile === "bearer" || securityProfile === "app_check_optional_bearer") {
+        const accountNotFound = (responses["404"] as OpenApiRecord | undefined) ?? {};
+        const description = typeof accountNotFound.description === "string" && accountNotFound.description.length > 0
+          ? `${accountNotFound.description}; account_not_found when the verified bearer identity has no Patternly account`
+          : "account_not_found when the verified bearer identity has no Patternly account";
+        const documentedCodes = Array.isArray(accountNotFound["x-patternly-error-codes"])
+          ? accountNotFound["x-patternly-error-codes"].filter((value): value is string => typeof value === "string")
+          : [];
+        responses["404"] = {
+          ...accountNotFound,
+          description,
+          "x-patternly-error-codes": [...new Set([...documentedCodes, "account_not_found"])],
+        };
+      }
       for (const [status, responseValue] of Object.entries(responses)) {
         const response = responseValue as OpenApiRecord;
         const numericStatus = Number(status);

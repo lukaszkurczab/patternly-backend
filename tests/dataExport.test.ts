@@ -46,7 +46,7 @@ function application(store: FirestoreDataExportStore, subject = "firebase-subjec
     verifier: { verify: async () => ({ provider: "firebase", subject, email: `${currentUser}@example.com`, emailVerified: true, authTime: currentAuthTime }) },
     appCheckVerifier: null,
     stores: {
-      users: { ensureUser: async () => ({ userId: currentUser }) },
+      users: { resolveExistingUser: async () => ({ userId: currentUser }) },
       dataExport: store,
     } as never,
   });

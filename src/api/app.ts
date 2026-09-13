@@ -6,7 +6,8 @@ import type { FirestoreRuntime } from "../infrastructure/firestore/client.js";
 import type { IdentityTokenVerifier } from "../infrastructure/firebase/verifier.js";
 import type { AppCheckTokenVerifier } from "../infrastructure/firebase/appCheckVerifier.js";
 import { OPENAPI_DOCUMENT } from "./openapi.js";
-import { authenticateRequest } from "../modules/auth/request.js";
+import { authenticateIdentity, authenticateRequest } from "../modules/auth/request.js";
+import type { AuthenticatedIdentity } from "../modules/auth/contracts.js";
 import type { BackendStores } from "../infrastructure/firestore/stores.js";
 import { CONTENT_IDENTITY_SCHEMA, createProgressPageToken, isSyncRequestWithinBudget, parseProgressPageToken, syncRequestSchema, type ProgressRecord, type SyncBatchMetadata } from "../modules/progress/contracts.js";
 import { guestMergeConfirmationSchema, guestMergeSnapshotSchema } from "../modules/users/merge.js";
@@ -30,6 +31,7 @@ declare module "fastify" {
     userId: string | undefined;
     authenticatedEmail: string | undefined;
     authenticatedEmailVerified: boolean | undefined;
+    authenticatedIdentity: AuthenticatedIdentity | undefined;
     authTime: number | undefined;
   }
   interface FastifyInstance {
@@ -72,6 +74,7 @@ const authErrorStatus = (error: unknown): number => {
   const message = error instanceof Error ? error.message : "";
   if (message === "authentication_not_configured") return 503;
   if (message === "firestore_not_ready") return 503;
+  if (message === "account_not_found") return 404;
   if (message === "authentication_required" || message === "account_deleted" || message.startsWith("firebase_")) return 401;
   return 500;
 };
@@ -97,10 +100,12 @@ const errorCode = (error: unknown): string => {
   if (message.startsWith("adoption_transfer_")) return message;
   if (message === "firestore_not_ready") return "firestore_not_ready";
   if (message === "authentication_required") return "authentication_required";
+  if (message === "authentication_not_configured") return "authentication_not_configured";
   if (message === "recent_reauthentication_required") return "recent_reauthentication_required";
   if (message === "recovery_code_invalid") return "recovery_code_invalid";
   if (message === "recovery_code_used") return "recovery_code_used";
   if (message === "account_deleted") return "account_deleted";
+  if (message === "account_not_found") return "account_not_found";
   if (message === "legal_acceptance_required") return "legal_acceptance_required";
   if (message === "remote_deletion_pending") return "remote_deletion_pending";
   if (message === "session_revocation_failed") return "session_revocation_failed";
@@ -206,6 +211,24 @@ async function protect(request: FastifyRequest, reply: FastifyReply, dependencie
     const stores = requireStores(dependencies);
     const authenticated = await authenticateRequest(request, dependencies.verifier, stores.users);
     request.userId = authenticated.userId;
+    request.authenticatedIdentity = authenticated.identity;
+    request.authenticatedEmail = authenticated.identity.email;
+    request.authenticatedEmailVerified = authenticated.identity.emailVerified;
+    request.authTime = authenticated.authTime;
+  } catch (error) {
+    const status = authErrorStatus(error);
+    const message = error instanceof Error ? error.message : "";
+    const code = message === "account_deleted" || message === "account_not_found"
+      ? errorCode(error)
+      : status === 401 ? "authentication_required" : errorCode(error);
+    reply.code(status).send({ error: { code } });
+  }
+}
+
+async function protectIdentity(request: FastifyRequest, reply: FastifyReply, dependencies: ApplicationDependencies): Promise<void> {
+  try {
+    const authenticated = await authenticateIdentity(request, dependencies.verifier);
+    request.authenticatedIdentity = authenticated.identity;
     request.authenticatedEmail = authenticated.identity.email;
     request.authenticatedEmailVerified = authenticated.identity.emailVerified;
     request.authTime = authenticated.authTime;
@@ -248,6 +271,12 @@ function createBearerGuard(dependencies: ApplicationDependencies): RoutePreHandl
   return guard;
 }
 
+function createVerifyOnlyBearerGuard(dependencies: ApplicationDependencies): RoutePreHandler {
+  const guard: RoutePreHandler = async (request, reply) => { await protectIdentity(request, reply, dependencies); };
+  routeProtections.set(guard as RouteFunction, "verify_only_bearer");
+  return guard;
+}
+
 function createAccountExportGuard(dependencies: ApplicationDependencies): RoutePreHandler {
   const guard: RoutePreHandler = async (request, reply) => {
     reply.header("cache-control", "private, no-store");
@@ -265,8 +294,12 @@ function createAppCheckGuard(dependencies: ApplicationDependencies): RoutePreHan
 
 function createAdminGuard(dependencies: ApplicationDependencies): RoutePreHandler {
   const guard: RoutePreHandler = async (request, reply) => {
-    await protect(request, reply, dependencies);
-    if (!reply.sent) requireAdministrator(request, reply, dependencies);
+    await protectIdentity(request, reply, dependencies);
+    if (!reply.sent) {
+      const identity = request.authenticatedIdentity!;
+      request.userId = `admin_${createHash("sha256").update(`${identity.provider}:${identity.subject}`, "utf8").digest("hex")}`;
+      requireAdministrator(request, reply, dependencies);
+    }
   };
   routeProtections.set(guard as RouteFunction, "admin");
   return guard;
@@ -274,6 +307,7 @@ function createAdminGuard(dependencies: ApplicationDependencies): RoutePreHandle
 
 function routeGuard(profile: RouteGuard, dependencies: ApplicationDependencies): RoutePreHandler {
   if (profile === "bearer") return createBearerGuard(dependencies);
+  if (profile === "verify_only_bearer") return createVerifyOnlyBearerGuard(dependencies);
   if (profile === "app_check_optional_bearer") return createAppCheckGuard(dependencies);
   if (profile === "admin") return createAdminGuard(dependencies);
   throw new Error(`route_guard_not_supported:${profile}`);
@@ -360,6 +394,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
   app.decorateRequest("userId", undefined);
   app.decorateRequest("authenticatedEmail", undefined);
   app.decorateRequest("authenticatedEmailVerified", undefined);
+  app.decorateRequest("authenticatedIdentity", undefined);
   app.decorateRequest("authTime", undefined);
   app.addHook("onRequest", async (request, reply) => {
     request.correlationId = request.id;
@@ -409,6 +444,24 @@ export function buildApplication(dependencies: ApplicationDependencies) {
   app.get("/openapi.json", async () => OPENAPI_DOCUMENT);
 
   app.post("/v1/webhooks/revenuecat", createWebhookHandler(dependencies));
+
+  app.post("/v1/account/registration", { preHandler: routeGuard("verify_only_bearer", dependencies) }, async (request, reply) => {
+    const parsed = z.object({
+      termsVersion: z.string().regex(/^[A-Za-z0-9._-]{1,80}$/u),
+      termsLocale: z.enum(["en", "pl"]),
+      privacyPolicyVersion: z.string().regex(/^[A-Za-z0-9._-]{1,80}$/u),
+      privacyPolicyLocale: z.enum(["en", "pl"]),
+      privacyPolicyAcknowledged: z.literal(true),
+    }).strict().safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      const registration = await requireStores(dependencies).users.registerUser(request.authenticatedIdentity!, parsed.data);
+      return reply.code(registration.created ? 201 : 200).send({ registration });
+    } catch (error) {
+      if (error instanceof Error && error.message === "account_deleted") return reply.code(401).send({ error: { code: "account_deleted" } });
+      throw error;
+    }
+  });
 
   app.get("/v1/me", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const profile = await requireStores(dependencies).users.readProfile(request.userId!);

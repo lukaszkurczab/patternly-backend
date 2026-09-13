@@ -10,7 +10,7 @@ import { createContentReportSchema } from "../src/modules/content-reports/contra
 import { FirestoreAccountLifecycleStore } from "../src/modules/account-lifecycle/store.js";
 import { parsePseudonymKeyRing } from "../src/infrastructure/security/pseudonymKeyRing.js";
 import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
-import { clearFirestore, createAuthUser, createEmulatorContext, createVerifiedAuthUser, firestore, testEnvironment, type EmulatorContext, verifyAuthUser } from "./support.js";
+import { accountRegistrationPayload, clearFirestore, createAuthUser, createEmulatorContext, createRegisteredAuthUser, createVerifiedAuthUser, firestore, registerAuthUser, testEnvironment, type EmulatorContext, verifyAuthUser } from "./support.js";
 
 const reportBody = (clientSubmissionId: string) => createContentReportSchema.parse({
   clientSubmissionId,
@@ -45,24 +45,112 @@ test.after(async () => {
   await context.close();
 });
 
-test("Firebase Auth identity is mapped to one Firestore account in a transaction", async () => {
+test("a new Firebase identity cannot create a Patternly account through bearer or optional-bearer routes", async () => {
   const auth = await createAuthUser();
-  const first = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
-  const second = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
-  assert.equal(first.statusCode, 200);
-  assert.equal(second.statusCode, 200);
-  assert.equal(first.json().user.id, second.json().user.id);
+  const bearer = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
+  assert.equal(bearer.statusCode, 404);
+  assert.deepEqual(bearer.json(), { error: { code: "account_not_found" } });
+  const optionalApp = buildApplication({
+    environment: testEnvironment,
+    firestore: null,
+    verifier: { verify: async () => ({ provider: "firebase", subject: auth.localId, email: auth.email, emailVerified: false, authTime: Math.floor(Date.now() / 1_000) }) },
+    appCheckVerifier: { verify: async () => {} },
+    stores: context.stores,
+  });
+  const optionalBearer = await optionalApp.inject({
+    method: "POST",
+    url: "/v1/content/reports",
+    headers: { authorization: "Bearer verified-new-identity", "x-firebase-appcheck": "verified-app" },
+    payload: reportBody("1f61e3f3-f23e-467c-b92a-9b8fd0514f25"),
+  });
+  await optionalApp.close();
+  assert.equal(optionalBearer.statusCode, 404);
+  assert.deepEqual(optionalBearer.json(), { error: { code: "account_not_found" } });
+  const users = await firestore().collection("users").get();
+  const identities = await firestore().collection("identityMappings").get();
+  assert.equal(users.size, 0);
+  assert.equal(identities.size, 0);
+  assert.equal((await firestore().collection("contentReports").get()).size, 0);
+});
+
+test("explicit registration is atomic under concurrency and replay never changes existing legal evidence", async () => {
+  const auth = await createAuthUser();
+  const headers = { authorization: `Bearer ${auth.idToken}` };
+  const payload = { ...accountRegistrationPayload, termsVersion: "2026-09-05", privacyPolicyVersion: "2026-09-05" };
+  const [first, second] = await Promise.all([
+    context.app.inject({ method: "POST", url: "/v1/account/registration", headers, payload }),
+    context.app.inject({ method: "POST", url: "/v1/account/registration", headers, payload }),
+  ]);
+  assert.deepEqual([first.statusCode, second.statusCode].sort(), [200, 201]);
+  const created = [first, second].find((response) => response.statusCode === 201)!;
+  const existing = [first, second].find((response) => response.statusCode === 200)!;
+  assert.equal(created.json().registration.created, true);
+  assert.equal(existing.json().registration.created, false);
+  assert.equal(existing.json().registration.acceptance, null);
+  assert.equal(existing.json().registration.user.id, created.json().registration.user.id);
+  assert.equal(created.json().registration.acceptance.termsVersion, payload.termsVersion);
+  assert.equal(created.json().registration.acceptance.termsLocale, "en");
+  assert.equal(created.json().registration.acceptance.privacyPolicyVersion, payload.privacyPolicyVersion);
+  assert.equal(created.json().registration.acceptance.privacyPolicyLocale, "en");
+  assert.equal(created.json().registration.acceptance.privacyPolicyAcknowledged, true);
+  assert.equal(typeof created.json().registration.acceptance.acceptedAt, "string");
+  assert.deepEqual(Object.keys(created.json().registration.acceptance).sort(), ["acceptedAt", "privacyPolicyAcknowledged", "privacyPolicyLocale", "privacyPolicyVersion", "termsLocale", "termsVersion"]);
+  const replay = await context.app.inject({ method: "POST", url: "/v1/account/registration", headers, payload: { ...payload, termsVersion: "2026-09-06", termsLocale: "pl", privacyPolicyVersion: "2026-09-06", privacyPolicyLocale: "pl" } });
+  assert.equal(replay.statusCode, 200);
+  assert.equal(replay.json().registration.created, false);
+  assert.equal(replay.json().registration.acceptance, null);
+  assert.equal(replay.json().registration.user.acceptedTermsVersion, payload.termsVersion);
   const users = await firestore().collection("users").get();
   const identities = await firestore().collection("identityMappings").get();
   assert.equal(users.size, 1);
   assert.equal(identities.size, 1);
-  assert.equal(identities.docs[0]?.data().userId, first.json().user.id);
+  assert.equal(identities.docs[0]?.data().userId, created.json().registration.user.id);
   assert.equal(identities.docs[0]?.data().provider, "firebase");
   assert.equal(identities.docs[0]?.data().subject, auth.localId);
+  const evidence = await firestore().collection("users").doc(created.json().registration.user.id).collection("legalAcceptances").get();
+  assert.equal(evidence.size, 1);
+  assert.deepEqual({
+    kind: evidence.docs[0]?.data().kind,
+    privacyPolicyAcknowledged: evidence.docs[0]?.data().privacyPolicyAcknowledged,
+    privacyPolicyLocale: evidence.docs[0]?.data().privacyPolicyLocale,
+    privacyPolicyVersion: evidence.docs[0]?.data().privacyPolicyVersion,
+    termsLocale: evidence.docs[0]?.data().termsLocale,
+    termsVersion: evidence.docs[0]?.data().termsVersion,
+  }, {
+    kind: "terms_acceptance_and_privacy_acknowledgement",
+    privacyPolicyAcknowledged: true,
+    privacyPolicyLocale: "en",
+    privacyPolicyVersion: "2026-09-05",
+    termsLocale: "en",
+    termsVersion: "2026-09-05",
+  });
+  assert.deepEqual(Object.keys(evidence.docs[0]?.data() ?? {}).sort(), ["acceptedAt", "kind", "privacyPolicyAcknowledged", "privacyPolicyLocale", "privacyPolicyVersion", "termsLocale", "termsVersion"]);
+  const me = await context.app.inject({ method: "GET", url: "/v1/me", headers });
+  assert.equal(me.statusCode, 200);
+  assert.equal(me.json().user.id, created.json().registration.user.id);
+});
+
+test("registration rejects an active deletion tombstone and replaces only an expired tombstone", async () => {
+  const auth = await createAuthUser();
+  const pseudonym = parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson).active("firebase", auth.localId);
+  const tombstoneRef = firestore().collection(COLLECTIONS.deletedIdentities).doc(pseudonym.documentId);
+  const deletedAt = Timestamp.now();
+  await tombstoneRef.set({ provider: "firebase", keyVersion: pseudonym.keyVersion, subjectHmac: pseudonym.subjectHmac, deletedAt, expiresAt: Timestamp.fromMillis(Date.now() + 60_000) });
+  const blocked = await context.app.inject({ method: "POST", url: "/v1/account/registration", headers: { authorization: `Bearer ${auth.idToken}` }, payload: accountRegistrationPayload });
+  assert.equal(blocked.statusCode, 401);
+  assert.deepEqual(blocked.json(), { error: { code: "account_deleted" } });
+  assert.equal((await firestore().collection(COLLECTIONS.users).get()).size, 0);
+  assert.equal((await firestore().collection(COLLECTIONS.identityMappings).get()).size, 0);
+  await tombstoneRef.update({ expiresAt: Timestamp.fromMillis(Date.now() - 1) });
+  const registered = await registerAuthUser(context, auth);
+  assert.match(registered.userId, /^[0-9a-f-]{36}$/u);
+  assert.equal((await firestore().collection(COLLECTIONS.users).get()).size, 1);
+  assert.equal((await firestore().collection(COLLECTIONS.identityMappings).get()).size, 1);
+  assert.equal((await tombstoneRef.get()).exists, false);
 });
 
 test("legal acceptance is versioned, immutable, and exposed by the account profile", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const headers = { authorization: `Bearer ${auth.idToken}` };
   const created = await context.app.inject({ method: "POST", url: "/v1/legal-acceptances", headers, payload: { termsVersion: "2026-09-05", minimumAgeConfirmed: 18 } });
   assert.equal(created.statusCode, 201);
@@ -71,14 +159,14 @@ test("legal acceptance is versioned, immutable, and exposed by the account profi
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers });
   assert.equal(me.json().user.acceptedTermsVersion, "2026-09-05");
   const evidence = await firestore().collection("users").doc(me.json().user.id).collection("legalAcceptances").get();
-  assert.equal(evidence.size, 1);
-  assert.equal(evidence.docs[0]?.data().minimumAgeConfirmed, 18);
+  assert.equal(evidence.size, 2);
+  assert.equal(evidence.docs.find((document) => document.data().termsVersion === "2026-09-05")?.data().minimumAgeConfirmed, 18);
   const invalid = await context.app.inject({ method: "POST", url: "/v1/legal-acceptances", headers, payload: { termsVersion: "2026-09-05", minimumAgeConfirmed: 17 } });
   assert.equal(invalid.statusCode, 400);
 });
 
 test("purchase confirmation requires current Terms acceptance and preserves the immediate-start evidence", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const headers = { authorization: `Bearer ${auth.idToken}` };
   const payload = { confirmationId: "00000000-0000-4000-8000-000000000059", termsVersion: "2026-09-05", productIdentifier: "com.lkurczab.patternly.premium.monthly", storefrontPrice: "29,99 zł", locale: "pl", immediateStartRequested: true };
   assert.equal((await context.app.inject({ method: "POST", url: "/v1/purchase-confirmations", headers, payload })).statusCode, 409);
@@ -150,7 +238,7 @@ test("revoked Firebase verifier results fail closed at the backend boundary", as
 });
 
 test("Firestore transaction preserves sync CAS and idempotency under concurrent retries", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const mutation = {
     mutationId: `mutation-${Date.now()}-0001`,
     kind: "item" as const,
@@ -167,8 +255,8 @@ test("Firestore transaction preserves sync CAS and idempotency under concurrent 
     context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: { expectedAccountRevision: 0, mutations: [mutation] } }),
     context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: { expectedAccountRevision: 0, mutations: [mutation] } }),
   ]);
-  assert.equal(first.statusCode, 200);
-  assert.equal(second.statusCode, 200);
+  assert.equal(first.statusCode, 200, first.body);
+  assert.equal(second.statusCode, 200, second.body);
   assert.equal([first, second].filter((response) => response.json().applied.length === 1).length, 1);
   assert.equal([first, second].filter((response) => response.json().duplicates.length === 1).length, 1);
   const persistedMutation = (await firestore().collection("users").doc(userId).collection("syncMutations").doc(mutation.mutationId).get()).data();
@@ -191,7 +279,7 @@ test("Firestore transaction preserves sync CAS and idempotency under concurrent 
 });
 
 test("account adoption is previewed, explicitly confirmed, materialized idempotently, and guarded by account CAS", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
   const headers = { authorization: `Bearer ${auth.idToken}` };
   const recordState = { trackId: "coding-interview-dsa-problem-solving" };
@@ -273,7 +361,7 @@ test("content report expiry is classified at creation and unlinking does not ext
   const contact = createContentReportSchema.parse({ ...reportBody("3f61e3f3-f23e-467c-b92a-9b8fd0514f26"), contactEmail: "contact@example.com" });
   await context.stores.contentReports.create(undefined, anonymous, { rateLimitKey: "anonymous-expiry" });
   await context.stores.contentReports.create(undefined, contact, { rateLimitKey: "contact-expiry" });
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
   const userId = me.json().user.id as string;
   const linked = createContentReportSchema.parse({ ...reportBody("3f61e3f3-f23e-467c-b92a-9b8fd0514f27"), linkAccount: true });
@@ -442,6 +530,8 @@ test("administrator report routes require a current verified administrator token
   });
   assert.equal(wrongOrigin.statusCode, 403);
   assert.deepEqual(wrongOrigin.json(), { error: { code: "origin_not_allowed" } });
+  assert.equal((await firestore().collection(COLLECTIONS.users).get()).size, 0);
+  assert.equal((await firestore().collection(COLLECTIONS.identityMappings).get()).size, 0);
 });
 
 test("anonymous report rate limiting is transactionally enforced without storing the client key", async () => {
@@ -457,7 +547,7 @@ test("anonymous report rate limiting is transactionally enforced without storing
 });
 
 test("recovery codes are ten one-time server-hashed credentials, reissue invalidates the previous set, and replay is rejected", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const headers = { authorization: `Bearer ${auth.idToken}` };
   const firstIssued = await context.app.inject({ method: "POST", url: "/v1/account/recovery-codes", headers, payload: {} });
   assert.equal(firstIssued.statusCode, 200);
@@ -502,7 +592,7 @@ test("recovery codes are ten one-time server-hashed credentials, reissue invalid
 });
 
 test("destructive deletion rejects an old authenticated session before touching Firestore", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const staleApp = buildApplication({
     environment: testEnvironment,
     firestore: null,
@@ -518,7 +608,7 @@ test("destructive deletion rejects an old authenticated session before touching 
 });
 
 test("account deletion removes owned Firestore documents, preserves a tombstone, and redacts report account contact fields", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
   const userId = me.json().user.id as string;
   const state = { value: true };
@@ -564,7 +654,7 @@ test("account deletion removes owned Firestore documents, preserves a tombstone,
 });
 
 test("account deletion persists subjects and phases, resumes through the bound status route, and accepts Auth user-not-found", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
   const userId = me.json().user.id as string;
   const linked = createContentReportSchema.parse({ ...reportBody("af61e3f3-f23e-467c-b92a-9b8fd0514f25"), linkAccount: true, contactEmail: "resume@example.com" });
@@ -639,7 +729,7 @@ test("account deletion persists subjects and phases, resumes through the bound s
 });
 
 test("simultaneous deletion operation IDs each complete with their own proof", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
   const userId = me.json().user.id as string;
   const firstOperationId = "11111111-1111-4111-8111-111111111111";
@@ -675,7 +765,7 @@ test("simultaneous deletion operation IDs each complete with their own proof", a
 });
 
 test("a redacted tombstone is never repopulated by a later operation", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
   const userId = me.json().user.id as string;
   const operationId = "33333333-3333-4333-8333-333333333333";
@@ -706,7 +796,7 @@ test("a redacted tombstone is never repopulated by a later operation", async () 
 });
 
 test("legacy terminal records without phase and auth deletion marker never report proof", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
   const userId = me.json().user.id as string;
   const operationId = "55555555-5555-4555-8555-555555555555";
@@ -735,7 +825,7 @@ test("expired deletion proofs fail closed and are purged", async () => {
 });
 
 test("a verify-only predecessor key completes an Auth-deleted operation after rotation", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
   const userId = me.json().user.id as string;
   const operationId = "88888888-8888-4888-8888-888888888888";
@@ -755,7 +845,7 @@ test("a verify-only predecessor key completes an Auth-deleted operation after ro
 });
 
 test("account-owned writers reject a tombstoned or missing user after authentication", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}` } });
   const userId = me.json().user.id as string;
   const userRef = firestore().collection("users").doc(userId);
@@ -771,7 +861,7 @@ test("account-owned writers reject a tombstoned or missing user after authentica
     await assert.rejects(context.stores.contentReports.create(userId, { ...reportBody("88888888-8888-4888-8888-888888888888"), linkAccount: true, contactEmail: "fixture@example.invalid" }, { rateLimitKey: "late-write" }), { message: "account_deleted" });
     await assert.rejects(context.stores.accountLifecycle.revokeSessions(userId, `late-revoke-${state}`), { message: "account_deleted" });
   }
-  assert.equal((await userRef.listCollections()).length, 0);
+  assert.deepEqual((await userRef.listCollections()).map((collection) => collection.id), ["legalAcceptances"]);
   assert.equal((await firestore().collection("contentReports").get()).size, 0);
   assert.equal((await firestore().collection("sessionRevocationOperations").get()).size, 0);
 });

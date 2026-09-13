@@ -35,7 +35,7 @@ function application(progressOverrides: Partial<ProgressStore>, logs: string[]) 
     ...progressOverrides,
   } as unknown as ProgressStore;
   const stores = {
-    users: { ensureUser: async () => ({ userId: "server-user" }) },
+    users: { resolveExistingUser: async () => ({ userId: "server-user" }) },
     progress,
   } as unknown as BackendStores;
   return buildApplication({

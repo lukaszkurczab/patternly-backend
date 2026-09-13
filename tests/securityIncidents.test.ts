@@ -11,8 +11,6 @@ const incidentInput = (title = "Incident") => ({ title, details: "sensitive fact
 
 async function administrator() {
   const user = await createVerifiedAuthUser("lukasz.kurczab@gmail.com");
-  const response = await context.app.inject({ method: "GET", url: "/v1/me", headers: auth(user.idToken) });
-  assert.equal(response.statusCode, 200);
   return user;
 }
 

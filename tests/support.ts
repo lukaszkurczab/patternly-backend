@@ -127,6 +127,44 @@ export async function createVerifiedAuthUser(email = `emulator-${randomUUID()}@e
   return verifyAuthUser(user);
 }
 
+export const accountRegistrationPayload = Object.freeze({
+  termsVersion: "test-baseline-v1",
+  termsLocale: "en" as const,
+  privacyPolicyVersion: "test-baseline-v1",
+  privacyPolicyLocale: "en" as const,
+  privacyPolicyAcknowledged: true as const,
+});
+
+export async function registerAuthUser(
+  context: Pick<EmulatorContext, "app">,
+  user: Readonly<{ email: string; idToken: string; localId: string }>,
+): Promise<Readonly<{ email: string; idToken: string; localId: string; userId: string }>> {
+  const response = await context.app.inject({
+    method: "POST",
+    url: "/v1/account/registration",
+    headers: { authorization: `Bearer ${user.idToken}` },
+    payload: accountRegistrationPayload,
+  });
+  if (response.statusCode !== 201 && response.statusCode !== 200) throw new Error(`account_registration_failed:${response.statusCode}:${response.body}`);
+  const userId = response.json().registration?.user?.id;
+  if (typeof userId !== "string") throw new Error("account_registration_response_invalid");
+  return Object.freeze({ ...user, userId });
+}
+
+export async function createRegisteredAuthUser(
+  context: Pick<EmulatorContext, "app">,
+  email?: string,
+): Promise<Readonly<{ email: string; idToken: string; localId: string; userId: string }>> {
+  return registerAuthUser(context, await createAuthUser(email));
+}
+
+export async function createVerifiedRegisteredAuthUser(
+  context: Pick<EmulatorContext, "app">,
+  email?: string,
+): Promise<Readonly<{ email: string; idToken: string; localId: string; userId: string }>> {
+  return registerAuthUser(context, await createVerifiedAuthUser(email));
+}
+
 export async function verifyAuthUser(user: Readonly<{ email: string; idToken: string; localId: string }>): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
   await getAuth().updateUser(user.localId, { emailVerified: true });
   return signInAuthUser(user.email);

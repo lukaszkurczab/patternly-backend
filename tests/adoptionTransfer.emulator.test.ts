@@ -6,7 +6,7 @@ import { adoptionTransferRecordKey, createAdoptionSnapshotSeal, createAdoptionTr
 import { adoptionTransferDecisionDocumentId } from "../src/infrastructure/firestore/paths.js";
 import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
 import { createAdoptionDecisionFingerprint } from "../src/modules/progress/store.js";
-import { clearFirestore, createAuthUser, createEmulatorContext, firestore, type EmulatorContext } from "./support.js";
+import { clearFirestore, createEmulatorContext, createRegisteredAuthUser, firestore, type EmulatorContext } from "./support.js";
 
 const deviceId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const guestUserId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -33,7 +33,7 @@ test.after(async () => {
 });
 
 test("adoption v3 persists child records, seals, confirms, applies a hidden generation, and retries safely", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const headers = { authorization: `Bearer ${auth.idToken}` };
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers });
   assert.equal(me.statusCode, 200);
@@ -86,7 +86,7 @@ test("adoption v3 persists child records, seals, confirms, applies a hidden gene
 });
 
 test("adoption v3 binds every staged request to its device and scopes start idempotency to the account", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const headers = { authorization: `Bearer ${auth.idToken}` };
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers });
   const accountId = me.json().user.id as string;
@@ -116,7 +116,7 @@ test("adoption v3 binds every staged request to its device and scopes start idem
 });
 
 test("adoption v3 materializes forty records, including same record ids on different tracks", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const headers = { authorization: `Bearer ${auth.idToken}` };
   const accountId = (await context.app.inject({ method: "GET", url: "/v1/me", headers })).json().user.id as string;
   const records = [activeRecord("shared-record", "track-a"), activeRecord("shared-record", "track-b"), ...Array.from({ length: 38 }, (_, index) => activeRecord(`record-${index}`, `track-${index + 2}`))];
@@ -147,7 +147,7 @@ test("adoption v3 materializes forty records, including same record ids on diffe
 });
 
 test("adoption v3 reserves isolated hidden generations for competing sessions", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const headers = { authorization: `Bearer ${auth.idToken}` };
   const accountId = (await context.app.inject({ method: "GET", url: "/v1/me", headers })).json().user.id as string;
   const sessions = [
@@ -185,7 +185,7 @@ test("adoption v3 reserves isolated hidden generations for competing sessions", 
 });
 
 test("adoption v3 resumes a partially persisted decision child set", async () => {
-  const auth = await createAuthUser();
+  const auth = await createRegisteredAuthUser(context);
   const headers = { authorization: `Bearer ${auth.idToken}` };
   const accountId = (await context.app.inject({ method: "GET", url: "/v1/me", headers })).json().user.id as string;
   const existing = activeRecord("partial-conflict", "partial-track", "account");

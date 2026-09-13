@@ -13,10 +13,24 @@ import type { Environment } from "../config/environment.js";
 import type { BackendStores } from "../infrastructure/firestore/stores.js";
 import type { IdentityTokenVerifier } from "../infrastructure/firebase/verifier.js";
 import type { AppCheckTokenVerifier } from "../infrastructure/firebase/appCheckVerifier.js";
+import type { AuthenticatedIdentity } from "../modules/auth/contracts.js";
+import type { AccountRegistrationInput } from "../modules/users/store.js";
 
 const SECURITY_PROBE_TOKEN = "patternly-security-probe-valid-token";
 const SECURITY_PROBE_USER_ID = "00000000-0000-4000-8000-000000000001";
 const SECURITY_PROBE_NON_ADMIN_EMAIL = "security-probe-user@example.com";
+export const SECURITY_PROBE_REGISTRATION_PAYLOAD = Object.freeze({
+  termsVersion: "security-probe-v1",
+  termsLocale: "en" as const,
+  privacyPolicyVersion: "security-probe-v1",
+  privacyPolicyLocale: "en" as const,
+  privacyPolicyAcknowledged: true as const,
+});
+
+export type SecurityProbeRegistrationCall = Readonly<{
+  identity: AuthenticatedIdentity;
+  input: AccountRegistrationInput;
+}>;
 
 type UnknownRecord = Record<string, unknown>;
 type ProbeOperation = Readonly<{ method: string; path: string; profile: string }>;
@@ -58,8 +72,9 @@ async function probe(
   app: ProbeApp,
   operation: ProbeOperation,
   headers: Readonly<Record<string, string>> = {},
+  payload?: Readonly<Record<string, unknown>>,
 ): Promise<{ statusCode: number; body: string; errorCode: string | null }> {
-  const response = await app.inject({ method: operation.method as NonNullable<InjectOptions["method"]>, url: probePath(operation.path), headers: { ...headers } });
+  const response = await app.inject({ method: operation.method as NonNullable<InjectOptions["method"]>, url: probePath(operation.path), headers: { ...headers }, ...(payload === undefined ? {} : { payload }) });
   return { statusCode: response.statusCode, body: response.body, errorCode: responseErrorCode(response) };
 }
 
@@ -95,6 +110,14 @@ export async function assertSecurityProbes(app: ProbeApp, document: unknown): Pr
       expectAuthenticationRejection(operation, await probe(app, operation), failures);
       const authenticated = await probe(app, operation, { authorization: `Bearer ${SECURITY_PROBE_TOKEN}` });
       if (authenticated.statusCode === 401 || authenticated.errorCode === "authentication_required" || authenticated.errorCode === "administrator_required") {
+        failures.push(`${describe(operation)}:valid_bearer_rejected:${authenticated.statusCode}:${authenticated.errorCode ?? "no_code"}`);
+      }
+    } else if (operation.profile === "verify_only_bearer") {
+      expectAuthenticationRejection(operation, await probe(app, operation, {}, SECURITY_PROBE_REGISTRATION_PAYLOAD), failures);
+      const authenticated = await probe(app, operation, { authorization: `Bearer ${SECURITY_PROBE_TOKEN}` }, SECURITY_PROBE_REGISTRATION_PAYLOAD);
+      if (operation.method === "POST" && operation.path === "/v1/account/registration") {
+        if (authenticated.statusCode !== 201) failures.push(`${describe(operation)}:registration_success_expected:201:got:${authenticated.statusCode}:${authenticated.errorCode ?? "no_code"}`);
+      } else if (authenticated.statusCode === 401 || authenticated.errorCode === "authentication_required" || authenticated.errorCode === "administrator_required") {
         failures.push(`${describe(operation)}:valid_bearer_rejected:${authenticated.statusCode}:${authenticated.errorCode ?? "no_code"}`);
       }
     } else if (operation.profile === "app_check_optional_bearer") {
@@ -141,23 +164,41 @@ function securityProbeAppCheckVerifier(): AppCheckTokenVerifier {
   return { async verify() {} };
 }
 
-function securityProbeStores(): BackendStores {
+function securityProbeStores(onRegistration?: (call: SecurityProbeRegistrationCall) => void): BackendStores {
   const users = {
-    async ensureUser() {
+    async resolveExistingUser() {
       return { userId: SECURITY_PROBE_USER_ID };
+    },
+    async registerUser(identity: AuthenticatedIdentity, input: AccountRegistrationInput) {
+      onRegistration?.(Object.freeze({ identity, input }));
+      return Object.freeze({
+        created: true,
+        user: Object.freeze({
+          id: SECURITY_PROBE_USER_ID,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          acceptedTermsVersion: input.termsVersion,
+          identity: Object.freeze({
+            provider: identity.provider,
+            subject: identity.subject,
+            email: identity.email ?? null,
+            emailVerified: identity.emailVerified,
+          }),
+        }),
+        acceptance: Object.freeze({ ...input, acceptedAt: "2026-01-01T00:00:00.000Z" }),
+      });
     },
   };
   return { users } as unknown as BackendStores;
 }
 
 /** Build the real app with in-memory auth seams; no Firestore or emulator is used. */
-export function buildSecurityProbeApplication(environment: Environment) {
+export function buildSecurityProbeApplication(environment: Environment, onRegistration?: (call: SecurityProbeRegistrationCall) => void) {
   const dependencies: ApplicationDependencies = {
     environment,
     firestore: null,
     verifier: securityProbeVerifier(),
     appCheckVerifier: securityProbeAppCheckVerifier(),
-    stores: securityProbeStores(),
+    stores: securityProbeStores(onRegistration),
   };
   return buildApplication(dependencies);
 }
