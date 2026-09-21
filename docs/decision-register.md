@@ -55,4 +55,4 @@ BE-DEC-003 supersedes the BE-DEC-002 boundary that reserved transactional email 
 | Test boundary | Local/emulator tests use explicit debug configuration/tokens. Production artifacts reject debug configuration. |
 | Canonical plan | `../../docs/PATTERNLY-WORKING-PLAN.md` owns the channel policy, APPCHK-01–04 delivery order and ODK-E2E-084 provider gate. |
 
-Current source and OpenAPI prove only a partial implementation and remain evidence to reconcile in APPCHK-01/02. They do not prove the accepted matrix or a real provider.
+APPCHK-01/02 now enforce the accepted mobile route matrix in the client and backend, with OpenAPI and behavioral probes. They do not prove a real provider; native configuration and final-build attestation remain APPCHK-03/04 and ODK-E2E-084.
