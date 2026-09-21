@@ -1623,25 +1623,193 @@
         "x-patternly-consumer-scope": "mobile"
       }
     },
-    "/v1/public/privacy-requests": {
-      "x-patternly-security-profile": "public",
-      "x-patternly-consumer-scope": "web",
+    "/v1/guest/privacy-requests": {
+      "x-patternly-security-profile": "app_check_only",
+      "x-patternly-consumer-scope": "mobile",
       "post": {
-        "security": [],
-        "description": "Accept a non-enumerating guest privacy request and send an email-possession link",
+        "description": "Record an idempotent guest privacy request and start email possession verification in the app",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreatePublicPrivacyRequest"
+                "$ref": "#/components/schemas/CreateGuestPrivacyRequest"
               }
             }
           }
         },
         "responses": {
           "202": {
-            "description": "Request accepted without disclosing matching data",
+            "description": "Request pending verification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "pending_verification"
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "pattern": "^pr_[0-9a-f-]{36}$"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "App Check required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key reused with different payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Email sender unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_v1_guest_privacy_requests",
+        "security": [
+          {
+            "appCheckAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "app_check_only",
+        "x-patternly-consumer-scope": "mobile"
+      }
+    },
+    "/v1/guest/privacy-requests/verify": {
+      "x-patternly-security-profile": "app_check_only",
+      "x-patternly-consumer-scope": "mobile",
+      "post": {
+        "description": "Exchange a one-use email code for a short request-scoped session",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GuestPrivacyCode"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Short guest privacy session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "requestId",
+                    "sessionToken"
+                  ],
+                  "properties": {
+                    "requestId": {
+                      "type": "string",
+                      "pattern": "^pr_[0-9a-f-]{36}$"
+                    },
+                    "sessionToken": {
+                      "type": "string",
+                      "minLength": 32
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Uniform unavailable response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_v1_guest_privacy_requests_verify",
+        "security": [
+          {
+            "appCheckAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "app_check_only",
+        "x-patternly-consumer-scope": "mobile"
+      }
+    },
+    "/v1/guest/privacy-requests/{requestId}/resend": {
+      "x-patternly-security-profile": "app_check_only",
+      "x-patternly-consumer-scope": "mobile",
+      "post": {
+        "description": "Non-enumerating request for a fresh in-app email code",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PrivacyRequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GuestPrivacyResend"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Verification pending",
             "content": {
               "application/json": {
                 "schema": {
@@ -1653,7 +1821,7 @@
                   "properties": {
                     "status": {
                       "type": "string",
-                      "const": "accepted"
+                      "const": "pending_verification"
                     }
                   }
                 }
@@ -1671,7 +1839,7 @@
             }
           },
           "503": {
-            "description": "Email delivery unavailable",
+            "description": "Email sender unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1681,65 +1849,21 @@
             }
           }
         },
-        "operationId": "post_v1_public_privacy_requests",
-        "x-patternly-security-profile": "public",
-        "x-patternly-consumer-scope": "web"
-      }
-    },
-    "/v1/public/privacy-requests/{requestId}/session": {
-      "x-patternly-security-profile": "public",
-      "x-patternly-consumer-scope": "web",
-      "post": {
-        "security": [],
-        "description": "Exchange a one-time fragment token for a short object-scoped session",
-        "parameters": [
+        "operationId": "post_v1_guest_privacy_requests_by_requestid_resend",
+        "security": [
           {
-            "$ref": "#/components/parameters/PrivacyRequestId"
+            "appCheckAuth": []
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PrivacyTokenExchange"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Short privacy-request session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PublicPrivacySession"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Uniform unavailable response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "operationId": "post_v1_public_privacy_requests_by_requestid_session",
-        "x-patternly-security-profile": "public",
-        "x-patternly-consumer-scope": "web"
+        "x-patternly-security-profile": "app_check_only",
+        "x-patternly-consumer-scope": "mobile"
       }
     },
-    "/v1/public/privacy-requests/{requestId}/response": {
-      "x-patternly-security-profile": "public",
-      "x-patternly-consumer-scope": "web",
+    "/v1/guest/privacy-requests/{requestId}/response": {
+      "x-patternly-security-profile": "app_check_only",
+      "x-patternly-consumer-scope": "mobile",
       "post": {
-        "security": [],
-        "description": "Read guest request status and an unexpired response with an object-scoped session",
+        "description": "Read a guest privacy response with a short request-scoped session",
         "parameters": [
           {
             "$ref": "#/components/parameters/PrivacyRequestId"
@@ -1777,9 +1901,14 @@
             }
           }
         },
-        "operationId": "post_v1_public_privacy_requests_by_requestid_response",
-        "x-patternly-security-profile": "public",
-        "x-patternly-consumer-scope": "web"
+        "operationId": "post_v1_guest_privacy_requests_by_requestid_response",
+        "security": [
+          {
+            "appCheckAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "app_check_only",
+        "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/legal-requests": {
@@ -8976,14 +9105,19 @@
           }
         }
       },
-      "CreatePublicPrivacyRequest": {
+      "CreateGuestPrivacyRequest": {
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "clientRequestId",
           "email",
           "right"
         ],
         "properties": {
+          "clientRequestId": {
+            "type": "string",
+            "format": "uuid"
+          },
           "email": {
             "type": "string",
             "format": "email",
@@ -9007,6 +9141,33 @@
           }
         }
       },
+      "GuestPrivacyResend": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 320
+          }
+        }
+      },
+      "GuestPrivacyCode": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^pr_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.[A-Za-z0-9_-]{43}$"
+          }
+        }
+      },
       "PrivacyRight": {
         "type": "string",
         "enum": [
@@ -9018,20 +9179,6 @@
           "portability",
           "consent_withdrawal"
         ]
-      },
-      "PrivacyTokenExchange": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "token"
-        ],
-        "properties": {
-          "token": {
-            "type": "string",
-            "minLength": 32,
-            "maxLength": 512
-          }
-        }
       },
       "PublicPrivacySession": {
         "type": "object",

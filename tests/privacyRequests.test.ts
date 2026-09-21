@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test, { after, beforeEach } from "node:test";
 import { getFirestore } from "firebase-admin/firestore";
 import { TEST_APP_CHECK_TOKEN, clearFirestore, createEmulatorContext, createVerifiedAuthUser, registerAuthUser } from "./support.js";
@@ -78,56 +79,132 @@ test("account request has an isolated lifecycle and serves a prepared response o
   assert.equal(audit.docs.some((document) => document.data().reasonCode === "Request fulfilled"), false);
 });
 
-test("public lifecycle exchanges fragment tokens and remains non-enumerating", async () => {
+test("guest lifecycle keeps verification and operator response inside the app", async () => {
   const administrator = await createVerifiedAuthUser("lukasz.kurczab@gmail.com");
-  const intake = await context.app.inject({ method: "POST", url: "/v1/public/privacy-requests", payload: { email: "guest@example.com", right: "portability", reportSubmissionIds: [] } });
+  const mobileHeaders = { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const intake = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests", headers: mobileHeaders, payload: { clientRequestId: "9cb532bc-621c-4c73-afd7-4e47b79f05d9", email: "guest@example.com", right: "portability", reportSubmissionIds: [] } });
   assert.equal(intake.statusCode, 202);
-  assert.deepEqual(intake.json(), { status: "accepted" });
+  const requestId = intake.json().requestId as string;
   const verification = context.privacyLinks.at(-1)!;
   assert.equal(verification.purpose, "verify");
-  assert.match(verification.link, /#token=/u);
-  assert.equal(verification.link.includes("?token="), false);
+  assert.match(verification.code, /^pr_[0-9a-f-]{36}\.[A-Za-z0-9_-]{43}$/u);
 
-  const missing = await context.app.inject({ method: "POST", url: "/v1/public/privacy-requests/pr_00000000-0000-4000-8000-000000000000/session", payload: { token: verification.token } });
-  const invalid = await context.app.inject({ method: "POST", url: `/v1/public/privacy-requests/${verification.requestId}/session`, payload: { token: "x".repeat(32) } });
+  const missing = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests/verify", headers: mobileHeaders, payload: { code: `pr_00000000-0000-4000-8000-000000000000.${verification.token}` } });
+  const invalid = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests/verify", headers: mobileHeaders, payload: { code: `${requestId}.${"x".repeat(43)}` } });
   assert.equal(missing.statusCode, 404);
   assert.deepEqual(missing.json(), invalid.json());
 
-  const exchange = await context.app.inject({ method: "POST", url: `/v1/public/privacy-requests/${verification.requestId}/session`, payload: { token: verification.token } });
+  const exchange = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests/verify", headers: mobileHeaders, payload: { code: verification.code } });
   assert.equal(exchange.statusCode, 200);
   const sessionToken = exchange.json().sessionToken as string;
-  const replay = await context.app.inject({ method: "POST", url: `/v1/public/privacy-requests/${verification.requestId}/session`, payload: { token: verification.token } });
-  assert.equal(replay.statusCode, 404);
-  const initial = await context.app.inject({ method: "POST", url: `/v1/public/privacy-requests/${verification.requestId}/response`, payload: { sessionToken } });
+  const initial = await context.app.inject({ method: "POST", url: `/v1/guest/privacy-requests/${requestId}/response`, headers: mobileHeaders, payload: { sessionToken } });
   assert.equal(initial.statusCode, 200);
   assert.equal(initial.json().response, null);
 
   const headers = auth(administrator.idToken);
-  assert.equal((await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${verification.requestId}`, headers, payload: { action: "start_review", expectedRevision: 1 } })).statusCode, 409);
-  assert.equal((await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${verification.requestId}`, headers, payload: { action: "verify_subject", expectedRevision: 1, reason: "Matched supplied report identifiers" } })).statusCode, 200);
-  const extended = await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${verification.requestId}`, headers, payload: { action: "extend", expectedRevision: 2, reason: "Complex request", noticeLocale: "en" } });
+  assert.equal((await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${requestId}`, headers, payload: { action: "start_review", expectedRevision: 1 } })).statusCode, 409);
+  assert.equal((await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${requestId}`, headers, payload: { action: "verify_subject", expectedRevision: 1, reason: "Matched supplied report identifiers" } })).statusCode, 200);
+  const extended = await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${requestId}`, headers, payload: { action: "extend", expectedRevision: 2, reason: "Complex request", noticeLocale: "en" } });
   assert.equal(extended.statusCode, 200);
   assert.equal(context.privacyLinks.at(-1)?.purpose, "extension");
   assert.equal(context.privacyLinks.at(-1)?.extensionReason, "Complex request");
-  const extensionExchange = await context.app.inject({ method: "POST", url: `/v1/public/privacy-requests/${verification.requestId}/session`, payload: { token: context.privacyLinks.at(-1)!.token } });
+  const extensionExchange = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests/verify", headers: mobileHeaders, payload: { code: context.privacyLinks.at(-1)!.code } });
   assert.equal(extensionExchange.statusCode, 200);
-  const extensionStatus = await context.app.inject({ method: "POST", url: `/v1/public/privacy-requests/${verification.requestId}/response`, payload: { sessionToken: extensionExchange.json().sessionToken } });
+  const extensionStatus = await context.app.inject({ method: "POST", url: `/v1/guest/privacy-requests/${requestId}/response`, headers: mobileHeaders, payload: { sessionToken: extensionExchange.json().sessionToken } });
   assert.equal(extensionStatus.json().extensionReason, "Complex request");
-  assert.equal((await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${verification.requestId}`, headers, payload: { action: "start_review", expectedRevision: 4 } })).statusCode, 200);
-  assert.equal((await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${verification.requestId}`, headers, payload: { action: "prepare_response", expectedRevision: 5, outcome: "refused", response: "Reasoned refusal", reason: "No qualifying portable data", complaintInformationIncluded: true, executionEvidence: "operator_refusal_decision" } })).statusCode, 200);
-  const delivered = await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${verification.requestId}`, headers, payload: { action: "deliver", expectedRevision: 6 } });
+  assert.equal((await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${requestId}`, headers, payload: { action: "start_review", expectedRevision: 4 } })).statusCode, 200);
+  assert.equal((await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${requestId}`, headers, payload: { action: "prepare_response", expectedRevision: 5, outcome: "refused", response: "Reasoned refusal", reason: "No qualifying portable data", complaintInformationIncluded: true, executionEvidence: "operator_refusal_decision" } })).statusCode, 200);
+  const delivered = await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${requestId}`, headers, payload: { action: "deliver", expectedRevision: 6 } });
   assert.equal(delivered.statusCode, 200);
   assert.equal(delivered.json().request.status, "refused");
   assert.equal(delivered.json().request.revision, 8);
-  const responseLink = context.privacyLinks.at(-1)!;
-  assert.equal(responseLink.purpose, "response");
-  const responseExchange = await context.app.inject({ method: "POST", url: `/v1/public/privacy-requests/${verification.requestId}/session`, payload: { token: responseLink.token } });
+  const responseCode = context.privacyLinks.at(-1)!;
+  assert.equal(responseCode.purpose, "response");
+  const responseExchange = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests/verify", headers: mobileHeaders, payload: { code: responseCode.code } });
   assert.equal(responseExchange.statusCode, 200);
-  const publicResponse = await context.app.inject({ method: "POST", url: `/v1/public/privacy-requests/${verification.requestId}/response`, payload: { sessionToken: responseExchange.json().sessionToken } });
-  assert.equal(publicResponse.statusCode, 200);
-  assert.equal(publicResponse.json().response, "Reasoned refusal");
-  assert.equal(publicResponse.headers["cache-control"], "no-store");
-  assert.equal(publicResponse.headers["referrer-policy"], "no-referrer");
+  const guestResponse = await context.app.inject({ method: "POST", url: `/v1/guest/privacy-requests/${requestId}/response`, headers: mobileHeaders, payload: { sessionToken: responseExchange.json().sessionToken } });
+  assert.equal(guestResponse.statusCode, 200);
+  assert.equal(guestResponse.json().response, "Reasoned refusal");
+  assert.equal(guestResponse.headers["cache-control"], "no-store");
+});
+
+test("guest mobile request is App Check protected, idempotent and verifiable only in app", async () => {
+  const payload = { clientRequestId: "d39fbfd9-33dc-47f5-9d1c-48e630da2b43", email: "guest@example.com", right: "access", reportSubmissionIds: [] };
+  const missingAppCheck = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests", payload });
+  assert.equal(missingAppCheck.statusCode, 401);
+  assert.equal(missingAppCheck.json().error.code, "app_check_required");
+  const mobileHeaders = { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const created = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests", headers: mobileHeaders, payload });
+  assert.equal(created.statusCode, 202);
+  const requestId = created.json().requestId as string;
+  assert.deepEqual(created.json(), { status: "pending_verification", requestId });
+  const firstCode = context.privacyLinks.at(-1)!.code;
+  assert.match(firstCode, /^pr_[0-9a-f-]{36}\.[A-Za-z0-9_-]{43}$/u);
+  const retried = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests", headers: mobileHeaders, payload });
+  assert.deepEqual(retried.json(), created.json());
+  assert.equal(context.privacyLinks.at(-1)!.code, firstCode);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const recovery = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests", headers: mobileHeaders, payload });
+    assert.equal(recovery.statusCode, 202);
+    assert.equal(recovery.json().requestId, requestId);
+  }
+  const changed = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests", headers: mobileHeaders, payload: { ...payload, right: "erasure" } });
+  assert.equal(changed.statusCode, 409);
+  const missingResend = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests/pr_00000000-0000-4000-8000-000000000000/resend", headers: mobileHeaders, payload: { email: payload.email } });
+  const wrongEmailResend = await context.app.inject({ method: "POST", url: `/v1/guest/privacy-requests/${requestId}/resend`, headers: mobileHeaders, payload: { email: "wrong@example.com" } });
+  assert.equal(missingResend.statusCode, 202);
+  assert.deepEqual(missingResend.json(), wrongEmailResend.json());
+  const resend = await context.app.inject({ method: "POST", url: `/v1/guest/privacy-requests/${requestId}/resend`, headers: mobileHeaders, payload: { email: payload.email } });
+  assert.equal(resend.statusCode, 202);
+  const latestCode = context.privacyLinks.at(-1)!.code;
+  assert.notEqual(latestCode, firstCode);
+  const stale = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests/verify", headers: mobileHeaders, payload: { code: firstCode } });
+  assert.equal(stale.statusCode, 404);
+  const verified = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests/verify", headers: mobileHeaders, payload: { code: latestCode } });
+  assert.equal(verified.statusCode, 200);
+  assert.equal(verified.json().requestId, requestId);
+  const replay = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests/verify", headers: mobileHeaders, payload: { code: latestCode } });
+  assert.equal(replay.statusCode, 404);
+  const read = await context.app.inject({ method: "POST", url: `/v1/guest/privacy-requests/${requestId}/response`, headers: mobileHeaders, payload: { sessionToken: verified.json().sessionToken } });
+  assert.equal(read.statusCode, 200);
+  assert.equal(read.json().request.requestId, requestId);
+  const resendVerified = await context.app.inject({ method: "POST", url: `/v1/guest/privacy-requests/${requestId}/resend`, headers: mobileHeaders, payload: { email: payload.email } });
+  assert.equal(resendVerified.statusCode, 202);
+  const laterCode = context.privacyLinks.at(-1)!.code;
+  const later = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests/verify", headers: mobileHeaders, payload: { code: laterCode } });
+  assert.equal(later.statusCode, 200);
+});
+
+test("retired browser privacy endpoints cannot create, verify or read a request", async () => {
+  for (const url of [
+    "/v1/public/privacy-requests",
+    "/v1/public/privacy-requests/pr_75347222-8b93-4d78-9232-36b053107c46/session",
+    "/v1/public/privacy-requests/pr_75347222-8b93-4d78-9232-36b053107c46/response",
+  ]) {
+    const response = await context.app.inject({ method: "POST", url, payload: {} });
+    assert.equal(response.statusCode, 404);
+    assert.equal(response.headers["access-control-allow-origin"], undefined);
+  }
+});
+
+test("a pending legacy-compatible guest record can receive a fresh in-app code", async () => {
+  const email = "legacy@example.com";
+  const requestId = await context.stores.privacyRequests.createGuest({ clientRequestId: "16bcdb5b-05d6-47ad-a729-25d544ea1bba", email, right: "access", reportSubmissionIds: [], rateLimitKey: "legacy-test" }, { send: async () => undefined });
+  const mobileHeaders = { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const legacyToken = "L".repeat(43);
+  await getFirestore().collection("privacyRequests").doc(requestId).set({ verificationTokenHash: createHash("sha256").update(legacyToken).digest("hex") }, { merge: true });
+  const retiredLinkToken = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests/verify", headers: mobileHeaders, payload: { code: `${requestId}.${legacyToken}` } });
+  assert.equal(retiredLinkToken.statusCode, 404);
+  const missing = await context.app.inject({ method: "POST", url: `/v1/guest/privacy-requests/${requestId}/resend`, headers: mobileHeaders, payload: { email: "other@example.com" } });
+  const matching = await context.app.inject({ method: "POST", url: `/v1/guest/privacy-requests/${requestId}/resend`, headers: mobileHeaders, payload: { email } });
+  assert.deepEqual(missing.json(), matching.json());
+  assert.equal(matching.statusCode, 202);
+  const code = context.privacyLinks.at(-1)?.code;
+  assert.ok(code);
+  const verified = await context.app.inject({ method: "POST", url: "/v1/guest/privacy-requests/verify", headers: mobileHeaders, payload: { code } });
+  assert.equal(verified.statusCode, 200);
+  const read = await context.app.inject({ method: "POST", url: `/v1/guest/privacy-requests/${requestId}/response`, headers: mobileHeaders, payload: { sessionToken: verified.json().sessionToken } });
+  assert.equal(read.statusCode, 200);
 });
 
 test("admin transitions are revision guarded and require complaint information plus execution evidence", async () => {
@@ -143,18 +220,18 @@ test("admin transitions are revision guarded and require complaint information p
   assert.equal(unproved.statusCode, 400);
 });
 
-test("failed public extension notice remains explicit and can be retried without extending twice", async () => {
-  let verificationToken = "";
+test("failed guest extension notice remains explicit and can be retried without extending twice", async () => {
+  let verificationCode = "";
   let requestId = "";
-  await context.stores.privacyRequests.createPublic({ email: "extension@example.com", right: "access", reportSubmissionIds: [], rateLimitKey: "extension-test" }, "http://127.0.0.1:4173", { send: async (input) => { requestId = input.requestId; verificationToken = decodeURIComponent(new URL(input.link).hash.replace(/^#token=/u, "")); } });
+  await context.stores.privacyRequests.createGuest({ clientRequestId: "7f94f013-6a30-4a2f-a360-459c86c548a7", email: "extension@example.com", right: "access", reportSubmissionIds: [], rateLimitKey: "extension-test" }, { send: async (input) => { requestId = input.requestId; verificationCode = input.code; } });
   assert.ok(requestId);
-  await context.stores.privacyRequests.exchangePublicToken(requestId, verificationToken);
-  await context.stores.privacyRequests.transitionAdmin(requestId, "admin", { action: "verify_subject", reason: "Matched identifiers", expectedRevision: 1 }, "http://127.0.0.1:4173", null);
-  await assert.rejects(context.stores.privacyRequests.transitionAdmin(requestId, "admin", { action: "extend", reason: "Complex request", noticeLocale: "en", expectedRevision: 2 }, "http://127.0.0.1:4173", { send: async () => { throw new Error("mail_down"); } }), /privacy_email_unavailable/u);
+  await context.stores.privacyRequests.exchangeGuestCode(verificationCode, "extension-test");
+  await context.stores.privacyRequests.transitionAdmin(requestId, "admin", { action: "verify_subject", reason: "Matched identifiers", expectedRevision: 1 }, null);
+  await assert.rejects(context.stores.privacyRequests.transitionAdmin(requestId, "admin", { action: "extend", reason: "Complex request", noticeLocale: "en", expectedRevision: 2 }, { send: async () => { throw new Error("mail_down"); } }), /privacy_email_unavailable/u);
   const failed = await context.stores.privacyRequests.readAdmin(requestId, "admin");
   assert.equal(failed?.extensionNoticeStatus, "failed");
   assert.equal(failed?.revision, 3);
-  await context.stores.privacyRequests.transitionAdmin(requestId, "admin", { action: "retry_extension_notice", expectedRevision: 3 }, "http://127.0.0.1:4173", { send: async () => undefined });
+  await context.stores.privacyRequests.transitionAdmin(requestId, "admin", { action: "retry_extension_notice", expectedRevision: 3 }, { send: async () => undefined });
   const delivered = await context.stores.privacyRequests.readAdmin(requestId, "admin");
   assert.equal(delivered?.extensionNoticeStatus, "delivered");
   assert.equal(delivered?.revision, 3);

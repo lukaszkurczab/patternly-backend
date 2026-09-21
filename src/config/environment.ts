@@ -29,7 +29,6 @@ const environmentSchema = z.object({
   ACCOUNT_DATA_EXPORT_MAX_SERIALIZED_BYTES: z.coerce.number().int().positive().max(50 * 1024 * 1024).default(5 * 1024 * 1024),
   PRIVACY_RESPONSE_KEY_BASE64: z.string().min(1),
   PRIVACY_AUDIT_HMAC_SECRET: z.string().min(32),
-  PUBLIC_PRIVACY_ORIGIN: z.string().url().optional(),
   REVENUECAT_API_BASE_URL: z.string().url().default("https://api.revenuecat.com"),
   REVENUECAT_WEBHOOK_SECRET: z.string().min(1).optional(),
   REVENUECAT_APP_ID: z.string().min(1).optional(),
@@ -60,7 +59,6 @@ export type Environment = Readonly<{
   accountDataExportMaxSerializedBytes: number;
   privacyResponseKeyBase64: string;
   privacyAuditHmacSecret: string;
-  publicPrivacyOrigin: string | undefined;
   revenueCatApiBaseUrl: string;
   revenueCatWebhookSecret: string | undefined;
   revenueCatAppId: string | undefined;
@@ -78,7 +76,6 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
   const value = parsed.data;
   if (value.NODE_ENV === "production") {
     if (!value.FIREBASE_PROJECT_ID || !value.FIREBASE_AUTH_ISSUER) throw new Error("production_firebase_config_required");
-    if (!value.PUBLIC_PRIVACY_ORIGIN) throw new Error("production_public_privacy_origin_required");
     if (!smtpConfiguration(value)) throw new Error("production_smtp_config_required");
     if (!value.REVENUECAT_WEBHOOK_SECRET || !value.REVENUECAT_APP_ID || !value.REVENUECAT_ENTITLEMENT_ID || !value.REVENUECAT_PRODUCT_ID || !value.REVENUECAT_WEBHOOK_ENVIRONMENT) throw new Error("production_revenuecat_config_required");
   }
@@ -102,7 +99,6 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     accountDataExportMaxSerializedBytes: value.ACCOUNT_DATA_EXPORT_MAX_SERIALIZED_BYTES,
     privacyResponseKeyBase64: value.PRIVACY_RESPONSE_KEY_BASE64,
     privacyAuditHmacSecret: value.PRIVACY_AUDIT_HMAC_SECRET,
-    publicPrivacyOrigin: parseWebOrigin(value.PUBLIC_PRIVACY_ORIGIN, value.NODE_ENV, "invalid_public_privacy_origin"),
     revenueCatApiBaseUrl: value.REVENUECAT_API_BASE_URL,
     revenueCatWebhookSecret: value.REVENUECAT_WEBHOOK_SECRET,
     revenueCatAppId: value.REVENUECAT_APP_ID,

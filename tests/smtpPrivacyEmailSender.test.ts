@@ -19,10 +19,10 @@ test("SMTP privacy sender emits bounded plain-text messages for every DSAR purpo
     messages.push(message as Record<string, unknown>);
     return { accepted: [String(message.to)], rejected: [] } as never;
   } });
-  const link = "https://patternly.example/privacy-request/pr_fixture#token=secret-token";
-  await sender.send({ recipient: "person@example.com", purpose: "verify", requestId: "pr_fixture", link });
-  await sender.send({ recipient: "person@example.com", purpose: "extension", requestId: "pr_fixture", link, extensionReason: "Sprawa wymaga porównania kilku źródeł." });
-  await sender.send({ recipient: "person@example.com", purpose: "response", requestId: "pr_fixture", link });
+  const code = `pr_75347222-8b93-4d78-9232-36b053107c46.${"s".repeat(43)}`;
+  await sender.send({ recipient: "person@example.com", purpose: "verify", requestId: "pr_75347222-8b93-4d78-9232-36b053107c46", code });
+  await sender.send({ recipient: "person@example.com", purpose: "extension", requestId: "pr_75347222-8b93-4d78-9232-36b053107c46", code, extensionReason: "Sprawa wymaga porównania kilku źródeł." });
+  await sender.send({ recipient: "person@example.com", purpose: "response", requestId: "pr_75347222-8b93-4d78-9232-36b053107c46", code });
 
   assert.equal(messages.length, 3);
   for (const message of messages) {
@@ -32,7 +32,7 @@ test("SMTP privacy sender emits bounded plain-text messages for every DSAR purpo
     assert.equal(typeof message.subject, "string");
     assert.equal(typeof message.text, "string");
     assert.equal("html" in message, false);
-    assert.match(String(message.text), /#token=secret-token/u);
+    assert.ok(String(message.text).includes(code));
     assert.doesNotMatch(JSON.stringify(message), /secret-value/u);
   }
   assert.match(String(messages[1]?.text), /Sprawa wymaga porównania kilku źródeł/u);
@@ -41,7 +41,7 @@ test("SMTP privacy sender emits bounded plain-text messages for every DSAR purpo
 
 test("SMTP privacy sender fails when the provider does not accept the recipient", async () => {
   const sender = createSmtpPrivacyEmailSender(configuration, { sendMail: async () => ({ accepted: [], rejected: ["person@example.com"] }) as never });
-  await assert.rejects(sender.send({ recipient: "person@example.com", purpose: "response", requestId: "pr_fixture", link: "https://patternly.example/#token=token" }), /privacy_email_rejected/u);
+  await assert.rejects(sender.send({ recipient: "person@example.com", purpose: "response", requestId: "pr_fixture", code: "pr_fixture.token" }), /privacy_email_rejected/u);
 });
 
 test("SMTP purchase receipt is plain text and contains the durable transaction evidence", async () => {
@@ -66,7 +66,6 @@ test("SMTP runtime configuration is all-or-nothing and production requires it", 
     FIREBASE_PROJECT_ID: "patternly-app-sandbox",
     FIREBASE_AUTH_ISSUER: "https://securetoken.google.com/patternly-app-sandbox",
     ADMINISTRATOR_EMAIL: "admin@example.com",
-    PUBLIC_PRIVACY_ORIGIN: "https://privacy.example.com",
     REPORT_RATE_LIMIT_HASH_SECRET: "test-only-report-rate-limit-secret-0123456789",
     DELETION_PSEUDONYM_KEYS_JSON: JSON.stringify([{ version: "test-v1", status: "active", keyBase64: Buffer.alloc(32, 7).toString("base64") }]),
     PRIVACY_RESPONSE_KEY_BASE64: Buffer.alloc(32, 11).toString("base64"),

@@ -56,21 +56,22 @@ export type PrivacyRequestResponse = Readonly<{
 }>;
 
 export interface PrivacyRequestEmailSender {
-  send(input: Readonly<{ recipient: string; purpose: "verify" | "response" | "extension"; requestId: string; link: string; extensionReason?: string }>): Promise<void>;
+  send(input: Readonly<{ recipient: string; purpose: "verify" | "response" | "extension"; requestId: string; code: string; extensionReason?: string }>): Promise<void>;
 }
 
 export interface PrivacyRequestStore {
   createAccount(userId: string, right: PrivacyRequestRight, narrative?: string): Promise<PrivacyRequestListItem>;
-  createPublic(input: Readonly<{ email: string; right: PrivacyRequestRight; narrative?: string; reportSubmissionIds: readonly string[]; rateLimitKey: string }>, origin: string, sender: PrivacyRequestEmailSender): Promise<void>;
-  exchangePublicToken(requestId: string, token: string): Promise<Readonly<{ sessionToken: string }>>;
+  createGuest(input: Readonly<{ clientRequestId: string; email: string; right: PrivacyRequestRight; narrative?: string; reportSubmissionIds: readonly string[]; rateLimitKey: string }>, sender: PrivacyRequestEmailSender): Promise<string>;
+  resendGuestCode(requestId: string, email: string, rateLimitKey: string, sender: PrivacyRequestEmailSender): Promise<void>;
+  exchangeGuestCode(code: string, rateLimitKey: string): Promise<Readonly<{ requestId: string; sessionToken: string }>>;
   listAccount(userId: string): Promise<readonly PrivacyRequestListItem[]>;
   readAccount(userId: string, requestId: string): Promise<PrivacyRequestResponse | null>;
-  readPublic(requestId: string, sessionToken: string): Promise<PrivacyRequestResponse | null>;
+  readGuest(requestId: string, sessionToken: string): Promise<PrivacyRequestResponse | null>;
   listAdmin(): Promise<readonly PrivacyRequestListItem[]>;
   readAdmin(requestId: string, actorId: string): Promise<PrivacyRequestDetails | null>;
   readExecutionContext(requestId: string): Promise<Readonly<{ channel: PrivacyRequestChannel; right: PrivacyRequestRight; status: PrivacyRequestStatus; revision: number; userId: string | null }> | null>;
   prepareExecutedResponse(requestId: string, actorId: string, expectedRevision: number, response: string, executionEvidence: string): Promise<PrivacyRequestDetails>;
-  transitionAdmin(requestId: string, actorId: string, action: PrivacyRequestAdminAction, origin: string, sender: PrivacyRequestEmailSender | null): Promise<PrivacyRequestDetails>;
+  transitionAdmin(requestId: string, actorId: string, action: PrivacyRequestAdminAction, sender: PrivacyRequestEmailSender | null): Promise<PrivacyRequestDetails>;
 }
 
 export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
@@ -93,30 +94,96 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
     return this.toListItem(requestId, record);
   }
 
-  public async createPublic(input: Readonly<{ email: string; right: PrivacyRequestRight; narrative?: string; reportSubmissionIds: readonly string[]; rateLimitKey: string }>, origin: string, sender: PrivacyRequestEmailSender): Promise<void> {
+  public async createGuest(input: Readonly<{ clientRequestId: string; email: string; right: PrivacyRequestRight; narrative?: string; reportSubmissionIds: readonly string[]; rateLimitKey: string }>, sender: PrivacyRequestEmailSender): Promise<string> {
     const email = input.email.trim().toLowerCase();
-    const receivedAt = new Date();
-    await Promise.all([this.consumePublicRateLimit(`email:${email}`, receivedAt), this.consumePublicRateLimit(`client:${input.rateLimitKey}`, receivedAt)]);
-    const requestId = `pr_${randomUUID()}`;
-    const token = randomBytes(32).toString("base64url");
-    const record = this.initialRecord(requestId, "public", input.right, receivedAt, this.subjectPseudonym(`email:${email}`), null);
-    const secretPayload = { email, narrative: input.narrative ?? null, reportSubmissionIds: [...input.reportSubmissionIds] };
-    await this.db.runTransaction(async (transaction) => {
-      transaction.create(this.requestRef(requestId), { ...record, status: "identity_verification_required", verificationTokenHash: this.hash(token), verificationExpiresAt: Timestamp.fromMillis(receivedAt.getTime() + VERIFICATION_TTL_MS) });
-      transaction.create(this.secretRef(requestId), { payload: this.encrypt(JSON.stringify(secretPayload)), expiresAt: Timestamp.fromMillis(receivedAt.getTime() + AUDIT_TTL_MS) });
-      this.audit(transaction, requestId, "subject", "received", "public_request_received", receivedAt);
-      this.audit(transaction, requestId, "system", "identity_verification_required", "email_possession_verification_required", receivedAt);
+    const now = new Date();
+    const fingerprint = this.subjectPseudonym(JSON.stringify({ email, right: input.right, narrative: input.narrative ?? null, reportSubmissionIds: input.reportSubmissionIds }));
+    const idempotencyRef = this.db.collection(COLLECTIONS.privacyRequestIdempotency).doc(input.clientRequestId);
+    const prior = await idempotencyRef.get();
+    if (prior.exists) {
+      const data = asRecord(prior.data(), "privacy_request_idempotency");
+      if (data.fingerprint !== fingerprint || typeof data.requestId !== "string") throw new Error("privacy_request_idempotency_conflict");
+      return data.requestId;
+    }
+    await Promise.all([this.consumePublicRateLimit(`guest-create-email:${email}`, now), this.consumePublicRateLimit(`guest-create-ip:${input.rateLimitKey}`, now)]);
+    const result = await this.db.runTransaction(async (transaction) => {
+      const existing = await transaction.get(idempotencyRef);
+      if (existing.exists) {
+        const data = asRecord(existing.data(), "privacy_request_idempotency");
+        if (data.fingerprint !== fingerprint || typeof data.requestId !== "string") throw new Error("privacy_request_idempotency_conflict");
+        return { requestId: data.requestId, created: false };
+      }
+      const id = `pr_${randomUUID()}`;
+      const record = this.initialRecord(id, "public", input.right, now, this.subjectPseudonym(`email:${email}`), null);
+      transaction.create(this.requestRef(id), { ...record, status: "identity_verification_required" });
+      transaction.create(this.secretRef(id), { payload: this.encrypt(JSON.stringify({ email, narrative: input.narrative ?? null, reportSubmissionIds: [...input.reportSubmissionIds] })), expiresAt: Timestamp.fromMillis(now.getTime() + AUDIT_TTL_MS) });
+      transaction.create(idempotencyRef, { requestId: id, fingerprint, expiresAt: Timestamp.fromMillis(now.getTime() + AUDIT_TTL_MS) });
+      this.audit(transaction, id, "subject", "received", "public_request_received", now);
+      this.audit(transaction, id, "system", "identity_verification_required", "email_possession_verification_required", now);
+      return { requestId: id, created: true };
     });
-    const link = `${origin.replace(/\/$/u, "")}/privacy-request/${encodeURIComponent(requestId)}#token=${encodeURIComponent(token)}`;
+    if (result.created) await this.issueGuestCode(result.requestId, email, sender, false);
+    return result.requestId;
+  }
+
+  public async resendGuestCode(requestId: string, emailInput: string, rateLimitKey: string, sender: PrivacyRequestEmailSender): Promise<void> {
+    const email = emailInput.trim().toLowerCase();
+    const now = new Date();
+    await Promise.all([
+      this.consumePublicRateLimit(`guest-resend-email:${email}`, now),
+      this.consumePublicRateLimit(`guest-resend-ip:${rateLimitKey}`, now),
+      this.consumePublicRateLimit(`guest-resend-request:${requestId}`, now),
+    ]);
+    await this.issueGuestCode(requestId, email, sender, true);
+  }
+
+  public async exchangeGuestCode(code: string, rateLimitKey: string): Promise<Readonly<{ requestId: string; sessionToken: string }>> {
+    const divider = code.indexOf(".");
+    const requestId = code.slice(0, divider);
+    const token = code.slice(divider + 1);
+    const now = new Date();
+    await Promise.all([
+      this.consumePublicRateLimit(`guest-verify-ip:${rateLimitKey}`, now),
+      this.consumePublicRateLimit(`guest-verify-request:${requestId}`, now),
+    ]);
+    const result = await this.exchangeCodeToken(requestId, token);
+    return Object.freeze({ requestId, sessionToken: result.sessionToken });
+  }
+
+  private async issueGuestCode(requestId: string, email: string, sender: PrivacyRequestEmailSender, allowVerified: boolean): Promise<void> {
+    const token = randomBytes(32).toString("base64url");
+    const attemptId = randomUUID();
+    const staged = await this.db.runTransaction(async (transaction) => {
+      const [requestSnapshot, secretSnapshot] = await transaction.getAll(this.requestRef(requestId), this.secretRef(requestId));
+      if (!requestSnapshot?.exists || !secretSnapshot?.exists) return false;
+      const data = asRecord(requestSnapshot.data(), "privacy_request");
+      if (data.channel !== "public" || (!allowVerified && data.emailPossessionVerifiedAt)) return false;
+      const secret = asRecord(secretSnapshot.data(), "privacy_request_secret");
+      const decrypted = JSON.parse(this.decrypt(asRecord(secret.payload, "privacy_request_secret_payload"))) as { email?: unknown };
+      if (decrypted.email !== email) return false;
+      const now = new Date();
+      transaction.set(this.requestRef(requestId), { verificationTokenHash: this.hash(`app-code:${token}`), verificationExpiresAt: Timestamp.fromMillis(now.getTime() + VERIFICATION_TTL_MS), deliveryAttemptId: attemptId, deliveryFailure: "pending", updatedAt: Timestamp.fromDate(now) }, { merge: true });
+      return true;
+    });
+    if (!staged) return;
     try {
-      await sender.send({ recipient: email, purpose: "verify", requestId, link });
+      await sender.send({ recipient: email, purpose: "verify", requestId, code: `${requestId}.${token}` });
+      await this.finishGuestDeliveryAttempt(requestId, attemptId, null);
     } catch {
-      await this.requestRef(requestId).set({ deliveryFailure: "verification_email_failed", updatedAt: Timestamp.now() }, { merge: true });
-      throw new Error("privacy_email_unavailable");
+      await this.finishGuestDeliveryAttempt(requestId, attemptId, "verification_email_failed");
     }
   }
 
-  public async exchangePublicToken(requestId: string, token: string): Promise<Readonly<{ sessionToken: string }>> {
+  private async finishGuestDeliveryAttempt(requestId: string, attemptId: string, failure: string | null): Promise<void> {
+    await this.db.runTransaction(async (transaction) => {
+      const ref = this.requestRef(requestId);
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists || asRecord(snapshot.data(), "privacy_request").deliveryAttemptId !== attemptId) return;
+      transaction.set(ref, { deliveryFailure: failure, updatedAt: Timestamp.now() }, { merge: true });
+    });
+  }
+
+  private async exchangeCodeToken(requestId: string, token: string): Promise<Readonly<{ sessionToken: string }>> {
     const sessionToken = randomBytes(32).toString("base64url");
     await this.db.runTransaction(async (transaction) => {
       const ref = this.requestRef(requestId);
@@ -125,7 +192,7 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
       const data = asRecord(snapshot.data(), "privacy_request");
       const tokenHash = typeof data.verificationTokenHash === "string" ? data.verificationTokenHash : "";
       const expiresAt = asTimestamp(data.verificationExpiresAt, "privacy_verification_expiry").toMillis();
-      if (!tokenHash || tokenHash !== this.hash(token) || expiresAt <= Date.now()) throw new Error("privacy_request_token_invalid");
+      if (!tokenHash || tokenHash !== this.hash(`app-code:${token}`) || expiresAt <= Date.now()) throw new Error("privacy_request_token_invalid");
       const now = new Date();
       const nextStatus = data.status === "identity_verification_required" ? "received" : data.status;
       transaction.set(ref, {
@@ -158,7 +225,7 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
     return response;
   }
 
-  public async readPublic(requestId: string, sessionToken: string): Promise<PrivacyRequestResponse | null> {
+  public async readGuest(requestId: string, sessionToken: string): Promise<PrivacyRequestResponse | null> {
     const snapshot = await this.requestRef(requestId).get();
     if (!snapshot.exists) return null;
     const data = asRecord(snapshot.data(), "privacy_request");
@@ -221,10 +288,10 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
     return details;
   }
 
-  public async transitionAdmin(requestId: string, actorId: string, action: PrivacyRequestAdminAction, origin: string, sender: PrivacyRequestEmailSender | null): Promise<PrivacyRequestDetails> {
+  public async transitionAdmin(requestId: string, actorId: string, action: PrivacyRequestAdminAction, sender: PrivacyRequestEmailSender | null): Promise<PrivacyRequestDetails> {
     if (action.action === "execute_export") throw new Error("privacy_request_executor_required");
     if (action.action === "retry_extension_notice") {
-      await this.notifyPublicExtension(requestId, actorId, action.expectedRevision, origin, sender);
+      await this.notifyPublicExtension(requestId, actorId, action.expectedRevision, sender);
       const retried = await this.readAdmin(requestId, actorId);
       if (!retried) throw new Error("privacy_request_not_found");
       return retried;
@@ -232,7 +299,7 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
     if (action.action === "deliver") {
       const current = await this.requestRef(requestId).get();
       if (!current.exists) throw new Error("privacy_request_not_found");
-      if (asRecord(current.data(), "privacy_request").channel === "public") return this.deliverPublic(requestId, actorId, action.expectedRevision, origin, sender);
+      if (asRecord(current.data(), "privacy_request").channel === "public") return this.deliverPublic(requestId, actorId, action.expectedRevision, sender);
     }
     await this.db.runTransaction(async (transaction) => {
       const ref = this.requestRef(requestId);
@@ -293,7 +360,7 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
     });
     if (action.action === "extend") {
       const current = await this.requestRef(requestId).get();
-      if (current.exists && asRecord(current.data(), "privacy_request").channel === "public") await this.notifyPublicExtension(requestId, actorId, action.expectedRevision + 1, origin, sender);
+      if (current.exists && asRecord(current.data(), "privacy_request").channel === "public") await this.notifyPublicExtension(requestId, actorId, action.expectedRevision + 1, sender);
     }
     if (action.action === "close") await this.alignAuditRetentionWithClosure(requestId);
     const details = await this.readAdmin(requestId, actorId);
@@ -301,8 +368,8 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
     return details;
   }
 
-  private async deliverPublic(requestId: string, actorId: string, expectedRevision: number, origin: string, sender: PrivacyRequestEmailSender | null): Promise<PrivacyRequestDetails> {
-    if (!sender || !origin) throw new Error("privacy_email_unavailable");
+  private async deliverPublic(requestId: string, actorId: string, expectedRevision: number, sender: PrivacyRequestEmailSender | null): Promise<PrivacyRequestDetails> {
+    if (!sender) throw new Error("privacy_email_unavailable");
     const token = randomBytes(32).toString("base64url");
     const attemptId = randomUUID();
     let email = "";
@@ -320,16 +387,15 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
       transaction.set(this.requestRef(requestId), {
         deliveryAttemptId: attemptId,
         deliveryFailure: null,
-        verificationTokenHash: this.hash(token),
+        verificationTokenHash: this.hash(`app-code:${token}`),
         verificationExpiresAt: Timestamp.fromMillis(now.getTime() + VERIFICATION_TTL_MS),
         revision: expectedRevision + 1,
         updatedAt: Timestamp.fromDate(now),
       }, { merge: true });
       this.audit(transaction, requestId, this.actorPseudonym(actorId), "delivery_staged", "response_delivery_staged", now);
     });
-    const link = `${origin.replace(/\/$/u, "")}/privacy-request/${encodeURIComponent(requestId)}#token=${encodeURIComponent(token)}`;
     try {
-      await sender.send({ recipient: email, purpose: "response", requestId, link });
+      await sender.send({ recipient: email, purpose: "response", requestId, code: `${requestId}.${token}` });
     } catch {
       await this.requestRef(requestId).set({ deliveryFailure: "response_email_failed", updatedAt: Timestamp.now() }, { merge: true });
       throw new Error("privacy_email_unavailable");
@@ -353,8 +419,8 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
     return details;
   }
 
-  private async notifyPublicExtension(requestId: string, actorId: string, expectedRevision: number, origin: string, sender: PrivacyRequestEmailSender | null): Promise<void> {
-    if (!sender || !origin) throw new Error("privacy_email_unavailable");
+  private async notifyPublicExtension(requestId: string, actorId: string, expectedRevision: number, sender: PrivacyRequestEmailSender | null): Promise<void> {
+    if (!sender) throw new Error("privacy_email_unavailable");
     const token = randomBytes(32).toString("base64url");
     const [requestSnapshot, secretSnapshot] = await Promise.all([this.requestRef(requestId).get(), this.secretRef(requestId).get()]);
     if (!requestSnapshot.exists || !secretSnapshot.exists) throw new Error("privacy_request_not_found");
@@ -367,10 +433,9 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
     if (typeof decrypted.email !== "string") throw new Error("privacy_request_invalid");
     if (!extensionReason) throw new Error("privacy_request_invalid");
     const now = new Date();
-    await this.requestRef(requestId).set({ verificationTokenHash: this.hash(token), verificationExpiresAt: Timestamp.fromMillis(now.getTime() + VERIFICATION_TTL_MS), extensionNoticeAttemptedAt: Timestamp.fromDate(now), extensionNoticeStatus: "pending" }, { merge: true });
-    const link = `${origin.replace(/\/$/u, "")}/privacy-request/${encodeURIComponent(requestId)}#token=${encodeURIComponent(token)}`;
+    await this.requestRef(requestId).set({ verificationTokenHash: this.hash(`app-code:${token}`), verificationExpiresAt: Timestamp.fromMillis(now.getTime() + VERIFICATION_TTL_MS), extensionNoticeAttemptedAt: Timestamp.fromDate(now), extensionNoticeStatus: "pending" }, { merge: true });
     try {
-      await sender.send({ recipient: decrypted.email, purpose: "extension", requestId, link, extensionReason });
+      await sender.send({ recipient: decrypted.email, purpose: "extension", requestId, code: `${requestId}.${token}`, extensionReason });
     } catch {
       await this.requestRef(requestId).set({ extensionNoticeStatus: "failed", updatedAt: Timestamp.now() }, { merge: true });
       throw new Error("privacy_email_unavailable");
@@ -453,7 +518,7 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
   }
 
   private async consumePublicRateLimit(subject: string, now: Date): Promise<void> {
-    const key = this.hash(`privacy-intake:${subject}`);
+    const key = this.subjectPseudonym(`privacy-intake:${subject}`);
     const ref = this.db.collection(COLLECTIONS.privacyRequestRateLimits).doc(key);
     await this.db.runTransaction(async (transaction) => {
       const snapshot = await transaction.get(ref);

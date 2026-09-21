@@ -19,7 +19,6 @@ function assertLocalAdminBoundary(environment) {
     || environment.FIREBASE_AUTH_EMULATOR_HOST !== LOCAL_ADMIN_CONTRACT.authEmulatorHost
     || environment.FIRESTORE_EMULATOR_HOST !== LOCAL_ADMIN_CONTRACT.firestoreEmulatorHost
     || environment.ADMIN_WEB_ORIGIN !== LOCAL_ADMIN_CONTRACT.webOrigin
-    || environment.PUBLIC_PRIVACY_ORIGIN !== LOCAL_ADMIN_CONTRACT.webOrigin
   ) throw new Error("local_admin_boundary_invalid");
 }
 
@@ -42,7 +41,6 @@ export function buildLocalAdminEnvironment(source, values) {
     DELETION_PSEUDONYM_KEYS_JSON: LOCAL_ADMIN_DELETION_PSEUDONYM_KEYS_JSON,
     PRIVACY_RESPONSE_KEY_BASE64: Buffer.alloc(32, 11).toString("base64"),
     PRIVACY_AUDIT_HMAC_SECRET: "local-admin-privacy-audit-hmac-secret-0123456789",
-    PUBLIC_PRIVACY_ORIGIN: LOCAL_ADMIN_CONTRACT.webOrigin,
   };
   assertLocalAdminBoundary(environment);
   return Object.freeze(environment);

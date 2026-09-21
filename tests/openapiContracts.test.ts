@@ -69,7 +69,7 @@ test("GATE-02 source OpenAPI document is complete", () => {
 
 test("runtime parity uses the real app, normalizes parameters, and ignores automatic HEAD", async () => {
   const routes = await runtimeInventory();
-  assert.equal(routes.length, 55);
+  assert.equal(routes.length, 56);
   assert.equal(routes.find((route) => operationKey(route.method, route.path) === "POST /v1/account/registration")?.securityProfile, "app_check_verify_only_bearer");
   assert.equal(routes.find((route) => operationKey(route.method, route.path) === "GET /v1/admin/overview")?.securityProfile, "admin");
   assert.equal(routes.find((route) => operationKey(route.method, route.path) === "POST /v1/content/reports")?.securityProfile, "app_check_optional_bearer");

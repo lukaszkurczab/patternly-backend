@@ -32,11 +32,11 @@ This decision removes the deferred public deletion path rather than implementing
 
 | Field | Decision |
 | --- | --- |
-| Status | accepted by Product Owner on 2026-09-10; implementation and removal work pending |
+| Status | accepted by Product Owner on 2026-09-10; WEB-03B implemented locally, remote hosting check remains WEB-03C |
 | Decision | Every user-initiated privacy and data-rights request starts only in the Patternly application under `Settings`. The hosted public web does not expose intake, verification-link, response-session or account-login routes. |
 | Web boundary | The hosted site is marketing-only. The administrator panel is a Product Owner-only local workspace and is never hosted or bundled into the public artifact. |
-| Current conflict | The existing `/v1/public/privacy-requests` API family, `PrivacyRequestPage`, Firebase Hosting rewrites, public-origin/SMTP flow and hosted admin entry contradict the accepted target and require scoped removal or replacement. |
-| Required follow-up | Define the authenticated and guest states of the in-app Settings flow, remove obsolete public-browser contracts and evidence, split local admin from the public build, and add negative deployment tests. |
+| Implemented boundary | The `/v1/public/privacy-requests` API family, public-origin configuration and browser verification links are removed. Guest requests use the in-app form and App Check; local admin is excluded from the public build. |
+| Required follow-up | Verify the deployed marketing-only hosting under WEB-03C and complete device/provider evidence in the release gates. |
 | Safety | Removing the public browser path must not remove the in-app ability to exercise applicable data rights or the local Product Owner workflow for reviewing requests. |
 
 The Product Owner approved the account-state split on 2026-09-10: authenticated requests are account-bound; guests reset device-only data locally and may submit an in-app email-based request for data created through network features. Guest verification must return to the application or another non-web completion mechanism; it cannot recreate the removed public browser response surface.

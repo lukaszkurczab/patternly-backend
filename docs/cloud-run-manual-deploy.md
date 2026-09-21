@@ -11,7 +11,7 @@ Cloud Run service configuration:
 - No administrator web origin is configured in production. Administrator routes
   are unavailable there; the panel uses only the local backend and emulators;
 - `REPORT_RATE_LIMIT_HASH_SECRET`;
-- `PUBLIC_PRIVACY_ORIGIN` and the Google Workspace SMTP settings
+- Google Workspace SMTP settings for in-app guest privacy codes
   `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_FROM_EMAIL`,
   `SMTP_FROM_NAME` and optional `SMTP_REPLY_TO`;
 - `SMTP_PASSWORD` — a Secret Manager value available only to the Cloud Run

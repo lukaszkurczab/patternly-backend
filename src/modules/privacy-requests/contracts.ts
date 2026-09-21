@@ -38,16 +38,17 @@ export const createAccountPrivacyRequestSchema = z.object({
   narrative: narrativeSchema.optional(),
 }).strict();
 
-export const createPublicPrivacyRequestSchema = z.object({
+export const createGuestPrivacyRequestSchema = z.object({
+  clientRequestId: z.string().uuid(),
   email: z.string().trim().email().max(320),
   right: privacyRequestRightSchema,
   narrative: narrativeSchema.optional(),
   reportSubmissionIds: z.array(reportSubmissionIdSchema).max(10).default([]),
 }).strict();
 
-export const verifyPublicPrivacyRequestSchema = z.object({
-  token: z.string().min(32).max(512),
-}).strict();
+export const resendGuestPrivacyCodeSchema = z.object({ email: z.string().trim().email().max(320) }).strict();
+
+export const exchangeGuestPrivacyCodeSchema = z.object({ code: z.string().trim().regex(/^pr_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[A-Za-z0-9_-]{43}$/u) }).strict();
 
 export const publicPrivacySessionSchema = z.object({
   sessionToken: z.string().min(32).max(512),

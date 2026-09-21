@@ -30,7 +30,6 @@ export const testEnvironment: Environment = loadEnvironment({
   REPORT_RATE_LIMIT_WINDOW_SECONDS: "3600",
   PRIVACY_RESPONSE_KEY_BASE64: Buffer.alloc(32, 11).toString("base64"),
   PRIVACY_AUDIT_HMAC_SECRET: "test-only-privacy-audit-hmac-secret-0123456789",
-  PUBLIC_PRIVACY_ORIGIN: "http://127.0.0.1:4173",
   REVENUECAT_WEBHOOK_SECRET: "Bearer test-revenuecat-secret",
   REVENUECAT_APP_ID: "app-1",
   REVENUECAT_ENTITLEMENT_ID: "premium",
@@ -42,7 +41,7 @@ export type EmulatorContext = Readonly<{
   app: ReturnType<typeof buildApplication>;
   stores: BackendStores;
   close: () => Promise<void>;
-  privacyLinks: readonly Readonly<{ recipient: string; purpose: "verify" | "response" | "extension"; requestId: string; token: string; link: string; extensionReason?: string }>[];
+  privacyLinks: readonly Readonly<{ recipient: string; purpose: "verify" | "response" | "extension"; requestId: string; token: string; code: string; extensionReason?: string }>[];
   purchaseReceipts: readonly import("../src/modules/billing/revenuecatWebhookStore.js").PurchaseReceiptDelivery[];
   customTokenSubjects: readonly string[];
   revokedSubjects: readonly string[];
@@ -51,7 +50,7 @@ export type EmulatorContext = Readonly<{
 
 export function createEmulatorContext(): EmulatorContext {
   const runtime = createFirestoreRuntime(testEnvironment);
-  const privacyLinks: Array<Readonly<{ recipient: string; purpose: "verify" | "response" | "extension"; requestId: string; token: string; link: string; extensionReason?: string }>> = [];
+  const privacyLinks: Array<Readonly<{ recipient: string; purpose: "verify" | "response" | "extension"; requestId: string; token: string; code: string; extensionReason?: string }>> = [];
   const purchaseReceipts: import("../src/modules/billing/revenuecatWebhookStore.js").PurchaseReceiptDelivery[] = [];
   const customTokenSubjects: string[] = [];
   const revokedSubjects: string[] = [];
@@ -76,9 +75,9 @@ export function createEmulatorContext(): EmulatorContext {
     appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
     stores,
     privacyRequestEmailSender: { send: async (input) => {
-      const token = new URL(input.link).hash.match(/^#token=(.+)$/u)?.[1];
-      if (!token) throw new Error("privacy_test_link_invalid");
-      privacyLinks.push({ ...input, token: decodeURIComponent(token) });
+      const token = input.code.split(".")[1];
+      if (!token) throw new Error("privacy_test_code_invalid");
+      privacyLinks.push({ ...input, token });
     } },
     purchaseReceiptEmailSender: { send: async (input) => { purchaseReceipts.push(input); } },
   });

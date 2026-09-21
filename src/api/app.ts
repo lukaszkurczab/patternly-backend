@@ -15,7 +15,7 @@ import { createContentReportSchema, transitionContentReportSchema } from "../mod
 import { accountRecoveryCodeConsumeSchema, accountRecoveryCodeIssueSchema, accountSessionRevokeSchema, accountDeletionRequestSchema, publicDeletionStatusSchema } from "../modules/account-lifecycle/contracts.js";
 import { createLogger } from "../infrastructure/logging/logger.js";
 import { DataExportRateLimitError, DataExportTooLargeError } from "../modules/data-export/contracts.js";
-import { createAccountPrivacyRequestSchema, createPublicPrivacyRequestSchema, privacyRequestAdminActionSchema, publicPrivacySessionSchema, PRIVACY_RIGHT_POLICIES, verifyPublicPrivacyRequestSchema } from "../modules/privacy-requests/contracts.js";
+import { createAccountPrivacyRequestSchema, createGuestPrivacyRequestSchema, exchangeGuestPrivacyCodeSchema, privacyRequestAdminActionSchema, publicPrivacySessionSchema, resendGuestPrivacyCodeSchema, PRIVACY_RIGHT_POLICIES } from "../modules/privacy-requests/contracts.js";
 import { createSecurityIncidentSchema, securityIncidentActionSchema } from "../modules/security-incidents/contracts.js";
 import { revenueCatEventSchema, verifyRevenueCatAuthorization } from "../modules/billing/revenuecatWebhook.js";
 import { createLegalRequestSchema, createPublicLegalRequestSchema, legalRequestAdminActionSchema } from "../modules/legal-requests/contracts.js";
@@ -430,7 +430,6 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     reply.header("x-correlation-id", request.id);
     const origin = request.headers.origin;
     const isAdminRoute = request.url.startsWith("/v1/admin/");
-    const isPublicPrivacyRoute = request.url.startsWith("/v1/public/privacy-requests");
     if (isAdminRoute && dependencies.environment.nodeEnv === "production") {
       return reply.code(404).send({ error: { code: "admin_unavailable" } });
     }
@@ -440,20 +439,8 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       reply.header("access-control-allow-methods", "GET, POST, PATCH, OPTIONS");
       reply.header("vary", "Origin");
     }
-    if (isPublicPrivacyRoute && typeof origin === "string" && origin === dependencies.environment.publicPrivacyOrigin) {
-      reply.header("access-control-allow-origin", origin);
-      reply.header("access-control-allow-headers", "content-type");
-      reply.header("access-control-allow-methods", "POST, OPTIONS");
-      reply.header("vary", "Origin");
-      reply.header("referrer-policy", "no-referrer");
-      reply.header("cache-control", "no-store");
-    }
     if (isAdminRoute && request.method === "OPTIONS") {
       if (typeof origin !== "string" || origin !== dependencies.environment.adminWebOrigin) return reply.code(403).send({ error: { code: "origin_not_allowed" } });
-      return reply.code(204).send();
-    }
-    if (isPublicPrivacyRoute && request.method === "OPTIONS") {
-      if (typeof origin !== "string" || origin !== dependencies.environment.publicPrivacyOrigin) return reply.code(403).send({ error: { code: "origin_not_allowed" } });
       return reply.code(204).send();
     }
   });
@@ -592,39 +579,54 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     return result ? reply.code(200).send(result) : reply.code(404).send({ error: { code: "not_found" } });
   });
 
-  app.post("/v1/public/privacy-requests", async (request, reply) => {
-    reply.header("cache-control", "no-store").header("referrer-policy", "no-referrer");
-    const parsed = createPublicPrivacyRequestSchema.safeParse(request.body);
+  app.post("/v1/guest/privacy-requests", { preHandler: routeGuard("app_check_only", dependencies) }, async (request, reply) => {
+    reply.header("cache-control", "no-store");
+    const parsed = createGuestPrivacyRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
-    if (!dependencies.privacyRequestEmailSender || !dependencies.environment.publicPrivacyOrigin) return reply.code(503).send({ error: { code: "privacy_email_unavailable" } });
+    if (!dependencies.privacyRequestEmailSender) return reply.code(503).send({ error: { code: "privacy_email_unavailable" } });
     try {
-      await requireStores(dependencies).privacyRequests.createPublic({ email: parsed.data.email, right: parsed.data.right, reportSubmissionIds: parsed.data.reportSubmissionIds, rateLimitKey: request.ip, ...(parsed.data.narrative === undefined ? {} : { narrative: parsed.data.narrative }) }, dependencies.environment.publicPrivacyOrigin, dependencies.privacyRequestEmailSender);
+      const requestId = await requireStores(dependencies).privacyRequests.createGuest({ clientRequestId: parsed.data.clientRequestId, email: parsed.data.email, right: parsed.data.right, reportSubmissionIds: parsed.data.reportSubmissionIds, rateLimitKey: request.ip, ...(parsed.data.narrative === undefined ? {} : { narrative: parsed.data.narrative }) }, dependencies.privacyRequestEmailSender);
+      return reply.code(202).send({ status: "pending_verification", requestId });
     } catch (error) {
       if (error instanceof Error && error.message === "privacy_request_rate_limited") return reply.code(429).send({ error: { code: "privacy_request_rate_limited" } });
-      if (error instanceof Error && error.message === "privacy_email_unavailable") return reply.code(503).send({ error: { code: "privacy_email_unavailable" } });
+      if (error instanceof Error && error.message === "privacy_request_idempotency_conflict") return reply.code(409).send({ error: { code: "privacy_request_idempotency_conflict" } });
       throw error;
     }
-    return reply.code(202).send({ status: "accepted" });
   });
 
-  app.post("/v1/public/privacy-requests/:requestId/session", async (request, reply) => {
-    reply.header("cache-control", "no-store").header("referrer-policy", "no-referrer");
+  app.post("/v1/guest/privacy-requests/:requestId/resend", { preHandler: routeGuard("app_check_only", dependencies) }, async (request, reply) => {
+    reply.header("cache-control", "no-store");
+    const parsed = resendGuestPrivacyCodeSchema.safeParse(request.body);
     const requestId = privacyRequestId((request.params as { requestId?: unknown }).requestId);
-    const parsed = verifyPublicPrivacyRequestSchema.safeParse(request.body);
-    if (!requestId || !parsed.success) return reply.code(404).send({ error: { code: "not_found" } });
+    if (!parsed.success || !requestId) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!dependencies.privacyRequestEmailSender) return reply.code(503).send({ error: { code: "privacy_email_unavailable" } });
     try {
-      return reply.code(200).send(await requireStores(dependencies).privacyRequests.exchangePublicToken(requestId, parsed.data.token));
-    } catch {
+      await requireStores(dependencies).privacyRequests.resendGuestCode(requestId, parsed.data.email, request.ip, dependencies.privacyRequestEmailSender);
+    } catch (error) {
+      if (error instanceof Error && error.message === "privacy_request_rate_limited") return reply.code(429).send({ error: { code: "privacy_request_rate_limited" } });
+      throw error;
+    }
+    return reply.code(202).send({ status: "pending_verification" });
+  });
+
+  app.post("/v1/guest/privacy-requests/verify", { preHandler: routeGuard("app_check_only", dependencies) }, async (request, reply) => {
+    reply.header("cache-control", "no-store");
+    const parsed = exchangeGuestPrivacyCodeSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(404).send({ error: { code: "not_found" } });
+    try {
+      return reply.code(200).send(await requireStores(dependencies).privacyRequests.exchangeGuestCode(parsed.data.code, request.ip));
+    } catch (error) {
+      if (error instanceof Error && error.message === "privacy_request_rate_limited") return reply.code(429).send({ error: { code: "privacy_request_rate_limited" } });
       return reply.code(404).send({ error: { code: "not_found" } });
     }
   });
 
-  app.post("/v1/public/privacy-requests/:requestId/response", async (request, reply) => {
-    reply.header("cache-control", "no-store").header("referrer-policy", "no-referrer");
+  app.post("/v1/guest/privacy-requests/:requestId/response", { preHandler: routeGuard("app_check_only", dependencies) }, async (request, reply) => {
+    reply.header("cache-control", "no-store");
     const requestId = privacyRequestId((request.params as { requestId?: unknown }).requestId);
     const parsed = publicPrivacySessionSchema.safeParse(request.body);
     if (!requestId || !parsed.success) return reply.code(404).send({ error: { code: "not_found" } });
-    const result = await requireStores(dependencies).privacyRequests.readPublic(requestId, parsed.data.sessionToken);
+    const result = await requireStores(dependencies).privacyRequests.readGuest(requestId, parsed.data.sessionToken);
     return result ? reply.code(200).send(result) : reply.code(404).send({ error: { code: "not_found" } });
   });
 
@@ -1039,7 +1041,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
         if (!result) throw new Error("privacy_request_executor_incomplete");
         return reply.code(200).send({ request: result });
       }
-      const result = await requireStores(dependencies).privacyRequests.transitionAdmin(requestId, request.userId!, parsed.data, dependencies.environment.publicPrivacyOrigin ?? "", dependencies.privacyRequestEmailSender ?? null);
+      const result = await requireStores(dependencies).privacyRequests.transitionAdmin(requestId, request.userId!, parsed.data, dependencies.privacyRequestEmailSender ?? null);
       return reply.code(200).send({ request: result });
     } catch (error) {
       const code = errorCode(error);

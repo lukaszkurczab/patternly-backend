@@ -148,14 +148,14 @@ function isPlaceholderAddress(address: string): boolean {
 function privacyMessage(input: Parameters<PrivacyRequestEmailSender["send"]>[0]): Readonly<{ subject: string; text: string }> {
   if (input.purpose === "verify") return Object.freeze({
     subject: "Potwierdź wniosek dotyczący danych w Patternly",
-    text: `Otrzymaliśmy wniosek dotyczący danych. Aby potwierdzić dostęp do tego adresu e-mail, otwórz bezpieczny link w ciągu 24 godzin:\n\n${input.link}\n\nJeśli nie składałeś tego wniosku, zignoruj tę wiadomość. Wiadomość nie potwierdza, czy Patternly posiada dane powiązane z tym adresem.`,
+    text: `Otrzymaliśmy wniosek dotyczący danych. Otwórz formularz w aplikacji Patternly i wklej najnowszy kod w ciągu 24 godzin:\n\n${input.code}\n\nNumer wniosku: ${input.requestId}\n\nJeśli nie składałeś tego wniosku, zignoruj tę wiadomość. Wiadomość nie potwierdza, czy Patternly posiada dane powiązane z tym adresem.`,
   });
   if (input.purpose === "extension") return Object.freeze({
     subject: "Termin odpowiedzi na wniosek dotyczący danych",
-    text: `Termin odpowiedzi na Twój wniosek został przedłużony maksymalnie o dwa miesiące.\n\nPowód: ${input.extensionReason ?? "złożoność lub liczba obsługiwanych wniosków"}\n\nAktualny status sprawdzisz przez bezpieczny link ważny przez 24 godziny:\n\n${input.link}`,
+    text: `Termin odpowiedzi na Twój wniosek został przedłużony maksymalnie o dwa miesiące.\n\nPowód: ${input.extensionReason ?? "złożoność lub liczba obsługiwanych wniosków"}\n\nAktualny status sprawdzisz w aplikacji Patternly po wklejeniu najnowszego kodu ważnego przez 24 godziny:\n\n${input.code}\n\nNumer wniosku: ${input.requestId}`,
   });
   return Object.freeze({
     subject: "Odpowiedź na wniosek dotyczący danych w Patternly",
-    text: `Odpowiedź na Twój wniosek jest gotowa. Ze względów bezpieczeństwa nie umieszczamy jej w wiadomości e-mail. Otwórz bezpieczny link w ciągu 24 godzin:\n\n${input.link}`,
+    text: `Odpowiedź na Twój wniosek jest gotowa. Ze względów bezpieczeństwa nie umieszczamy jej w wiadomości e-mail. Otwórz aplikację Patternly i wklej najnowszy kod w ciągu 24 godzin:\n\n${input.code}\n\nNumer wniosku: ${input.requestId}`,
   });
 }

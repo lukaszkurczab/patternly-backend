@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   PRIVACY_RIGHT_POLICIES,
   addUtcCalendarMonths,
-  createPublicPrivacyRequestSchema,
+  createGuestPrivacyRequestSchema,
   initialPrivacyRequestDeadline,
   privacyRequestAdminActionSchema,
   transitionPrivacyRequest,
@@ -57,9 +57,9 @@ test("invalid transitions and unproved responses fail closed", () => {
 });
 
 test("public intake accepts bounded identifiers and rejects arbitrary shape", () => {
-  assert.equal(createPublicPrivacyRequestSchema.safeParse({ email: "guest@example.com", right: "access", reportSubmissionIds: ["de305d54-75b4-431b-adb2-eb6b9e546014"] }).success, true);
-  assert.equal(createPublicPrivacyRequestSchema.safeParse({ email: "guest@example.com", right: "access", accountId: "victim" }).success, false);
-  assert.equal(createPublicPrivacyRequestSchema.safeParse({ email: "guest@example.com", right: "access", narrative: "x".repeat(2_001) }).success, false);
+  assert.equal(createGuestPrivacyRequestSchema.safeParse({ clientRequestId: "de305d54-75b4-431b-adb2-eb6b9e546014", email: "guest@example.com", right: "access", reportSubmissionIds: ["de305d54-75b4-431b-adb2-eb6b9e546014"] }).success, true);
+  assert.equal(createGuestPrivacyRequestSchema.safeParse({ clientRequestId: "de305d54-75b4-431b-adb2-eb6b9e546014", email: "guest@example.com", right: "access", accountId: "victim" }).success, false);
+  assert.equal(createGuestPrivacyRequestSchema.safeParse({ clientRequestId: "de305d54-75b4-431b-adb2-eb6b9e546014", email: "guest@example.com", right: "access", narrative: "x".repeat(2_001) }).success, false);
 });
 
 test("each right has an explicit executor and verification policy", () => {

@@ -20,6 +20,7 @@ export const COLLECTIONS = Object.freeze({
   privacyResponseArtifacts: "privacyResponseArtifacts",
   privacyResponseChunks: "privacyResponseChunks",
   privacyRequestRateLimits: "privacyRequestRateLimits",
+  privacyRequestIdempotency: "privacyRequestIdempotency",
   privacyRequestAudit: "audit",
   securityIncidents: "securityIncidents",
   securityIncidentSecrets: "securityIncidentSecrets",

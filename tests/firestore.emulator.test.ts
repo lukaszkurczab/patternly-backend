@@ -200,7 +200,6 @@ test("production excludes hosted admin origin while local admin requires loopbac
     DELETION_PSEUDONYM_KEYS_JSON: JSON.stringify([{ version: "test-v1", status: "active", keyBase64: Buffer.alloc(32, 7).toString("base64") }]),
     PRIVACY_RESPONSE_KEY_BASE64: Buffer.alloc(32, 11).toString("base64"),
     PRIVACY_AUDIT_HMAC_SECRET: "test-only-privacy-audit-hmac-secret-0123456789",
-    PUBLIC_PRIVACY_ORIGIN: "https://privacy.example.com",
     SMTP_HOST: "smtp-relay.gmail.com",
     SMTP_PORT: "465",
     SMTP_USERNAME: "sender@example.com",
@@ -237,8 +236,6 @@ test("production excludes hosted admin origin while local admin requires loopbac
   ]) assert.throws(() => loadEnvironment({ ...localAdmin, ...invalid }), { message: "invalid_admin_web_origin" });
   assert.throws(() => loadEnvironment({ ...localAdmin, NODE_ENV: "development" }), { message: "invalid_admin_web_origin" });
   assert.equal(loadEnvironment({ ...localAdmin, NODE_ENV: "development", FIREBASE_PROJECT_ID: "demo-patternly-admin" }).adminWebOrigin, localAdmin.ADMIN_WEB_ORIGIN);
-  assert.throws(() => loadEnvironment({ ...production, PUBLIC_PRIVACY_ORIGIN: "https://privacy.example.com/path" }), { message: "invalid_public_privacy_origin" });
-  assert.equal(loadEnvironment({ ...production, PUBLIC_PRIVACY_ORIGIN: "https://privacy.example.com" }).publicPrivacyOrigin, "https://privacy.example.com");
 });
 
 test("administrator routes are unavailable in production before Firebase verification", async () => {
