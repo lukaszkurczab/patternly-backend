@@ -192,18 +192,23 @@ async function protectOptional(request: FastifyRequest, reply: FastifyReply, dep
   await protect(request, reply, dependencies);
 }
 
-async function protectWithAppCheckAndOptionalAuth(request: FastifyRequest, reply: FastifyReply, dependencies: ApplicationDependencies): Promise<void> {
+async function verifyMobileAppCheck(request: FastifyRequest, reply: FastifyReply, dependencies: ApplicationDependencies): Promise<boolean> {
   try {
     if (!dependencies.appCheckVerifier) throw new Error("app_check_not_configured");
     const header = request.headers["x-firebase-appcheck"];
     if (typeof header !== "string" || header.length === 0) throw new Error("app_check_required");
     await dependencies.appCheckVerifier.verify(header);
-    await protectOptional(request, reply, dependencies);
+    return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : "app_check_invalid";
     const status = message === "app_check_not_configured" ? 503 : 401;
     reply.code(status).send({ error: { code: status === 503 ? "app_check_not_configured" : message === "app_check_required" ? "app_check_required" : "app_check_invalid" } });
+    return false;
   }
+}
+
+async function protectWithAppCheckAndOptionalAuth(request: FastifyRequest, reply: FastifyReply, dependencies: ApplicationDependencies): Promise<void> {
+  if (await verifyMobileAppCheck(request, reply, dependencies)) await protectOptional(request, reply, dependencies);
 }
 
 async function protect(request: FastifyRequest, reply: FastifyReply, dependencies: ApplicationDependencies): Promise<void> {
@@ -271,24 +276,40 @@ function createBearerGuard(dependencies: ApplicationDependencies): RoutePreHandl
   return guard;
 }
 
-function createVerifyOnlyBearerGuard(dependencies: ApplicationDependencies): RoutePreHandler {
-  const guard: RoutePreHandler = async (request, reply) => { await protectIdentity(request, reply, dependencies); };
-  routeProtections.set(guard as RouteFunction, "verify_only_bearer");
-  return guard;
-}
-
 function createAccountExportGuard(dependencies: ApplicationDependencies): RoutePreHandler {
   const guard: RoutePreHandler = async (request, reply) => {
     reply.header("cache-control", "private, no-store");
-    await protect(request, reply, dependencies);
+    if (await verifyMobileAppCheck(request, reply, dependencies)) await protect(request, reply, dependencies);
   };
-  routeProtections.set(guard as RouteFunction, "bearer");
+  routeProtections.set(guard as RouteFunction, "app_check_bearer");
   return guard;
 }
 
 function createAppCheckGuard(dependencies: ApplicationDependencies): RoutePreHandler {
   const guard: RoutePreHandler = async (request, reply) => { await protectWithAppCheckAndOptionalAuth(request, reply, dependencies); };
   routeProtections.set(guard as RouteFunction, "app_check_optional_bearer");
+  return guard;
+}
+
+function createAppCheckBearerGuard(dependencies: ApplicationDependencies): RoutePreHandler {
+  const guard: RoutePreHandler = async (request, reply) => {
+    if (await verifyMobileAppCheck(request, reply, dependencies)) await protect(request, reply, dependencies);
+  };
+  routeProtections.set(guard as RouteFunction, "app_check_bearer");
+  return guard;
+}
+
+function createAppCheckVerifyOnlyBearerGuard(dependencies: ApplicationDependencies): RoutePreHandler {
+  const guard: RoutePreHandler = async (request, reply) => {
+    if (await verifyMobileAppCheck(request, reply, dependencies)) await protectIdentity(request, reply, dependencies);
+  };
+  routeProtections.set(guard as RouteFunction, "app_check_verify_only_bearer");
+  return guard;
+}
+
+function createAppCheckOnlyGuard(dependencies: ApplicationDependencies): RoutePreHandler {
+  const guard: RoutePreHandler = async (request, reply) => { await verifyMobileAppCheck(request, reply, dependencies); };
+  routeProtections.set(guard as RouteFunction, "app_check_only");
   return guard;
 }
 
@@ -311,7 +332,9 @@ function createAdminGuard(dependencies: ApplicationDependencies): RoutePreHandle
 
 function routeGuard(profile: RouteGuard, dependencies: ApplicationDependencies): RoutePreHandler {
   if (profile === "bearer") return createBearerGuard(dependencies);
-  if (profile === "verify_only_bearer") return createVerifyOnlyBearerGuard(dependencies);
+  if (profile === "app_check_bearer") return createAppCheckBearerGuard(dependencies);
+  if (profile === "app_check_verify_only_bearer") return createAppCheckVerifyOnlyBearerGuard(dependencies);
+  if (profile === "app_check_only") return createAppCheckOnlyGuard(dependencies);
   if (profile === "app_check_optional_bearer") return createAppCheckGuard(dependencies);
   if (profile === "admin") return createAdminGuard(dependencies);
   throw new Error(`route_guard_not_supported:${profile}`);
@@ -452,7 +475,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
 
   app.post("/v1/webhooks/revenuecat", createWebhookHandler(dependencies));
 
-  app.post("/v1/account/registration", { preHandler: routeGuard("verify_only_bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/account/registration", { preHandler: routeGuard("app_check_verify_only_bearer", dependencies) }, async (request, reply) => {
     const parsed = z.object({
       termsVersion: z.string().regex(/^[A-Za-z0-9._-]{1,80}$/u),
       termsLocale: z.enum(["en", "pl"]),
@@ -470,20 +493,20 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.get("/v1/me", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.get("/v1/me", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const profile = await requireStores(dependencies).users.readProfile(request.userId!);
     if (!profile) return reply.code(404).send({ error: { code: "user_not_found" } });
     return { user: profile };
   });
 
-  app.post("/v1/legal-acceptances", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/legal-acceptances", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const parsed = z.object({ termsVersion: z.string().regex(/^[A-Za-z0-9._-]{1,80}$/u), minimumAgeConfirmed: z.literal(18) }).strict().safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     const acceptance = await requireStores(dependencies).users.recordLegalAcceptance(request.userId!, parsed.data.termsVersion);
     return reply.code(201).send({ acceptance });
   });
 
-  app.post("/v1/purchase-confirmations", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/purchase-confirmations", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const parsed = z.object({ confirmationId: z.string().uuid(), termsVersion: z.string().regex(/^[A-Za-z0-9._-]{1,80}$/u), productIdentifier: z.string().trim().min(1).max(200), storefrontPrice: z.string().trim().min(1).max(80), locale: z.enum(["en", "pl"]), immediateStartRequested: z.literal(true) }).strict().safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     try {
@@ -496,9 +519,9 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.get("/v1/entitlements", { preHandler: routeGuard("bearer", dependencies) }, async (request) => ({ entitlements: await requireStores(dependencies).entitlements.read(request.userId!) }));
+  app.get("/v1/entitlements", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request) => ({ entitlements: await requireStores(dependencies).entitlements.read(request.userId!) }));
 
-  app.get("/v1/progress", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.get("/v1/progress", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const requested = (request.query as { protocolVersion?: unknown }).protocolVersion;
     if (requested !== undefined && requested !== "1" && requested !== "2" && requested !== "4") return reply.code(400).send({ error: { code: "invalid_request" } });
     const protocolVersion = requested === "4" ? 4 : requested === "2" ? 2 : 1;
@@ -549,7 +572,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/privacy-requests", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/privacy-requests", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const parsed = createAccountPrivacyRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     if (PRIVACY_RIGHT_POLICIES[parsed.data.right].accountVerification === "recent_reauthentication" && !requireRecentReauthentication(request, reply)) return;
@@ -557,9 +580,9 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     return reply.code(201).send({ request: created });
   });
 
-  app.get("/v1/privacy-requests", { preHandler: routeGuard("bearer", dependencies) }, async (request) => ({ requests: await requireStores(dependencies).privacyRequests.listAccount(request.userId!) }));
+  app.get("/v1/privacy-requests", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request) => ({ requests: await requireStores(dependencies).privacyRequests.listAccount(request.userId!) }));
 
-  app.get("/v1/privacy-requests/:requestId", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.get("/v1/privacy-requests/:requestId", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     if (!requireRecentReauthentication(request, reply)) return;
     const requestId = privacyRequestId((request.params as { requestId?: unknown }).requestId);
     if (!requestId) return reply.code(404).send({ error: { code: "not_found" } });
@@ -603,7 +626,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     return result ? reply.code(200).send(result) : reply.code(404).send({ error: { code: "not_found" } });
   });
 
-  app.post("/v1/legal-requests", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/legal-requests", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const parsed = createLegalRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     if (!dependencies.legalRequestEmailSender || !request.authenticatedEmail || request.authenticatedEmailVerified !== true) return reply.code(503).send({ error: { code: "legal_request_email_unavailable" } });
@@ -617,9 +640,9 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.get("/v1/legal-requests", { preHandler: routeGuard("bearer", dependencies) }, async (request) => ({ requests: await requireStores(dependencies).legalRequests.listAccount(request.userId!) }));
+  app.get("/v1/legal-requests", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request) => ({ requests: await requireStores(dependencies).legalRequests.listAccount(request.userId!) }));
 
-  app.get("/v1/legal-requests/:requestId", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.get("/v1/legal-requests/:requestId", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const requestId = legalRequestId((request.params as { requestId?: unknown }).requestId);
     if (!requestId) return reply.code(404).send({ error: { code: "not_found" } });
     const result = await requireStores(dependencies).legalRequests.readAccount(request.userId!, requestId);
@@ -640,7 +663,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/progress/sync", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/progress/sync", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const parsed = syncRequestSchema.safeParse(request.body);
     const withinBudget = isSyncRequestWithinBudget(request.body);
     if (!parsed.success || !withinBudget) {
@@ -681,7 +704,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/account-data/adoption/preview", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/account-data/adoption/preview", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const parsed = guestMergeSnapshotSchema.safeParse(request.body);
     if (!parsed.success) {
       logAccountSyncRejection(request, "preview", "invalid_request");
@@ -703,7 +726,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/account-data/adoption/confirm", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/account-data/adoption/confirm", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const body = request.body as Record<string, unknown>;
     const snapshot = guestMergeSnapshotSchema.safeParse(body?.snapshot);
     const confirmation = guestMergeConfirmationSchema.safeParse(body?.confirmation);
@@ -819,7 +842,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/account/recovery-codes", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/account/recovery-codes", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     if (!requireRecentReauthentication(request, reply)) return;
     const parsed = accountRecoveryCodeIssueSchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
@@ -832,7 +855,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/public/recovery-codes/consume", async (request, reply) => {
+  app.post("/v1/public/recovery-codes/consume", { preHandler: routeGuard("app_check_only", dependencies) }, async (request, reply) => {
     const parsed = accountRecoveryCodeConsumeSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     try {
@@ -846,7 +869,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/account/session/revoke", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/account/session/revoke", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const parsed = accountSessionRevokeSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     try {
@@ -858,7 +881,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/account/deletion", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/account/deletion", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     if (!requireRecentReauthentication(request, reply)) return;
     const parsed = accountDeletionRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
@@ -877,7 +900,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.get("/v1/public/deletion-proofs/:proofId", async (request, reply) => {
+  app.get("/v1/public/deletion-proofs/:proofId", { preHandler: routeGuard("app_check_only", dependencies) }, async (request, reply) => {
     const params = request.params as { proofId?: unknown };
     if (typeof params.proofId !== "string" || !/^proof_[A-Za-z0-9_-]{20,128}$/u.test(params.proofId)) return reply.code(404).send({ error: { code: "not_found" } });
     const proof = await requireStores(dependencies).accountLifecycle.readDeletionProof(params.proofId);
@@ -885,7 +908,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     return reply.code(200).send(proof);
   });
 
-  app.post("/v1/public/deletion-operations/status", async (request, reply) => {
+  app.post("/v1/public/deletion-operations/status", { preHandler: routeGuard("app_check_only", dependencies) }, async (request, reply) => {
     const parsed = publicDeletionStatusSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(404).send({ error: { code: "not_found" } });
     const status = await requireStores(dependencies).accountLifecycle.resumeDeletion(parsed.data.operationId, parsed.data.operationSecret);
@@ -893,8 +916,8 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     return reply.code(200).send(status);
   });
 
-  app.get("/v1/tracks", { preHandler: routeGuard("bearer", dependencies) }, async (request) => ({ tracks: await requireStores(dependencies).tracks.readAccess(request.userId!) }));
-  app.get("/v1/content/versions", { preHandler: routeGuard("bearer", dependencies) }, async () => ({ versions: await requireStores(dependencies).content.readCurrent() }));
+  app.get("/v1/tracks", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request) => ({ tracks: await requireStores(dependencies).tracks.readAccess(request.userId!) }));
+  app.get("/v1/content/versions", { preHandler: routeGuard("app_check_bearer", dependencies) }, async () => ({ versions: await requireStores(dependencies).content.readCurrent() }));
   app.post("/v1/content/reports", { preHandler: routeGuard("app_check_optional_bearer", dependencies) }, async (request, reply) => {
     const parsed = createContentReportSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });

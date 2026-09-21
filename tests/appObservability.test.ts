@@ -42,14 +42,14 @@ function application(progressOverrides: Partial<ProgressStore>, logs: string[]) 
     environment,
     firestore: null,
     verifier: { verify: async () => identity },
-    appCheckVerifier: null,
+    appCheckVerifier: { verify: async (token) => { if (token !== "observability-test-app-check") throw new Error("app_check_invalid"); } },
     stores,
     logStream: { write: (message) => { logs.push(message); } },
   });
 }
 
 const clientCorrelationId = "11111111-1111-4111-8111-111111111111";
-const headers = { authorization: "Bearer test-token", "x-correlation-id": clientCorrelationId };
+const headers = { authorization: "Bearer test-token", "x-firebase-appcheck": "observability-test-app-check", "x-correlation-id": clientCorrelationId };
 const validSyncPayload = {
   expectedAccountRevision: 0,
   mutations: [{
@@ -153,6 +153,7 @@ test("production Fastify logs only allowlisted request diagnostics and never can
       url: "/v1/progress/sync?email=private-query@example.invalid",
       headers: {
         authorization: "Bearer production-token-canary",
+        "x-firebase-appcheck": "observability-test-app-check",
         cookie: "session=private-cookie-value",
         "x-private-email": "private-header@example.invalid",
         "x-correlation-id": "not-a-uuid-private-header@example.invalid",

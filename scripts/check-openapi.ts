@@ -30,6 +30,10 @@ for (const schemaName of schemaNames) {
 
 const environment = loadEnvironment({
   NODE_ENV: "test",
+  HOST: "127.0.0.1",
+  FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:19099",
+  FIRESTORE_EMULATOR_HOST: "127.0.0.1:18080",
+  ADMIN_WEB_ORIGIN: "http://127.0.0.1:29199",
   LOG_LEVEL: "silent",
   REPORT_RATE_LIMIT_HASH_SECRET: "openapi-check-report-rate-limit-secret-0123456789",
   DELETION_PSEUDONYM_KEYS_JSON: "[]",
@@ -51,4 +55,4 @@ try {
   await app.close();
 }
 
-console.log(`OpenAPI document and runtime routes match ${output} (54 operations)`);
+console.log(`OpenAPI document and runtime routes match ${output} (${app.patternlyRouteInventory.length} operations)`);

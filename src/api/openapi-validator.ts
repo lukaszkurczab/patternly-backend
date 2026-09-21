@@ -25,7 +25,8 @@ export type ConsumerScope = RouteConsumerScope;
 
 export function securityRequirementNames(profile: SecurityProfile): readonly string[] {
   if (profile === "public" || profile === "webhook") return [];
-  return profile === "app_check_optional_bearer" ? ["appCheckAuth"] : ["bearerAuth"];
+  if (profile === "app_check_bearer" || profile === "app_check_verify_only_bearer") return ["appCheckAuth", "bearerAuth"];
+  return profile === "app_check_only" || profile === "app_check_optional_bearer" ? ["appCheckAuth"] : ["bearerAuth"];
 }
 
 export type RuntimeRouteDescriptor = Readonly<{

@@ -17,6 +17,7 @@ import type { AuthenticatedIdentity } from "../modules/auth/contracts.js";
 import type { AccountRegistrationInput } from "../modules/users/store.js";
 
 const SECURITY_PROBE_TOKEN = "patternly-security-probe-valid-token";
+const SECURITY_PROBE_APP_CHECK_TOKEN = "patternly-security-probe-valid-app-check";
 const SECURITY_PROBE_USER_ID = "00000000-0000-4000-8000-000000000001";
 const SECURITY_PROBE_NON_ADMIN_EMAIL = "security-probe-user@example.com";
 export const SECURITY_PROBE_REGISTRATION_PAYLOAD = Object.freeze({
@@ -112,19 +113,31 @@ export async function assertSecurityProbes(app: ProbeApp, document: unknown): Pr
       if (authenticated.statusCode === 401 || authenticated.errorCode === "authentication_required" || authenticated.errorCode === "administrator_required") {
         failures.push(`${describe(operation)}:valid_bearer_rejected:${authenticated.statusCode}:${authenticated.errorCode ?? "no_code"}`);
       }
-    } else if (operation.profile === "verify_only_bearer") {
-      expectAuthenticationRejection(operation, await probe(app, operation, {}, SECURITY_PROBE_REGISTRATION_PAYLOAD), failures);
-      const authenticated = await probe(app, operation, { authorization: `Bearer ${SECURITY_PROBE_TOKEN}` }, SECURITY_PROBE_REGISTRATION_PAYLOAD);
-      if (operation.method === "POST" && operation.path === "/v1/account/registration") {
-        if (authenticated.statusCode !== 201) failures.push(`${describe(operation)}:registration_success_expected:201:got:${authenticated.statusCode}:${authenticated.errorCode ?? "no_code"}`);
-      } else if (authenticated.statusCode === 401 || authenticated.errorCode === "authentication_required" || authenticated.errorCode === "administrator_required") {
-        failures.push(`${describe(operation)}:valid_bearer_rejected:${authenticated.statusCode}:${authenticated.errorCode ?? "no_code"}`);
-      }
     } else if (operation.profile === "app_check_optional_bearer") {
       const missingAppCheck = await probe(app, operation, { authorization: `Bearer ${SECURITY_PROBE_TOKEN}` });
       if (missingAppCheck.statusCode !== 401 || missingAppCheck.errorCode !== "app_check_required") {
         failures.push(`${describe(operation)}:app_check_rejection_expected:401:app_check_required:got:${missingAppCheck.statusCode}:${missingAppCheck.errorCode ?? "no_code"}`);
       }
+      const invalidAppCheck = await probe(app, operation, { "x-firebase-appcheck": "invalid", authorization: `Bearer ${SECURITY_PROBE_TOKEN}` });
+      if (invalidAppCheck.statusCode !== 401 || invalidAppCheck.errorCode !== "app_check_invalid") failures.push(`${describe(operation)}:app_check_invalid_expected:got:${invalidAppCheck.statusCode}:${invalidAppCheck.errorCode ?? "no_code"}`);
+      for (const headers of [
+        { "x-firebase-appcheck": SECURITY_PROBE_APP_CHECK_TOKEN },
+        { "x-firebase-appcheck": SECURITY_PROBE_APP_CHECK_TOKEN, authorization: `Bearer ${SECURITY_PROBE_TOKEN}` },
+      ]) {
+        const validAppCheck = await probe(app, operation, headers);
+        if (["app_check_required", "app_check_invalid", "authentication_required"].includes(validAppCheck.errorCode ?? "")) failures.push(`${describe(operation)}:valid_optional_bearer_rejected:got:${validAppCheck.statusCode}:${validAppCheck.errorCode ?? "no_code"}`);
+      }
+    } else if (operation.profile === "app_check_only" || operation.profile === "app_check_bearer" || operation.profile === "app_check_verify_only_bearer") {
+      const missing = await probe(app, operation, { authorization: `Bearer ${SECURITY_PROBE_TOKEN}` });
+      if (missing.statusCode !== 401 || missing.errorCode !== "app_check_required") failures.push(`${describe(operation)}:app_check_required_expected:got:${missing.statusCode}:${missing.errorCode ?? "no_code"}`);
+      const invalid = await probe(app, operation, { "x-firebase-appcheck": "invalid", authorization: `Bearer ${SECURITY_PROBE_TOKEN}` });
+      if (invalid.statusCode !== 401 || invalid.errorCode !== "app_check_invalid") failures.push(`${describe(operation)}:app_check_invalid_expected:got:${invalid.statusCode}:${invalid.errorCode ?? "no_code"}`);
+      const validHeaders = { "x-firebase-appcheck": SECURITY_PROBE_APP_CHECK_TOKEN };
+      const valid = await probe(app, operation, validHeaders);
+      if (operation.profile !== "app_check_only" && (valid.statusCode !== 401 || valid.errorCode !== "authentication_required")) failures.push(`${describe(operation)}:bearer_required_after_app_check:got:${valid.statusCode}:${valid.errorCode ?? "no_code"}`);
+      if (operation.profile === "app_check_only" && ["app_check_required", "app_check_invalid", "authentication_required"].includes(valid.errorCode ?? "")) failures.push(`${describe(operation)}:valid_app_check_rejected:got:${valid.statusCode}:${valid.errorCode ?? "no_code"}`);
+      const both = await probe(app, operation, { ...validHeaders, authorization: `Bearer ${SECURITY_PROBE_TOKEN}` }, operation.path === "/v1/account/registration" ? SECURITY_PROBE_REGISTRATION_PAYLOAD : undefined);
+      if (both.errorCode === "app_check_required" || both.errorCode === "app_check_invalid" || (operation.profile !== "app_check_only" && both.errorCode === "authentication_required")) failures.push(`${describe(operation)}:valid_combination_rejected:got:${both.statusCode}:${both.errorCode ?? "no_code"}`);
     } else if (operation.profile === "admin") {
       expectAuthenticationRejection(operation, await probe(app, operation), failures);
       const nonAdmin = await probe(app, operation, { authorization: `Bearer ${SECURITY_PROBE_TOKEN}` });
@@ -161,7 +174,7 @@ function securityProbeVerifier(): IdentityTokenVerifier {
 }
 
 function securityProbeAppCheckVerifier(): AppCheckTokenVerifier {
-  return { async verify() {} };
+  return { async verify(token) { if (token !== SECURITY_PROBE_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } };
 }
 
 function securityProbeStores(onRegistration?: (call: SecurityProbeRegistrationCall) => void): BackendStores {

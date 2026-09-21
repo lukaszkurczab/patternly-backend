@@ -34,6 +34,10 @@ function operation(document: MutableDocument, key: string): Record<string, unkno
 function testEnvironment() {
   return loadEnvironment({
     NODE_ENV: "test",
+    HOST: "127.0.0.1",
+    FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:19099",
+    FIRESTORE_EMULATOR_HOST: "127.0.0.1:18080",
+    ADMIN_WEB_ORIGIN: "http://127.0.0.1:29199",
     LOG_LEVEL: "silent",
     REPORT_RATE_LIMIT_HASH_SECRET: "openapi-check-report-rate-limit-secret-0123456789",
     DELETION_PSEUDONYM_KEYS_JSON: "[]",
@@ -66,7 +70,7 @@ test("GATE-02 source OpenAPI document is complete", () => {
 test("runtime parity uses the real app, normalizes parameters, and ignores automatic HEAD", async () => {
   const routes = await runtimeInventory();
   assert.equal(routes.length, 55);
-  assert.equal(routes.find((route) => operationKey(route.method, route.path) === "POST /v1/account/registration")?.securityProfile, "verify_only_bearer");
+  assert.equal(routes.find((route) => operationKey(route.method, route.path) === "POST /v1/account/registration")?.securityProfile, "app_check_verify_only_bearer");
   assert.equal(routes.find((route) => operationKey(route.method, route.path) === "GET /v1/admin/overview")?.securityProfile, "admin");
   assert.equal(routes.find((route) => operationKey(route.method, route.path) === "POST /v1/content/reports")?.securityProfile, "app_check_optional_bearer");
   const health = routes.find((route) => operationKey(route.method, route.path) === "GET /health");

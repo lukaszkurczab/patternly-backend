@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test, { after, beforeEach } from "node:test";
 import { getFirestore } from "firebase-admin/firestore";
-import { clearFirestore, createEmulatorContext, createVerifiedAuthUser, registerAuthUser } from "./support.js";
+import { TEST_APP_CHECK_TOKEN, clearFirestore, createEmulatorContext, createVerifiedAuthUser, registerAuthUser } from "./support.js";
 
 const context = createEmulatorContext();
 after(async () => context.close());
 beforeEach(async () => { await clearFirestore(); });
 
-const auth = (token: string) => ({ authorization: `Bearer ${token}` });
+const auth = (token: string) => ({ authorization: `Bearer ${token}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN });
 
 async function provision(email?: string) {
   const user = await createVerifiedAuthUser(email);

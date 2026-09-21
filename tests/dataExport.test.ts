@@ -8,6 +8,7 @@ import { OPENAPI_DOCUMENT } from "../src/api/openapi.js";
 import { loadEnvironment } from "../src/config/environment.js";
 import { COLLECTIONS } from "../src/infrastructure/firestore/paths.js";
 import { FirestoreDataExportStore } from "../src/modules/data-export/store.js";
+import { TEST_APP_CHECK_TOKEN } from "./support.js";
 
 if (!process.env.FIRESTORE_EMULATOR_HOST) throw new Error("firebase_emulator_suite_required");
 
@@ -44,7 +45,7 @@ function application(store: FirestoreDataExportStore, subject = "firebase-subjec
     environment,
     firestore: null,
     verifier: { verify: async () => ({ provider: "firebase", subject, email: `${currentUser}@example.com`, emailVerified: true, authTime: currentAuthTime }) },
-    appCheckVerifier: null,
+    appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
     stores: {
       users: { resolveExistingUser: async () => ({ userId: currentUser }) },
       dataExport: store,
@@ -95,7 +96,7 @@ test.after(async () => {
 test("account export contract is complete, isolated, timestamp-portable and redact-free", async () => {
   const app = application(exportStore());
   try {
-    const response = await app.inject({ method: "GET", url: "/v1/account-data/export", headers: { authorization: "Bearer valid" } });
+    const response = await app.inject({ method: "GET", url: "/v1/account-data/export", headers: { authorization: "Bearer valid", "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
     assert.equal(response.statusCode, 200);
     assert.equal(response.headers["cache-control"], "private, no-store");
     assert.match(String(response.headers["content-disposition"] ?? ""), /^attachment; filename="patternly-account-data\.json"$/u);
@@ -159,8 +160,8 @@ test("recent authentication, concurrent account rate limiting and whole-export s
   const app = application(limitedStore, "firebase-subject-c", "account-c");
   try {
     const [first, second] = await Promise.all([
-      app.inject({ method: "GET", url: "/v1/account-data/export", headers: { authorization: "Bearer valid" } }),
-      app.inject({ method: "GET", url: "/v1/account-data/export", headers: { authorization: "Bearer valid" } }),
+      app.inject({ method: "GET", url: "/v1/account-data/export", headers: { authorization: "Bearer valid", "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } }),
+      app.inject({ method: "GET", url: "/v1/account-data/export", headers: { authorization: "Bearer valid", "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } }),
     ]);
     assert.deepEqual(new Set([first.statusCode, second.statusCode]), new Set([200, 429]));
     const rateLimited = first.statusCode === 429 ? first : second;
@@ -171,7 +172,7 @@ test("recent authentication, concurrent account rate limiting and whole-export s
 
   const staleApp = application(exportStore(), "firebase-subject-stale", userId, authTime - 301);
   try {
-    const stale = await staleApp.inject({ method: "GET", url: "/v1/account-data/export", headers: { authorization: "Bearer stale" } });
+    const stale = await staleApp.inject({ method: "GET", url: "/v1/account-data/export", headers: { authorization: "Bearer stale", "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
     assert.equal(stale.statusCode, 401);
     assert.equal(stale.headers["cache-control"], "private, no-store");
     assert.deepEqual(stale.json(), { error: { code: "recent_reauthentication_required" } });
@@ -181,7 +182,7 @@ test("recent authentication, concurrent account rate limiting and whole-export s
 
   const oversizedApp = application(exportStore({ maxSerializedBytes: 100 }));
   try {
-    const oversized = await oversizedApp.inject({ method: "GET", url: "/v1/account-data/export", headers: { authorization: "Bearer valid" } });
+    const oversized = await oversizedApp.inject({ method: "GET", url: "/v1/account-data/export", headers: { authorization: "Bearer valid", "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
     assert.equal(oversized.statusCode, 413);
     assert.deepEqual(oversized.json(), { error: { code: "data_export_too_large" } });
   } finally {

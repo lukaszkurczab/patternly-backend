@@ -3,12 +3,12 @@ import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import { buildApplication } from "../src/api/app.js";
 import { loadEnvironment, type Environment } from "../src/config/environment.js";
-import { createFirebaseAppCheckVerifier } from "../src/infrastructure/firebase/appCheckVerifier.js";
 import { createFirestoreRuntime } from "../src/infrastructure/firestore/client.js";
 import { createFirestoreStores, type BackendStores } from "../src/infrastructure/firestore/stores.js";
 import { createFirebaseTokenVerifier } from "../src/infrastructure/firebase/verifier.js";
 
 const projectId = "patternly-app-sandbox";
+export const TEST_APP_CHECK_TOKEN = "explicit-emulator-app-check-token";
 const firestoreHost = process.env.FIRESTORE_EMULATOR_HOST;
 const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST;
 if (!firestoreHost || !authHost) throw new Error("firebase_emulator_suite_required");
@@ -73,7 +73,7 @@ export function createEmulatorContext(): EmulatorContext {
     environment: testEnvironment,
     firestore: runtime,
     verifier: createFirebaseTokenVerifier(testEnvironment),
-    appCheckVerifier: createFirebaseAppCheckVerifier(testEnvironment),
+    appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
     stores,
     privacyRequestEmailSender: { send: async (input) => {
       const token = new URL(input.link).hash.match(/^#token=(.+)$/u)?.[1];
@@ -144,7 +144,7 @@ export async function registerAuthUser(
   const response = await context.app.inject({
     method: "POST",
     url: "/v1/account/registration",
-    headers: { authorization: `Bearer ${user.idToken}` },
+    headers: { authorization: `Bearer ${user.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
     payload: accountRegistrationPayload,
   });
   if (response.statusCode !== 201 && response.statusCode !== 200) throw new Error(`account_registration_failed:${response.statusCode}:${response.body}`);

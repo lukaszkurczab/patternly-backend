@@ -252,7 +252,7 @@
       }
     },
     "/v1/account/registration": {
-      "x-patternly-security-profile": "verify_only_bearer",
+      "x-patternly-security-profile": "app_check_verify_only_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
         "description": "Atomically register the verified identity and immutable Terms acceptance plus Privacy Policy acknowledgement. Replays for an existing account never alter legal evidence.",
@@ -567,10 +567,11 @@
         "operationId": "post_v1_account_registration",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "verify_only_bearer",
+        "x-patternly-security-profile": "app_check_verify_only_bearer",
         "x-patternly-consumer-scope": "mobile",
         "requestBody": {
           "required": true,
@@ -621,7 +622,7 @@
       }
     },
     "/v1/me": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "get": {
         "responses": {
@@ -732,15 +733,16 @@
         "operationId": "get_v1_me",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/legal-acceptances": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
         "description": "Record an immutable, versioned Terms and minimum-age acceptance for the authenticated account.",
@@ -815,10 +817,11 @@
         "operationId": "post_v1_legal_acceptances",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile",
         "requestBody": {
           "required": true,
@@ -848,7 +851,7 @@
       }
     },
     "/v1/purchase-confirmations": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
         "description": "Record the immutable pre-contract offer and express immediate-start request before opening App Store checkout.",
@@ -929,10 +932,11 @@
         "operationId": "post_v1_purchase_confirmations",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile",
         "requestBody": {
           "required": true,
@@ -987,7 +991,7 @@
       }
     },
     "/v1/entitlements": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "get": {
         "responses": {
@@ -1067,15 +1071,16 @@
         "operationId": "get_v1_entitlements",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/progress": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "get": {
         "parameters": [
@@ -1335,15 +1340,16 @@
         "operationId": "get_v1_progress",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/account-data/export": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "get": {
         "description": "Download a bounded JSON account-data export after recent reauthentication. The response is an attachment and is never persisted as a payload.",
@@ -1434,15 +1440,16 @@
         "operationId": "get_v1_account_data_export",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/privacy-requests": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
         "description": "Create one authenticated privacy-right case",
@@ -1503,10 +1510,11 @@
         "operationId": "post_v1_privacy_requests",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       },
       "get": {
@@ -1551,15 +1559,16 @@
         "operationId": "get_v1_privacy_requests",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/privacy-requests/{requestId}": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "get": {
         "description": "Read one own privacy response after recent reauthentication",
@@ -1606,10 +1615,11 @@
         "operationId": "get_v1_privacy_requests_by_requestid",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
@@ -1773,7 +1783,7 @@
       }
     },
     "/v1/legal-requests": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
         "description": "Create an authenticated consumer complaint, withdrawal, non-personal data recovery request, or suspension appeal and email a durable receipt.",
@@ -1834,10 +1844,11 @@
         "operationId": "post_v1_legal_requests",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile",
         "requestBody": {
           "required": true,
@@ -1892,15 +1903,16 @@
         "operationId": "get_v1_legal_requests",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/legal-requests/{requestId}": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "get": {
         "description": "Read one consumer case owned by the authenticated account.",
@@ -1941,10 +1953,11 @@
         "operationId": "get_v1_legal_requests_by_requestid",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile",
         "parameters": [
           {
@@ -2048,7 +2061,7 @@
       }
     },
     "/v1/progress/sync": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
         "requestBody": {
@@ -2119,15 +2132,16 @@
         "operationId": "post_v1_progress_sync",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/account-data/adoption/preview": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
         "description": "Preview local account-data adoption without binding or writing learning records",
@@ -2179,15 +2193,16 @@
         "operationId": "post_v1_account_data_adoption_preview",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/account-data/adoption/confirm": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
         "description": "Execute an exact confirmed adoption preview idempotently",
@@ -2239,10 +2254,11 @@
         "operationId": "post_v1_account_data_adoption_confirm",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
@@ -2776,7 +2792,7 @@
       }
     },
     "/v1/account/recovery-codes": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
         "description": "Replace the account's ten one-time recovery codes after recent reauthentication",
@@ -2844,18 +2860,23 @@
         "operationId": "post_v1_account_recovery_codes",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/public/recovery-codes/consume": {
-      "x-patternly-security-profile": "public",
+      "x-patternly-security-profile": "app_check_only",
       "x-patternly-consumer-scope": "mobile",
       "post": {
-        "security": [],
+        "security": [
+          {
+            "appCheckAuth": []
+          }
+        ],
         "description": "Consume one possession recovery code and issue a Firebase custom token",
         "requestBody": {
           "required": true,
@@ -2910,12 +2931,12 @@
           }
         },
         "operationId": "post_v1_public_recovery_codes_consume",
-        "x-patternly-security-profile": "public",
+        "x-patternly-security-profile": "app_check_only",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/account/session/revoke": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
         "description": "Revoke current and stale Firebase sessions idempotently",
@@ -2982,15 +3003,16 @@
         "operationId": "post_v1_account_session_revoke",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/account/deletion": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
         "description": "Delete the authenticated account after recent reauthentication and return a verified proof",
@@ -3072,18 +3094,23 @@
         "operationId": "post_v1_account_deletion",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/public/deletion-proofs/{proofId}": {
-      "x-patternly-security-profile": "public",
+      "x-patternly-security-profile": "app_check_only",
       "x-patternly-consumer-scope": "mobile",
       "get": {
-        "security": [],
+        "security": [
+          {
+            "appCheckAuth": []
+          }
+        ],
         "description": "Read an opaque server deletion proof",
         "parameters": [
           {
@@ -3138,15 +3165,19 @@
           }
         },
         "operationId": "get_v1_public_deletion_proofs_by_proofid",
-        "x-patternly-security-profile": "public",
+        "x-patternly-security-profile": "app_check_only",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/public/deletion-operations/status": {
-      "x-patternly-security-profile": "public",
+      "x-patternly-security-profile": "app_check_only",
       "x-patternly-consumer-scope": "mobile",
       "post": {
-        "security": [],
+        "security": [
+          {
+            "appCheckAuth": []
+          }
+        ],
         "description": "Resume an in-app deletion after its Firebase account has been removed, using the operation-bound secret",
         "requestBody": {
           "required": true,
@@ -3181,12 +3212,12 @@
           }
         },
         "operationId": "post_v1_public_deletion_operations_status",
-        "x-patternly-security-profile": "public",
+        "x-patternly-security-profile": "app_check_only",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/tracks": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "get": {
         "responses": {
@@ -3254,15 +3285,16 @@
         "operationId": "get_v1_tracks",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/content/versions": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "get": {
         "responses": {
@@ -3335,10 +3367,11 @@
         "operationId": "get_v1_content_versions",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
