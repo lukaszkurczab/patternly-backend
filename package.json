@@ -13,7 +13,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "node scripts/lint.mjs",
-    "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
+    "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts scripts/devAdminBoundary.test.mjs",
     "test:cloud": "node --import tsx --test tests/deployment.test.ts tests/merge.test.ts",
     "test:emulator": "firebase emulators:exec --project patternly-app-sandbox --only auth,firestore \"npm test\"",
     "firestore:ttl:check": "node scripts/check-firestore-ttl.mjs",

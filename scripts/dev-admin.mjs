@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { spawn, spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildLocalAdminEnvironment, LOCAL_ADMIN_CONTRACT } from "./localAdminEnvironment.mjs";
 const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
 if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 12)) {
   console.error("Lokalny backend wymaga Node.js 22.12+. Wybierz aktualny zainstalowany Node przed uruchomieniem npm run dev:admin.");
@@ -15,11 +16,7 @@ const { getAuth } = await import("firebase-admin/auth");
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const local = resolve(root, ".local/admin");
 const data = resolve(local, "data");
-const project = "demo-patternly-admin";
-const authHost = "127.0.0.1:29199";
-const firestoreHost = "127.0.0.1:28181";
-const webOrigin = "http://127.0.0.1:25173";
-const apiOrigin = "http://127.0.0.1:28080";
+const { project, authEmulatorHost: authHost, firestoreEmulatorHost: firestoreHost, webOrigin, apiOrigin } = LOCAL_ADMIN_CONTRACT;
 const credentialsPath = resolve(local, "credentials.json");
 const children = [];
 let stopping = false;
@@ -151,16 +148,11 @@ try {
     ensureRunning();
     await auth.createUser({ email: admin.email, password: admin.password, emailVerified: true });
   }
-  const environment = { ...process.env, NODE_ENV: "development", HOST: "127.0.0.1", PORT: "28080", LOG_LEVEL: "info",
-    FIREBASE_PROJECT_ID: project, FIREBASE_AUTH_ISSUER: `https://securetoken.google.com/${project}`,
-    FIREBASE_AUTH_EMULATOR_HOST: authHost, FIRESTORE_EMULATOR_HOST: firestoreHost,
-    ADMINISTRATOR_EMAIL: admin.email, ADMIN_WEB_ORIGIN: webOrigin,
-    ADMIN_CONTENT_ROOT: resolve(root, "../patternly-content/artifacts"),
-    ADMIN_CONTENT_RELEASE_ID: "patternly-launch-2026-08-25-01",
-    REPORT_RATE_LIMIT_HASH_SECRET: "local-admin-report-rate-limit-secret-0123456789",
-    PRIVACY_RESPONSE_KEY_BASE64: Buffer.alloc(32, 11).toString("base64"),
-    PRIVACY_AUDIT_HMAC_SECRET: "local-admin-privacy-audit-hmac-secret-0123456789",
-    PUBLIC_PRIVACY_ORIGIN: webOrigin };
+  const environment = buildLocalAdminEnvironment(process.env, {
+    adminEmail: admin.email,
+    adminContentRoot: resolve(root, "../patternly-content/artifacts"),
+    adminContentReleaseId: "patternly-launch-2026-08-25-01",
+  });
   start("API", process.execPath, ["--import", "tsx", "src/index.ts"], { cwd: root, env: environment });
   await waitFor(`${apiOrigin}/ready`);
   start("Web", process.execPath, ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "25173", "--strictPort"], {
