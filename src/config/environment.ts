@@ -9,6 +9,8 @@ const environmentSchema = z.object({
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
   FIREBASE_PROJECT_ID: z.string().regex(/^[a-z0-9-]+$/u).optional(),
   FIREBASE_AUTH_ISSUER: z.string().url().optional(),
+  FIREBASE_AUTH_EMULATOR_HOST: z.string().optional(),
+  FIRESTORE_EMULATOR_HOST: z.string().optional(),
   ADMINISTRATOR_EMAIL: z.string().email().optional(),
   ADMIN_WEB_ORIGIN: z.string().optional(),
   SMTP_HOST: z.string().min(1).optional(),
@@ -76,13 +78,11 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
   const value = parsed.data;
   if (value.NODE_ENV === "production") {
     if (!value.FIREBASE_PROJECT_ID || !value.FIREBASE_AUTH_ISSUER) throw new Error("production_firebase_config_required");
-    if (!value.ADMINISTRATOR_EMAIL) throw new Error("production_administrator_email_required");
-    if (!value.ADMIN_WEB_ORIGIN) throw new Error("production_admin_web_origin_required");
     if (!value.PUBLIC_PRIVACY_ORIGIN) throw new Error("production_public_privacy_origin_required");
     if (!smtpConfiguration(value)) throw new Error("production_smtp_config_required");
     if (!value.REVENUECAT_WEBHOOK_SECRET || !value.REVENUECAT_APP_ID || !value.REVENUECAT_ENTITLEMENT_ID || !value.REVENUECAT_PRODUCT_ID || !value.REVENUECAT_WEBHOOK_ENVIRONMENT) throw new Error("production_revenuecat_config_required");
   }
-  const adminWebOrigin = parseAdminWebOrigin(value.ADMIN_WEB_ORIGIN, value.NODE_ENV);
+  const adminWebOrigin = parseAdminWebOrigin(value);
   return Object.freeze({
     nodeEnv: value.NODE_ENV,
     port: value.PORT,
@@ -130,8 +130,35 @@ function smtpConfiguration(value: z.infer<typeof environmentSchema>): Environmen
   });
 }
 
-function parseAdminWebOrigin(value: string | undefined, nodeEnv: Environment["nodeEnv"]): string | undefined {
-  return parseWebOrigin(value, nodeEnv, "invalid_admin_web_origin");
+function isLoopbackHost(value: string): boolean {
+  return ["localhost", "127.0.0.1", "[::1]"].includes(value);
+}
+
+function isLoopbackEmulatorHost(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(`http://${value}`);
+    return value === url.host && isLoopbackHost(url.hostname)
+      && Number(url.port) >= 1 && Number(url.port) <= 65535;
+  } catch {
+    return false;
+  }
+}
+
+function parseAdminWebOrigin(value: z.infer<typeof environmentSchema>): string | undefined {
+  if (value.ADMIN_WEB_ORIGIN === undefined) return undefined;
+  if (value.NODE_ENV === "production" || !isLoopbackHost(value.HOST)
+    || !isLoopbackEmulatorHost(value.FIREBASE_AUTH_EMULATOR_HOST)
+    || !isLoopbackEmulatorHost(value.FIRESTORE_EMULATOR_HOST)
+    || (value.NODE_ENV === "development" && value.FIREBASE_PROJECT_ID !== "demo-patternly-admin")) {
+    throw new Error("invalid_admin_web_origin");
+  }
+  const origin = parseWebOrigin(value.ADMIN_WEB_ORIGIN, value.NODE_ENV, "invalid_admin_web_origin");
+  const parsed = new URL(origin!);
+  if (parsed.protocol !== "http:" || !isLoopbackHost(parsed.hostname)) {
+    throw new Error("invalid_admin_web_origin");
+  }
+  return origin;
 }
 
 function parseWebOrigin(value: string | undefined, nodeEnv: Environment["nodeEnv"], errorCode: string): string | undefined {

@@ -8,11 +8,8 @@ Required runtime configuration is supplied through Secret Manager or the
 Cloud Run service configuration:
 
 - `FIREBASE_PROJECT_ID` and `FIREBASE_AUTH_ISSUER`;
-- `ADMINISTRATOR_EMAIL` and `ADMIN_WEB_ORIGIN`. `ADMIN_WEB_ORIGIN` must be the
-  exact HTTPS origin of the deployed panel, with no path, query, fragment or
-  credentials. The selected sandbox deployment target is
-  `https://patternly-app-sandbox.web.app/admin`, so its configured origin is
-  `https://patternly-app-sandbox.web.app`;
+- No administrator web origin is configured in production. Administrator routes
+  are unavailable there; the panel uses only the local backend and emulators;
 - `REPORT_RATE_LIMIT_HASH_SECRET`;
 - `PUBLIC_PRIVACY_ORIGIN` and the Google Workspace SMTP settings
   `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_FROM_EMAIL`,
@@ -28,17 +25,8 @@ Cloud Run service configuration:
 - `DELETION_PSEUDONYM_KEYS_JSON` — a Secret Manager value containing exactly one `active` HMAC key and any `verify_only` predecessors. Grant the Cloud Run runtime service account only `roles/secretmanager.secretAccessor` on this secret; never expose its material in source control, build logs or ordinary environment files;
 - `LOG_LEVEL` and `NODE_ENV`.
 
-Question-bank inspection has a separate read-only publication contract. To
-enable it, mount the immutable artifact directory into every revision and set
-`ADMIN_CONTENT_ROOT` to that mount plus `ADMIN_CONTENT_RELEASE_ID` to the exact
-release directory under `releases/`. For example, a Cloud Run GCS volume may
-mount a release export at `/mnt/patternly-artifacts`, with
-`ADMIN_CONTENT_ROOT=/mnt/patternly-artifacts` and
-`ADMIN_CONTENT_RELEASE_ID=patternly-launch-2026-08-25-01`. The mounted release
-must contain `releases/<release-id>/release.json`; the API verifies every
-artifact checksum and envelope before exposing it. Do not point this setting at
-an authoring checkout or an arbitrary URL. If either setting or the mounted
-release is unavailable, the panel receives an explicit unavailable state.
+Local question-bank inspection uses the checksum-verified immutable content
+release configured by `npm run dev:admin`. Cloud Run does not serve the panel.
 
 Rotate deletion pseudonym keys by publishing a new secret version with one new `active` key and the previous key marked `verify_only`. Keep a predecessor available for at least 45 days (the tombstone retention period), then remove it only after confirming no unexpired tombstones require it. Revoke a suspected compromised key by replacing the secret, auditing access, and treating affected tombstones as a privacy incident; recovery requires an encrypted, access-audited backup of the keyring. Startup fails closed for missing, malformed, weak, duplicate or ambiguously active keys.
 
@@ -49,10 +37,8 @@ checklist for the target project, and verify
 `/health` and `/ready`. `/ready` must not be treated as healthy until
 Firestore, Firebase verifier and App Check wiring are available.
 
-The Firebase account matching `ADMINISTRATOR_EMAIL` must use a verified email
-address. The backend rejects unverified email tokens for the content-report
-queue and its status transitions. After confirming an address, sign in again
-or refresh the ID token before using the panel.
+The local emulator account matching `ADMINISTRATOR_EMAIL` uses a verified email.
+The backend still verifies the token and administrator identity in development.
 
 The account-data export history requires the
 `accountDataExportAudits(userId ASC, createdAt DESC)` index in

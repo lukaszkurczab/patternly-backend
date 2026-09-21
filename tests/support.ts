@@ -20,6 +20,8 @@ export const testEnvironment: Environment = loadEnvironment({
   LOG_LEVEL: "silent",
   FIREBASE_PROJECT_ID: projectId,
   FIREBASE_AUTH_ISSUER: `https://securetoken.google.com/${projectId}`,
+  FIREBASE_AUTH_EMULATOR_HOST: authHost,
+  FIRESTORE_EMULATOR_HOST: firestoreHost,
   ADMINISTRATOR_EMAIL: "lukasz.kurczab@gmail.com",
   ADMIN_WEB_ORIGIN: "http://127.0.0.1:4173",
   REPORT_RATE_LIMIT_HASH_SECRET: "test-only-report-rate-limit-secret-0123456789",

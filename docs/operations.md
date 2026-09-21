@@ -20,12 +20,10 @@ suite and frontend client check remain required pre-promotion local checks.
 ## Cloud Run contract
 
 Builds produce an image tagged with the immutable Cloud Build commit SHA.
-Cloud Run must provide `FIREBASE_PROJECT_ID`, `FIREBASE_AUTH_ISSUER`,
-`ADMINISTRATOR_EMAIL`, `ADMIN_WEB_ORIGIN` and
-`REPORT_RATE_LIMIT_HASH_SECRET` through runtime configuration.
-`ADMIN_WEB_ORIGIN` is the exact HTTPS origin of the admin panel, without a
-path, query, fragment or credentials. Production startup fails if required
-configuration is absent. Firebase Admin SDK uses the Cloud Run runtime identity
+Cloud Run must provide `FIREBASE_PROJECT_ID`, `FIREBASE_AUTH_ISSUER` and
+`REPORT_RATE_LIMIT_HASH_SECRET` through runtime configuration. Administrator
+routes are unavailable in production, and `ADMIN_WEB_ORIGIN` is rejected there.
+Production startup fails if required configuration is absent. Firebase Admin SDK uses the Cloud Run runtime identity
 for Firestore; no client or external database credentials are configured.
 
 `DELETION_PSEUDONYM_KEYS_JSON` is a Secret Manager secret, readable only by the Cloud Run runtime service account through a narrowly scoped `secretAccessor` grant. It contains exactly one active HMAC key and optionally verify-only predecessors; startup fails closed if that contract is invalid.

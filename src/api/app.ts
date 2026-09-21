@@ -294,6 +294,10 @@ function createAppCheckGuard(dependencies: ApplicationDependencies): RoutePreHan
 
 function createAdminGuard(dependencies: ApplicationDependencies): RoutePreHandler {
   const guard: RoutePreHandler = async (request, reply) => {
+    if (!dependencies.environment.adminWebOrigin || dependencies.environment.nodeEnv === "production") {
+      reply.code(404).send({ error: { code: "admin_unavailable" } });
+      return;
+    }
     await protectIdentity(request, reply, dependencies);
     if (!reply.sent) {
       const identity = request.authenticatedIdentity!;
@@ -402,6 +406,9 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     const origin = request.headers.origin;
     const isAdminRoute = request.url.startsWith("/v1/admin/");
     const isPublicPrivacyRoute = request.url.startsWith("/v1/public/privacy-requests");
+    if (isAdminRoute && dependencies.environment.nodeEnv === "production") {
+      return reply.code(404).send({ error: { code: "admin_unavailable" } });
+    }
     if (isAdminRoute && typeof origin === "string" && origin === dependencies.environment.adminWebOrigin) {
       reply.header("access-control-allow-origin", origin);
       reply.header("access-control-allow-headers", "authorization, content-type");

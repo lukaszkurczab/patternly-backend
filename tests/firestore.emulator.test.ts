@@ -190,7 +190,7 @@ test("invalid Firebase bearer tokens fail closed without exposing identity detai
   assert.deepEqual(response.json(), { error: { code: "authentication_required" } });
 });
 
-test("production requires a canonical HTTPS admin web origin", () => {
+test("production excludes hosted admin origin while local admin requires loopback", () => {
   const production = {
     NODE_ENV: "production",
     FIREBASE_PROJECT_ID: "patternly-app-sandbox",
@@ -213,14 +213,50 @@ test("production requires a canonical HTTPS admin web origin", () => {
     REVENUECAT_PRODUCT_ID: "monthly",
     REVENUECAT_WEBHOOK_ENVIRONMENT: "PRODUCTION",
   };
-  assert.throws(() => loadEnvironment(production), { message: "production_admin_web_origin_required" });
-  for (const ADMIN_WEB_ORIGIN of ["http://admin.example.com", "https://admin.example.com/", "https://admin.example.com/admin", "https://admin.example.com?query=value", "https://user:password@admin.example.com"]) {
+  assert.equal(loadEnvironment(production).adminWebOrigin, undefined);
+  for (const ADMIN_WEB_ORIGIN of ["https://admin.example.com", "http://admin.example.com", "http://127.0.0.1:4173", "https://admin.example.com/", "https://admin.example.com/admin", "https://admin.example.com?query=value", "https://user:password@admin.example.com"]) {
     assert.throws(() => loadEnvironment({ ...production, ADMIN_WEB_ORIGIN }), { message: "invalid_admin_web_origin" });
   }
-  assert.equal(loadEnvironment({ ...production, ADMIN_WEB_ORIGIN: "https://admin.example.com" }).adminWebOrigin, "https://admin.example.com");
-  assert.equal(loadEnvironment({ ...production, NODE_ENV: "test", ADMIN_WEB_ORIGIN: "http://127.0.0.1:4173" }).adminWebOrigin, "http://127.0.0.1:4173");
-  assert.throws(() => loadEnvironment({ ...production, ADMIN_WEB_ORIGIN: "https://admin.example.com", PUBLIC_PRIVACY_ORIGIN: "https://privacy.example.com/path" }), { message: "invalid_public_privacy_origin" });
-  assert.equal(loadEnvironment({ ...production, ADMIN_WEB_ORIGIN: "https://admin.example.com", PUBLIC_PRIVACY_ORIGIN: "https://privacy.example.com" }).publicPrivacyOrigin, "https://privacy.example.com");
+  const localAdmin = {
+    ...production,
+    NODE_ENV: "test",
+    HOST: "127.0.0.1",
+    ADMIN_WEB_ORIGIN: "http://127.0.0.1:4173",
+    FIREBASE_AUTH_EMULATOR_HOST: process.env.FIREBASE_AUTH_EMULATOR_HOST,
+    FIRESTORE_EMULATOR_HOST: process.env.FIRESTORE_EMULATOR_HOST,
+  };
+  assert.equal(loadEnvironment(localAdmin).adminWebOrigin, localAdmin.ADMIN_WEB_ORIGIN);
+  for (const invalid of [
+    { HOST: "0.0.0.0" },
+    { HOST: "192.168.1.2" },
+    { FIREBASE_AUTH_EMULATOR_HOST: undefined },
+    { FIRESTORE_EMULATOR_HOST: undefined },
+    { FIREBASE_AUTH_EMULATOR_HOST: "firebase.example:9099" },
+    { FIRESTORE_EMULATOR_HOST: "firestore.example:8080" },
+    { ADMIN_WEB_ORIGIN: "https://admin.example.com" },
+  ]) assert.throws(() => loadEnvironment({ ...localAdmin, ...invalid }), { message: "invalid_admin_web_origin" });
+  assert.throws(() => loadEnvironment({ ...localAdmin, NODE_ENV: "development" }), { message: "invalid_admin_web_origin" });
+  assert.equal(loadEnvironment({ ...localAdmin, NODE_ENV: "development", FIREBASE_PROJECT_ID: "demo-patternly-admin" }).adminWebOrigin, localAdmin.ADMIN_WEB_ORIGIN);
+  assert.throws(() => loadEnvironment({ ...production, PUBLIC_PRIVACY_ORIGIN: "https://privacy.example.com/path" }), { message: "invalid_public_privacy_origin" });
+  assert.equal(loadEnvironment({ ...production, PUBLIC_PRIVACY_ORIGIN: "https://privacy.example.com" }).publicPrivacyOrigin, "https://privacy.example.com");
+});
+
+test("administrator routes are unavailable in production before Firebase verification", async () => {
+  const app = buildApplication({
+    environment: { ...testEnvironment, nodeEnv: "production", adminWebOrigin: undefined },
+    firestore: null,
+    verifier: { verify: async () => { throw new Error("verifier_must_not_run"); } },
+    appCheckVerifier: null,
+    stores: context.stores,
+  });
+  const response = await app.inject({ method: "GET", url: "/v1/admin/overview", headers: { authorization: "Bearer any-token", origin: "https://admin.example.com" } });
+  assert.equal(response.statusCode, 404);
+  assert.deepEqual(response.json(), { error: { code: "admin_unavailable" } });
+  assert.equal(response.headers["access-control-allow-origin"], undefined);
+  const options = await app.inject({ method: "OPTIONS", url: "/v1/admin/overview", headers: { origin: "https://admin.example.com" } });
+  assert.equal(options.statusCode, 404);
+  assert.deepEqual(options.json(), { error: { code: "admin_unavailable" } });
+  await app.close();
 });
 
 test("revoked Firebase verifier results fail closed at the backend boundary", async () => {
