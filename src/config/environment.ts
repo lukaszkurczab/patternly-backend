@@ -30,6 +30,7 @@ const environmentSchema = z.object({
   PRIVACY_RESPONSE_KEY_BASE64: z.string().min(1),
   PRIVACY_AUDIT_HMAC_SECRET: z.string().min(32),
   REVENUECAT_API_BASE_URL: z.string().url().default("https://api.revenuecat.com"),
+  REVENUECAT_READ_API_KEY: z.string().min(1).optional(),
   REVENUECAT_WEBHOOK_SECRET: z.string().min(1).optional(),
   REVENUECAT_APP_ID: z.string().min(1).optional(),
   REVENUECAT_ENTITLEMENT_ID: z.string().min(1).optional(),
@@ -60,6 +61,7 @@ export type Environment = Readonly<{
   privacyResponseKeyBase64: string;
   privacyAuditHmacSecret: string;
   revenueCatApiBaseUrl: string;
+  revenueCatReadApiKey: string | undefined;
   revenueCatWebhookSecret: string | undefined;
   revenueCatAppId: string | undefined;
   revenueCatEntitlementId: string | undefined;
@@ -100,6 +102,7 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     privacyResponseKeyBase64: value.PRIVACY_RESPONSE_KEY_BASE64,
     privacyAuditHmacSecret: value.PRIVACY_AUDIT_HMAC_SECRET,
     revenueCatApiBaseUrl: value.REVENUECAT_API_BASE_URL,
+    revenueCatReadApiKey: value.REVENUECAT_READ_API_KEY,
     revenueCatWebhookSecret: value.REVENUECAT_WEBHOOK_SECRET,
     revenueCatAppId: value.REVENUECAT_APP_ID,
     revenueCatEntitlementId: value.REVENUECAT_ENTITLEMENT_ID,

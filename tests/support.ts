@@ -48,7 +48,7 @@ export type EmulatorContext = Readonly<{
   deletedSubjects: readonly string[];
 }>;
 
-export function createEmulatorContext(): EmulatorContext {
+export function createEmulatorContext(options: Readonly<{ revenueCatEntitlementReader?: import("../src/infrastructure/revenuecat/client.js").RevenueCatEntitlementReader | null }> = {}): EmulatorContext {
   const runtime = createFirestoreRuntime(testEnvironment);
   const privacyLinks: Array<Readonly<{ recipient: string; purpose: "verify" | "response" | "extension"; requestId: string; token: string; code: string; extensionReason?: string }>> = [];
   const purchaseReceipts: import("../src/modules/billing/revenuecatWebhookStore.js").PurchaseReceiptDelivery[] = [];
@@ -74,6 +74,7 @@ export function createEmulatorContext(): EmulatorContext {
     verifier: createFirebaseTokenVerifier(testEnvironment),
     appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
     stores,
+    revenueCatEntitlementReader: options.revenueCatEntitlementReader ?? null,
     privacyRequestEmailSender: { send: async (input) => {
       const token = input.code.split(".")[1];
       if (!token) throw new Error("privacy_test_code_invalid");

@@ -6,6 +6,7 @@ import { createFirebaseAppCheckVerifier } from "./infrastructure/firebase/appChe
 import { createFirebaseTokenVerifier } from "./infrastructure/firebase/verifier.js";
 import { createBootstrapLogger } from "./infrastructure/logging/logger.js";
 import { createSmtpLegalRequestEmailSender, createSmtpPrivacyEmailSender, createSmtpPurchaseReceiptEmailSender, createSmtpSecurityIncidentEmailSender } from "./infrastructure/email/smtpPrivacyEmailSender.js";
+import { createRevenueCatEntitlementReader } from "./infrastructure/revenuecat/client.js";
 
 async function main(): Promise<void> {
   const bootstrapLogger = createBootstrapLogger();
@@ -27,6 +28,9 @@ async function main(): Promise<void> {
       verifier: createFirebaseTokenVerifier(environment),
       appCheckVerifier: createFirebaseAppCheckVerifier(environment),
       stores: createFirestoreStores(firestore, environment),
+      revenueCatEntitlementReader: environment.revenueCatReadApiKey && environment.revenueCatEntitlementId && environment.revenueCatProductId && environment.revenueCatWebhookEnvironment
+        ? createRevenueCatEntitlementReader({ baseUrl: environment.revenueCatApiBaseUrl, apiKey: environment.revenueCatReadApiKey, entitlementId: environment.revenueCatEntitlementId, productId: environment.revenueCatProductId, environment: environment.revenueCatWebhookEnvironment })
+        : null,
       privacyRequestEmailSender,
       legalRequestEmailSender,
       purchaseReceiptEmailSender,

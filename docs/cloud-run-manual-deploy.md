@@ -22,6 +22,7 @@ Cloud Run service configuration:
   RevenueCat project and App Store product exactly;
 - `REVENUECAT_WEBHOOK_SECRET` — the exact Authorization value configured in
   RevenueCat, supplied through Secret Manager and never stored in source;
+- `REVENUECAT_READ_API_KEY` — a server-only RevenueCat API key with customer-read permission, supplied through Secret Manager. Without it the authenticated `/v1/entitlements` refresh returns `503`; a webhook projection is not presented as a fresh provider read;
 - `DELETION_PSEUDONYM_KEYS_JSON` — a Secret Manager value containing exactly one `active` HMAC key and any `verify_only` predecessors. Grant the Cloud Run runtime service account only `roles/secretmanager.secretAccessor` on this secret; never expose its material in source control, build logs or ordinary environment files;
 - `LOG_LEVEL` and `NODE_ENV`.
 

@@ -5,6 +5,7 @@ import type { Environment } from "../config/environment.js";
 import type { FirestoreRuntime } from "../infrastructure/firestore/client.js";
 import type { IdentityTokenVerifier } from "../infrastructure/firebase/verifier.js";
 import type { AppCheckTokenVerifier } from "../infrastructure/firebase/appCheckVerifier.js";
+import type { RevenueCatEntitlementReader } from "../infrastructure/revenuecat/client.js";
 import { OPENAPI_DOCUMENT } from "./openapi.js";
 import { authenticateIdentity, authenticateRequest } from "../modules/auth/request.js";
 import type { AuthenticatedIdentity } from "../modules/auth/contracts.js";
@@ -45,6 +46,7 @@ export type ApplicationDependencies = Readonly<{
   verifier: IdentityTokenVerifier | null;
   appCheckVerifier: AppCheckTokenVerifier | null;
   stores: BackendStores | null;
+  revenueCatEntitlementReader?: RevenueCatEntitlementReader | null;
   privacyRequestEmailSender?: import("../modules/privacy-requests/store.js").PrivacyRequestEmailSender | null;
   securityIncidentEmailSender?: import("../modules/security-incidents/store.js").SecurityIncidentEmailSender | null;
   legalRequestEmailSender?: import("../modules/legal-requests/store.js").LegalRequestEmailSender | null;
@@ -457,8 +459,9 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       try { firestore = await dependencies.firestore.ping(); } catch { firestore = false; }
     }
     const authentication = dependencies.verifier !== null && dependencies.appCheckVerifier !== null;
-    const ready = firestore && authentication;
-    return reply.code(ready ? 200 : 503).send({ status: ready ? "ready" : "not_ready", checks: { database: firestore, authentication } });
+    const providerReader = dependencies.environment.nodeEnv !== "production" || dependencies.revenueCatEntitlementReader != null;
+    const ready = firestore && authentication && providerReader;
+    return reply.code(ready ? 200 : 503).send({ status: ready ? "ready" : "not_ready", checks: { database: firestore, authentication, providerReader } });
   });
   app.get("/openapi.json", async () => OPENAPI_DOCUMENT);
 
@@ -508,7 +511,16 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.get("/v1/entitlements", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request) => ({ entitlements: await requireStores(dependencies).entitlements.read(request.userId!) }));
+  app.get("/v1/entitlements", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
+    if (!dependencies.revenueCatEntitlementReader) return reply.code(503).send({ error: { code: "revenuecat_read_unavailable" } });
+    try {
+      const result = await dependencies.revenueCatEntitlementReader.read(request.userId!);
+      if (result.state === "unavailable") return reply.code(503).send({ error: { code: "revenuecat_read_unavailable" } });
+      return { serverObservedAt: new Date().toISOString(), entitlements: [{ accountId: request.userId!, ...result, source: "revenuecat" }] };
+    } catch {
+      return reply.code(503).send({ error: { code: "revenuecat_read_unavailable" } });
+    }
+  });
 
   app.get("/v1/progress", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const requested = (request.query as { protocolVersion?: unknown }).protocolVersion;
