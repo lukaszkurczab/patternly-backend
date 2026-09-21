@@ -202,7 +202,9 @@ async function verifyMobileAppCheck(request: FastifyRequest, reply: FastifyReply
   } catch (error) {
     const message = error instanceof Error ? error.message : "app_check_invalid";
     const status = message === "app_check_not_configured" ? 503 : 401;
-    reply.code(status).send({ error: { code: status === 503 ? "app_check_not_configured" : message === "app_check_required" ? "app_check_required" : "app_check_invalid" } });
+    const code = status === 503 ? "app_check_not_configured" : message === "app_check_required" ? "app_check_required" : "app_check_invalid";
+    request.log.warn({ event: "app_check_rejected", code, correlationId: request.correlationId }, "app_check_rejected");
+    reply.code(status).send({ error: { code } });
     return false;
   }
 }

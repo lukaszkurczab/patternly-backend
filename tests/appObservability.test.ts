@@ -25,7 +25,7 @@ const identity = Object.freeze({
   authTime: Math.floor(Date.now() / 1000),
 });
 
-function application(progressOverrides: Partial<ProgressStore>, logs: string[]) {
+function application(progressOverrides: Partial<ProgressStore>, logs: string[], appCheckConfigured = true) {
   const progress = {
     read: async () => [],
     readSnapshot: async () => ({ accountRevision: 0, records: [] }),
@@ -42,7 +42,7 @@ function application(progressOverrides: Partial<ProgressStore>, logs: string[]) 
     environment,
     firestore: null,
     verifier: { verify: async () => identity },
-    appCheckVerifier: { verify: async (token) => { if (token !== "observability-test-app-check") throw new Error("app_check_invalid"); } },
+    appCheckVerifier: appCheckConfigured ? { verify: async (token) => { if (token !== "observability-test-app-check") throw new Error("app_check_invalid"); } } : null,
     stores,
     logStream: { write: (message) => { logs.push(message); } },
   });
@@ -50,6 +50,35 @@ function application(progressOverrides: Partial<ProgressStore>, logs: string[]) 
 
 const clientCorrelationId = "11111111-1111-4111-8111-111111111111";
 const headers = { authorization: "Bearer test-token", "x-firebase-appcheck": "observability-test-app-check", "x-correlation-id": clientCorrelationId };
+
+test("App Check rejections log only a bounded code and server correlation ID", async () => {
+  for (const scenario of [
+    { token: undefined, configured: true, code: "app_check_required", status: 401 },
+    { token: "private-invalid-app-check-token", configured: true, code: "app_check_invalid", status: 401 },
+    { token: "private-valid-looking-token", configured: false, code: "app_check_not_configured", status: 503 },
+  ]) {
+    const output: string[] = [];
+    const app = application({}, output, scenario.configured);
+    let response: Awaited<ReturnType<typeof app.inject>>;
+    try {
+      response = await app.inject({
+        method: "GET", url: "/v1/me?email=private-query@example.invalid",
+        headers: { authorization: "Bearer private-auth-token", ...(scenario.token ? { "x-firebase-appcheck": scenario.token } : {}), "x-correlation-id": clientCorrelationId },
+      });
+    } finally {
+      await app.close();
+    }
+    assert.equal(response.statusCode, scenario.status);
+    assert.equal(response.json().error.code, scenario.code);
+    const events = output.map((line) => JSON.parse(line) as Readonly<Record<string, unknown>>).filter((entry) => entry.event === "app_check_rejected");
+    assert.equal(events.length, 1);
+    const event = events[0];
+    assert.deepEqual(event, { level: 40, time: event?.time, reqId: event?.correlationId, event: "app_check_rejected", code: scenario.code, correlationId: event?.correlationId, msg: "app_check_rejected" });
+    assert.match(String(event?.correlationId), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu);
+    const serialized = output.join("");
+    for (const canary of ["private-auth-token", "private-invalid-app-check-token", "private-valid-looking-token", "private-query@example.invalid", clientCorrelationId]) assert.doesNotMatch(serialized, new RegExp(canary, "u"));
+  }
+});
 const validSyncPayload = {
   expectedAccountRevision: 0,
   mutations: [{

@@ -3,7 +3,7 @@ import type { Environment } from "../../config/environment.js";
 
 const SAFE_REQUEST_FIELDS = ["method"] as const;
 const SAFE_LOG_FIELDS = new Set(["req", "res", "err", "event", "stage", "code", "correlationId", "signal", "responseTime"]);
-const SAFE_EVENTS = new Set(["account_sync_rejected", "request_failed", "bootstrap_failed", "shutting_down", "shutdown_failed"]);
+const SAFE_EVENTS = new Set(["account_sync_rejected", "app_check_rejected", "request_failed", "bootstrap_failed", "shutting_down", "shutdown_failed"]);
 const SAFE_STAGES = new Set(["sync", "preview", "confirm"]);
 const SAFE_CODES = new Set([
   "invalid_request", "version_conflict", "account_revision_conflict", "progress_fingerprint_mismatch", "mutation_id_reuse",
@@ -11,11 +11,11 @@ const SAFE_CODES = new Set([
   "active_session_adoption_blocked", "journal_recovery_required", "firestore_not_ready", "authentication_required",
   "recent_reauthentication_required", "recovery_code_invalid", "recovery_code_used", "account_deleted",
   "remote_deletion_pending", "session_revocation_failed", "session_revocation_operation_conflict",
-  "recovery_session_revocation_failed", "app_check_required", "app_check_invalid", "content_report_not_found",
+  "recovery_session_revocation_failed", "app_check_required", "app_check_invalid", "app_check_not_configured", "content_report_not_found",
   "content_report_transition_invalid", "data_export_rate_limited", "data_export_too_large", "internal_error", "unknown",
 ]);
 const SAFE_MESSAGES = new Set([
-  "incoming request", "request completed", "request errored", "account_sync_rejected", "request_failed",
+  "incoming request", "request completed", "request errored", "account_sync_rejected", "app_check_rejected", "request_failed",
   "bootstrap_failed", "shutting_down", "shutdown_failed", "suppressed_log_message",
 ]);
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
