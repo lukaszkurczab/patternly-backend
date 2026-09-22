@@ -8,3 +8,6 @@ coverage/
 firestore-debug.log
 firebase-debug.log
 .DS_Store
+
+# Local QA reports and captures
+docs/qa/
