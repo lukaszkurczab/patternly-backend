@@ -48,14 +48,15 @@ export type EmulatorContext = Readonly<{
   deletedSubjects: readonly string[];
 }>;
 
-export function createEmulatorContext(options: Readonly<{ revenueCatEntitlementReader?: import("../src/infrastructure/revenuecat/client.js").RevenueCatEntitlementReader | null }> = {}): EmulatorContext {
-  const runtime = createFirestoreRuntime(testEnvironment);
+export function createEmulatorContext(options: Readonly<{ projectId?: string; revenueCatEntitlementReader?: import("../src/infrastructure/revenuecat/client.js").RevenueCatEntitlementReader | null }> = {}): EmulatorContext {
+  const environment = options.projectId ? Object.freeze({ ...testEnvironment, firebaseProjectId: options.projectId, firebaseAuthIssuer: `https://securetoken.google.com/${options.projectId}` }) : testEnvironment;
+  const runtime = createFirestoreRuntime(environment);
   const privacyLinks: Array<Readonly<{ recipient: string; purpose: "verify" | "response" | "extension"; requestId: string; token: string; code: string; extensionReason?: string }>> = [];
   const purchaseReceipts: import("../src/modules/billing/revenuecatWebhookStore.js").PurchaseReceiptDelivery[] = [];
   const customTokenSubjects: string[] = [];
   const revokedSubjects: string[] = [];
   const deletedSubjects: string[] = [];
-  const stores = createFirestoreStores(runtime, testEnvironment, {
+  const stores = createFirestoreStores(runtime, environment, {
     createCustomToken: async (subject) => { customTokenSubjects.push(subject); return "fixture-custom-token"; },
     revokeRefreshTokens: async (subject) => { revokedSubjects.push(subject); },
     deleteUser: async (subject) => {
@@ -69,9 +70,9 @@ export function createEmulatorContext(options: Readonly<{ revenueCatEntitlementR
     },
   });
   const app = buildApplication({
-    environment: testEnvironment,
+    environment,
     firestore: runtime,
-    verifier: createFirebaseTokenVerifier(testEnvironment),
+    verifier: createFirebaseTokenVerifier(environment),
     appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
     stores,
     revenueCatEntitlementReader: options.revenueCatEntitlementReader ?? null,

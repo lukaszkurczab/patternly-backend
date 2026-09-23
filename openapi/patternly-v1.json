@@ -1616,7 +1616,7 @@
       "x-patternly-security-profile": "app_check_only",
       "x-patternly-consumer-scope": "mobile",
       "post": {
-        "description": "Record an idempotent guest privacy request and start email possession verification in the app",
+        "description": "Record an idempotent guest privacy request. Email delivery is unconfirmed and sender outcomes are not disclosed.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1675,16 +1675,6 @@
           },
           "429": {
             "description": "Rate limited",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Email sender unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1780,7 +1770,7 @@
       "x-patternly-security-profile": "app_check_only",
       "x-patternly-consumer-scope": "mobile",
       "post": {
-        "description": "Non-enumerating request for a fresh in-app email code",
+        "description": "Non-enumerating request to send a fresh in-app email code; delivery outcome is not disclosed.",
         "parameters": [
           {
             "$ref": "#/components/parameters/PrivacyRequestId"
@@ -1798,7 +1788,7 @@
         },
         "responses": {
           "202": {
-            "description": "Verification pending",
+            "description": "Verification pending, regardless of whether the request ID or email matches",
             "content": {
               "application/json": {
                 "schema": {
@@ -1819,16 +1809,6 @@
           },
           "429": {
             "description": "Rate limited",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Email sender unavailable",
             "content": {
               "application/json": {
                 "schema": {

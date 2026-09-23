@@ -78,6 +78,9 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
   const value = parsed.data;
   if (value.NODE_ENV === "production") {
     if (!value.FIREBASE_PROJECT_ID || !value.FIREBASE_AUTH_ISSUER) throw new Error("production_firebase_config_required");
+    if (value.FIREBASE_AUTH_EMULATOR_HOST !== undefined || value.FIRESTORE_EMULATOR_HOST !== undefined) {
+      throw new Error("production_firebase_emulator_config_forbidden");
+    }
     if (!smtpConfiguration(value)) throw new Error("production_smtp_config_required");
     if (!value.REVENUECAT_WEBHOOK_SECRET || !value.REVENUECAT_APP_ID || !value.REVENUECAT_ENTITLEMENT_ID || !value.REVENUECAT_PRODUCT_ID || !value.REVENUECAT_WEBHOOK_ENVIRONMENT) throw new Error("production_revenuecat_config_required");
   }
