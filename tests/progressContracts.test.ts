@@ -54,6 +54,17 @@ test("the canonical sync envelope is required and has one mutation shape", () =>
   assert.equal(syncRequestSchema.safeParse({ expectedAccountRevision: 0, deviceId, mutations: request().mutations }).success, false);
 });
 
+test("sync batches require unique mutation ids and record targets", () => {
+  const first = mutation({ result: "correct" }, 0, { targetId: "target-1" });
+  const sameId = { ...mutation({ result: "incorrect" }, 1, { targetId: "target-2" }), mutationId: first.mutationId };
+  const sameTarget = mutation({ result: "incorrect" }, 2, { targetId: "target-1" });
+
+  assert.equal(syncRequestSchema.safeParse(request([first, sameId])).success, false);
+  assert.equal(syncRequestSchema.safeParse(request([first, sameTarget])).success, false);
+  assert.equal(syncRequestSchema.safeParse(request([first, mutation({ result: "incorrect" }, 3, { trackId: "another-track", targetId: "target-1" })])).success, true);
+  assert.equal(syncRequestSchema.safeParse(request([first, mutation({ result: "incorrect" }, 4, { targetId: "target-2" })])).success, true);
+});
+
 test("canonical tombstones are accepted directly and retired identity markers are rejected recursively", () => {
   const tombstone = {
     kind: "unavailable_active" as const,

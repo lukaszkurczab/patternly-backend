@@ -321,6 +321,44 @@ test("Firestore transaction preserves sync CAS and idempotency under concurrent 
   assert.equal(conflict.json().conflicts[0].current.state.mastery, "learning");
 });
 
+test("sync rejects duplicate mutations before writing and applies distinct targets", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const userId = auth.userId;
+  const mutation = (mutationId: string, targetId: string, mastery: string) => ({
+    mutationId,
+    kind: "item" as const,
+    recordType: "training_attempt" as const,
+    trackId: "coding-interview-dsa-problem-solving",
+    targetId,
+    expectedVersion: null,
+    state: { mastery },
+    fingerprint: createMergeRecordFingerprint({ recordId: targetId, recordType: "training_attempt", state: { mastery }, trackId: "coding-interview-dsa-problem-solving" }),
+  });
+  const original = mutation(`duplicate-id-${Date.now()}-001`, "item-1", "learning");
+  const duplicateId = { ...mutation(`duplicate-id-${Date.now()}-002`, "item-2", "mastered"), mutationId: original.mutationId };
+  const duplicateTarget = mutation(`duplicate-target-${Date.now()}-001`, "item-1", "mastered");
+  for (const [index, mutations] of [[0, [original, duplicateId]], [1, [original, duplicateTarget]]] as const) {
+    const response = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(0, mutations, `duplicate-batch-${index}-${Date.now()}`) });
+    assert.equal(response.statusCode, 400, response.body);
+    assert.equal(response.json().error.code, "invalid_request");
+    assert.equal((await firestore().collection("users").doc(userId).collection("progress").get()).size, 0);
+    assert.equal((await firestore().collection("users").doc(userId).collection("syncMutations").get()).size, 0);
+    assert.equal((await firestore().collection("users").doc(userId).collection("syncBatches").get()).size, 0);
+    assert.equal((await firestore().collection("users").doc(userId).collection("syncMetadata").doc("account").get()).exists, false);
+  }
+
+  const valid = await context.app.inject({
+    method: "POST",
+    url: "/v1/progress/sync",
+    headers,
+    payload: canonicalSyncPayload(0, [mutation(`distinct-target-${Date.now()}-001`, "item-1", "learning"), mutation(`distinct-target-${Date.now()}-002`, "item-2", "mastered")], "distinct-target-batch"),
+  });
+  assert.equal(valid.statusCode, 200, valid.body);
+  assert.equal(valid.json().applied.length, 2);
+  assert.equal((await firestore().collection("users").doc(userId).collection("progress").get()).size, 2);
+});
+
 test("account adoption is previewed, explicitly confirmed, materialized idempotently, and guarded by account CAS", async () => {
   const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });

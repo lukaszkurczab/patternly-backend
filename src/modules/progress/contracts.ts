@@ -147,7 +147,22 @@ export const syncRequestSchema = z.object({
   batchId: z.string().min(1).max(128),
   highWatermark: z.number().int().nonnegative(),
   mutations: z.array(progressMutationSchema).min(1).max(100),
-}).strict();
+}).strict().superRefine((value, context) => {
+  const mutationIds = new Set<string>();
+  const targets = new Set<string>();
+  value.mutations.forEach((mutation, index) => {
+    if (mutationIds.has(mutation.mutationId)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "progress_sync_duplicate_mutation_id", path: ["mutations", index, "mutationId"] });
+    }
+    mutationIds.add(mutation.mutationId);
+
+    const targetKey = JSON.stringify([mutation.recordType, mutation.trackId, mutation.targetId]);
+    if (targets.has(targetKey)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "progress_sync_duplicate_target", path: ["mutations", index, "recordType"] });
+    }
+    targets.add(targetKey);
+  });
+});
 
 export function syncRequestCanonicalBytes(value: unknown): number {
   return canonicalJsonBytes({ schema: CANONICAL_JSON_VERSION, payload: value });
