@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx watch src/index.ts",
+    "dev:smoke": "tsx scripts/dev-smoke.ts",
     "dev:admin": "node scripts/dev-admin.mjs",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",

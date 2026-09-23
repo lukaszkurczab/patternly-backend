@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { join, resolve } from "node:path";
 import Fastify from "fastify";
+import { Ajv2020 } from "ajv/dist/2020.js";
 import { buildApplication } from "../src/api/app.js";
 import { loadEnvironment } from "../src/config/environment.js";
 import { OPENAPI_DOCUMENT } from "../src/api/openapi.js";
@@ -65,6 +66,22 @@ async function runtimeInventory(): Promise<RuntimeRouteDescriptor[]> {
 
 test("GATE-02 source OpenAPI document is complete", () => {
   assert.doesNotThrow(() => assertOpenApiContract(OPENAPI_DOCUMENT));
+});
+
+test("unready runtime response matches the documented 503 schema", async () => {
+  const app = buildSecurityProbeApplication(testEnvironment());
+  await app.ready();
+  try {
+    const response = await app.inject({ method: "GET", url: "/ready" });
+    assert.equal(response.statusCode, 503);
+    const readyResponse = OPENAPI_DOCUMENT.paths["/ready"].get.responses["503"] as unknown as { content: { "application/json": { schema: object } } };
+    const documented = readyResponse.content["application/json"].schema;
+    const validate = new Ajv2020({ strict: false }).compile(documented);
+    assert.equal(validate(response.json()), true, JSON.stringify(validate.errors));
+    assert.deepEqual(response.json(), { status: "not_ready", checks: { database: false, authentication: true, providerReader: true } });
+  } finally {
+    await app.close();
+  }
 });
 
 test("runtime parity uses the real app, normalizes parameters, and ignores automatic HEAD", async () => {
@@ -208,7 +225,7 @@ test("completeness rejects an unclassified consumer operation", () => {
   assert.match(collectOpenApiContractErrors(document).join("\n"), /GET \/v1\/me:consumer_scope_missing_or_unknown/u);
 });
 
-test("every documented error response uses the closed common envelope", () => {
+test("ordinary error responses use the closed common envelope", () => {
   const document = documentCopy();
   const response = operation(document, "GET /v1/me").responses as Record<string, Record<string, unknown>>;
   response["401"]!.content = { "application/json": { schema: { type: "object", properties: { error: { type: "string" } } } } };

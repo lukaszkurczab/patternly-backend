@@ -80,7 +80,12 @@ test("App Check rejections log only a bounded code and server correlation ID", a
   }
 });
 const validSyncPayload = {
+  canonicalVersion: "canonical-json-v1",
   expectedAccountRevision: 0,
+  deviceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  sessionId: "observability-session",
+  batchId: "observability-batch",
+  highWatermark: 1,
   mutations: [{
     mutationId: "mutation-1234567",
     kind: "node",
@@ -104,8 +109,8 @@ const validConfirmPayload = {
   confirmation: {
     operationId: "22222222-2222-4222-8222-222222222222",
     previewFingerprint: "b".repeat(64),
-    protocolVersion: 1,
     resolutions: [],
+    groupChoices: [],
   },
 };
 

@@ -8,11 +8,6 @@
  */
 export const CANONICAL_JSON_VERSION = "canonical-json-v1" as const;
 
-// Maximum canonical identity length for the legal recordId/trackId bounds.
-// This is intentionally separate from record field limits: it only applies
-// to conflict identifiers and other full-identity transport keys.
-export const CANONICAL_RECORD_IDENTITY_MAX_LENGTH = 4096;
-
 export type CanonicalJsonValue =
   | null
   | boolean

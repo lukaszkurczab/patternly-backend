@@ -10,7 +10,7 @@ import { OPENAPI_DOCUMENT } from "./openapi.js";
 import { authenticateIdentity, authenticateRequest } from "../modules/auth/request.js";
 import type { AuthenticatedIdentity } from "../modules/auth/contracts.js";
 import type { BackendStores } from "../infrastructure/firestore/stores.js";
-import { CONTENT_IDENTITY_SCHEMA, createProgressPageToken, isSyncRequestWithinBudget, parseProgressPageToken, syncRequestSchema, type ProgressRecord, type SyncBatchMetadata } from "../modules/progress/contracts.js";
+import { createProgressPageToken, isSyncRequestWithinBudget, parseProgressPageToken, syncRequestSchema, type ProgressRecord } from "../modules/progress/contracts.js";
 import { guestMergeConfirmationSchema, guestMergeSnapshotSchema } from "../modules/users/merge.js";
 import { createContentReportSchema, transitionContentReportSchema } from "../modules/content-reports/contracts.js";
 import { accountRecoveryCodeConsumeSchema, accountRecoveryCodeIssueSchema, accountSessionRevokeSchema, accountDeletionRequestSchema, publicDeletionStatusSchema } from "../modules/account-lifecycle/contracts.js";
@@ -523,11 +523,19 @@ export function buildApplication(dependencies: ApplicationDependencies) {
   });
 
   app.get("/v1/progress", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
-    const requested = (request.query as { protocolVersion?: unknown }).protocolVersion;
-    if (requested !== undefined && requested !== "1" && requested !== "2" && requested !== "4") return reply.code(400).send({ error: { code: "invalid_request" } });
-    const protocolVersion = requested === "4" ? 4 : requested === "2" ? 2 : 1;
-    const snapshot = await requireStores(dependencies).progress.readSnapshot(request.userId!, protocolVersion);
-    const query = request.query as { pageSize?: unknown; pageToken?: unknown };
+    const query = request.query as Record<string, unknown>;
+    if (Object.keys(query).some((key) => key !== "pageSize" && key !== "pageToken")) {
+      return reply.code(400).send({ error: { code: "invalid_request" } });
+    }
+    let snapshot;
+    try {
+      snapshot = await requireStores(dependencies).progress.readSnapshot(request.userId!);
+    } catch (error) {
+      if (error instanceof Error && error.message === "content_identity_schema_conflict") {
+        return reply.code(409).send({ error: { code: "content_identity_schema_conflict" } });
+      }
+      throw error;
+    }
     if (query.pageSize === undefined && query.pageToken === undefined) return { accountRevision: snapshot.accountRevision, generation: snapshot.generation ?? 0, records: snapshot.records };
     const pageSize = query.pageSize === undefined ? 100 : Number(query.pageSize);
     if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) return reply.code(400).send({ error: { code: "invalid_request" } });
@@ -537,8 +545,6 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       try {
         const token = parseProgressPageToken(query.pageToken);
         if (token.userId !== request.userId || token.accountRevision !== snapshot.accountRevision || token.generation !== (snapshot.generation ?? 0)) return reply.code(409).send({ error: { code: "progress_generation_conflict" } });
-        if (protocolVersion === 4 && (token.protocolVersion !== 4 || token.contentIdentitySchema !== CONTENT_IDENTITY_SCHEMA)) return reply.code(409).send({ error: { code: "content_identity_schema_conflict" } });
-        if (protocolVersion !== 4 && token.protocolVersion !== undefined && token.protocolVersion !== protocolVersion) return reply.code(409).send({ error: { code: "progress_generation_conflict" } });
         cursor = token.cursor;
       } catch (error) {
         if (error instanceof Error && error.message === "progress_pagination_token_invalid") return reply.code(400).send({ error: { code: "progress_pagination_token_invalid" } });
@@ -552,7 +558,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     const page = records.slice(start, start + pageSize);
     const last = page.at(-1);
     const nextPageToken = start + page.length < records.length && last
-      ? createProgressPageToken({ version: 1, userId: request.userId!, generation: snapshot.generation ?? 0, accountRevision: snapshot.accountRevision, cursor: progressRecordIdentity(last), ...(protocolVersion === 4 ? { protocolVersion: 4, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA } : { protocolVersion }) })
+      ? createProgressPageToken({ version: 1, userId: request.userId!, generation: snapshot.generation ?? 0, accountRevision: snapshot.accountRevision, cursor: progressRecordIdentity(last) })
       : null;
     return { accountRevision: snapshot.accountRevision, generation: snapshot.generation ?? 0, records: page, nextPageToken };
   });
@@ -691,11 +697,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       return reply.code(identitySchemaConflict ? 409 : recordTooLarge || envelopeTooLarge ? 413 : 400).send({ error: { code, ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
     }
     try {
-      const metadata: SyncBatchMetadata | undefined = parsed.data.protocolVersion === 4
-        ? { sessionId: parsed.data.sessionId, batchId: parsed.data.batchId, planVersion: 4, highWatermark: parsed.data.highWatermark, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA }
-        : parsed.data.protocolVersion === 3
-          ? { sessionId: parsed.data.sessionId, batchId: parsed.data.batchId, planVersion: 3, highWatermark: parsed.data.highWatermark }
-        : undefined;
+      const metadata = { sessionId: parsed.data.sessionId, batchId: parsed.data.batchId, highWatermark: parsed.data.highWatermark } as const;
       const result = await requireStores(dependencies).progress.applyBatch(request.userId!, parsed.data.deviceId, parsed.data.expectedAccountRevision, parsed.data.mutations, metadata);
       if (result.conflicts.length > 0 || result.accountRevisionConflict) {
         logAccountSyncRejection(request, "sync", result.accountRevisionConflict?.code ?? result.conflicts[0]?.code);
@@ -767,9 +769,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  // Protocol-v3 is deliberately explicit and resumable.  The legacy v1/v2
-  // preview/confirm routes above retain their existing one-shot contract.
-  app.post("/v3/account-data/adoption/start", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/account-data/adoption/transfer/start", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const parsed = adoptionTransferStartSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });
     try {
@@ -780,7 +780,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v3/account-data/adoption/:sessionId/upload", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/account-data/adoption/transfer/:sessionId/upload", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
     const parsed = adoptionTransferUploadSchema.safeParse(request.body);
     if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
@@ -792,7 +792,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v3/account-data/adoption/:sessionId/seal", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/account-data/adoption/transfer/:sessionId/seal", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
     const parsed = adoptionTransferSealSchema.safeParse(request.body);
     if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
@@ -804,7 +804,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v3/account-data/adoption/:sessionId/preview", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/account-data/adoption/transfer/:sessionId/preview", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
     const parsed = adoptionTransferPreviewSchema.safeParse(request.body ?? {});
     if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
@@ -816,7 +816,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v3/account-data/adoption/:sessionId/confirm", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/account-data/adoption/transfer/:sessionId/confirm", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
     const body = request.body as Record<string, unknown> | null;
     const nested = body && typeof body.confirmation === "object" && body.confirmation !== null && !Array.isArray(body.confirmation)
@@ -832,7 +832,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v3/account-data/adoption/:sessionId/apply", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/account-data/adoption/transfer/:sessionId/apply", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
     const parsed = adoptionTransferApplySchema.safeParse(request.body);
     if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
@@ -844,7 +844,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.get("/v3/account-data/adoption/:sessionId/status", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.get("/v1/account-data/adoption/transfer/:sessionId/status", { preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
     const sessionId = adoptionTransferSessionId((request.params as { sessionId?: unknown }).sessionId);
     const query = request.query as { deviceId?: unknown };
     const parsed = adoptionTransferStatusSchema.safeParse({ deviceId: query.deviceId });

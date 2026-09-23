@@ -54,3 +54,23 @@ The emulator suite verifies Firebase identity mapping, transactional sync CAS,
 idempotency, App Check rejection, report redaction and account-owned document
 deletion. The mobile app continues to reach backend data only through the
 versioned HTTPS API.
+
+### Local mobile login with already running emulators
+
+Use `npm run dev:smoke` with `FIREBASE_PROJECT_ID=patternly-app-sandbox`,
+`FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:19099` and
+`FIRESTORE_EMULATOR_HOST=127.0.0.1:18081`. It reuses those emulators and binds the
+API to `127.0.0.1:8080`; it does not start or clear emulator instances.
+The launcher ignores ambient SMTP/RevenueCat settings and stores generated local
+keys in ignored `.local/smoke/secrets.json` (mode 0600). It refuses production or
+mismatched emulator configuration. The production entrypoint is unchanged.
+
+In the mobile `.env.smoke.local`, use the same project and origins and set
+`EXPO_PUBLIC_PATTERNLY_LOCAL_APPCHECK_TOKEN` from `appCheckToken` in that file.
+Keep the existing Firebase/OAuth registration fields complete. Restart
+`npm run start:smoke` after changing the profile. With this local token, native
+App Check is not initialized. This is an explicit test fixture, **not provider
+attestation**; real Firebase Auth emulator bearer tokens are still required.
+Mobile accepts the fixture only in a development smoke build with loopback
+API/Auth origins and the matching project. No real provider, mail, payment or
+cloud validation is implied. Keep the token out of logs and release profiles.

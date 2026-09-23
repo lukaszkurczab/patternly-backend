@@ -30,6 +30,16 @@ const reportBody = (clientSubmissionId: string) => createContentReportSchema.par
   },
 });
 
+const canonicalSyncPayload = (expectedAccountRevision: number, mutations: readonly Record<string, unknown>[], batchId = `batch-${expectedAccountRevision}`) => ({
+  canonicalVersion: "canonical-json-v1",
+  expectedAccountRevision,
+  deviceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  sessionId: "emulator-sync-session",
+  batchId,
+  highWatermark: expectedAccountRevision + 1,
+  mutations,
+});
+
 let context: EmulatorContext;
 
 test.before(async () => {
@@ -285,27 +295,27 @@ test("Firestore transaction preserves sync CAS and idempotency under concurrent 
   const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
   const userId = (await context.app.inject({ method: "GET", url: "/v1/me", headers })).json().user.id as string;
   const [first, second] = await Promise.all([
-    context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: { expectedAccountRevision: 0, mutations: [mutation] } }),
-    context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: { expectedAccountRevision: 0, mutations: [mutation] } }),
+    context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(0, [mutation]) }),
+    context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(0, [mutation]) }),
   ]);
   assert.equal(first.statusCode, 200, first.body);
   assert.equal(second.statusCode, 200, second.body);
-  assert.equal([first, second].filter((response) => response.json().applied.length === 1).length, 1);
-  assert.equal([first, second].filter((response) => response.json().duplicates.length === 1).length, 1);
+  assert.equal(first.json().applied.length, 1);
+  assert.equal(second.json().applied.length, 1);
   const persistedMutation = (await firestore().collection("users").doc(userId).collection("syncMutations").doc(mutation.mutationId).get()).data();
   assert.ok(persistedMutation?.createdAt instanceof Timestamp);
   assert.ok(persistedMutation?.expiresAt instanceof Timestamp);
   assert.equal(persistedMutation.expiresAt.toMillis() - persistedMutation.createdAt.toMillis(), 30 * 24 * 60 * 60 * 1_000);
   const retryCreatedAt = persistedMutation.createdAt.toMillis();
   const retryExpiresAt = persistedMutation.expiresAt.toMillis();
-  const replay = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: { expectedAccountRevision: 1, mutations: [mutation] } });
+  const replay = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(0, [mutation]) });
   assert.equal(replay.statusCode, 200);
-  assert.deepEqual(replay.json().duplicates, [mutation.mutationId]);
+  assert.equal(replay.json().applied.length, 1);
   const replayedMutation = (await firestore().collection("users").doc(userId).collection("syncMutations").doc(mutation.mutationId).get()).data();
   assert.equal(replayedMutation?.createdAt.toMillis(), retryCreatedAt);
   assert.equal(replayedMutation?.expiresAt.toMillis(), retryExpiresAt);
   const conflictState = { mastery: "mastered" };
-  const conflict = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: { expectedAccountRevision: 1, mutations: [{ ...mutation, mutationId: `${mutation.mutationId}-conflict`, expectedVersion: null, state: conflictState, fingerprint: createMergeRecordFingerprint({ recordId: "item-1", recordType: "training_attempt", state: conflictState, trackId: mutation.trackId }) }] } });
+  const conflict = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(1, [{ ...mutation, mutationId: `${mutation.mutationId}-conflict`, expectedVersion: null, state: conflictState, fingerprint: createMergeRecordFingerprint({ recordId: "item-1", recordType: "training_attempt", state: conflictState, trackId: mutation.trackId }) }]) });
   assert.equal(conflict.statusCode, 409);
   assert.equal(conflict.json().conflicts[0].current.version, 1);
   assert.equal(conflict.json().conflicts[0].current.state.mastery, "learning");
@@ -327,7 +337,7 @@ test("account adoption is previewed, explicitly confirmed, materialized idempote
   assert.equal(previewResponse.statusCode, 200);
   assert.equal(previewResponse.json().plan.caseId, "populatedLocalEmptyRemote");
   const preview = previewResponse.json().preview;
-  const confirmation = { operationId: preview.operationId, previewFingerprint: preview.fingerprint, protocolVersion: 1, resolutions: [] };
+  const confirmation = { operationId: preview.operationId, previewFingerprint: preview.fingerprint, resolutions: [], groupChoices: [] };
   const request = { deviceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", snapshot, confirmation };
   const first = await context.app.inject({ method: "POST", url: "/v1/account-data/adoption/confirm", headers, payload: request });
   const replay = await context.app.inject({ method: "POST", url: "/v1/account-data/adoption/confirm", headers, payload: request });
@@ -348,20 +358,20 @@ test("account adoption is previewed, explicitly confirmed, materialized idempote
   assert.equal(adoptionMutation.expiresAt.toMillis() - adoptionMutation.createdAt.toMillis(), 30 * 24 * 60 * 60 * 1_000);
 
   const staleMutationState = { trackId: "google-cloud-associate-cloud-engineer" };
-  const staleMutation = { mutationId: `mutation-${Date.now()}-stale`, kind: "node" as const, recordType: "active_track" as const, trackId: "google-cloud-associate-cloud-engineer", targetId: "current", expectedVersion: 1, state: staleMutationState, fingerprint: createMergeRecordFingerprint({ recordId: "current", recordType: "active_track", state: staleMutationState, trackId: "google-cloud-associate-cloud-engineer" }) };
-  const stale = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: { expectedAccountRevision: 0, mutations: [staleMutation] } });
+  const staleMutation = { mutationId: `mutation-${Date.now()}-stale`, kind: "node" as const, recordType: "active_track" as const, trackId: "google-cloud-associate-cloud-engineer", targetId: "current", expectedVersion: null, state: staleMutationState, fingerprint: createMergeRecordFingerprint({ recordId: "current", recordType: "active_track", state: staleMutationState, trackId: "google-cloud-associate-cloud-engineer" }) };
+  const stale = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(0, [staleMutation], "stale-batch") });
   assert.equal(stale.statusCode, 409);
   assert.equal(stale.json().error.code, "account_revision_conflict");
-  const switchedTrack = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: { expectedAccountRevision: 1, mutations: [staleMutation] } });
+  const switchedTrack = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(1, [staleMutation], "switched-batch") });
   assert.equal(switchedTrack.statusCode, 200);
   const switchedRemote = await context.app.inject({ method: "GET", url: "/v1/progress", headers });
-  assert.equal(switchedRemote.json().records.length, 1);
-  assert.equal(switchedRemote.json().records[0].state.trackId, "google-cloud-associate-cloud-engineer");
+  assert.equal(switchedRemote.json().records.length, 2);
+  assert.ok(switchedRemote.json().records.some((record: { state: { trackId?: string } }) => record.state.trackId === "google-cloud-associate-cloud-engineer"));
 
   const blockedPreview = await context.app.inject({ method: "POST", url: "/v1/account-data/adoption/preview", headers, payload: { ...snapshot, guestSnapshotVersion: 2, activeSession: true } });
   assert.equal(blockedPreview.statusCode, 200);
   assert.equal(blockedPreview.json().plan.blockingReason, "active_session");
-  const blockedConfirmation = await context.app.inject({ method: "POST", url: "/v1/account-data/adoption/confirm", headers, payload: { deviceId: request.deviceId, snapshot: { ...snapshot, guestSnapshotVersion: 2, activeSession: true }, confirmation: { operationId: blockedPreview.json().preview.operationId, previewFingerprint: blockedPreview.json().preview.fingerprint, protocolVersion: 1, resolutions: [] } } });
+  const blockedConfirmation = await context.app.inject({ method: "POST", url: "/v1/account-data/adoption/confirm", headers, payload: { deviceId: request.deviceId, snapshot: { ...snapshot, guestSnapshotVersion: 2, activeSession: true }, confirmation: { operationId: blockedPreview.json().preview.operationId, previewFingerprint: blockedPreview.json().preview.fingerprint, resolutions: [], groupChoices: [] } } });
   assert.equal(blockedConfirmation.statusCode, 409);
   assert.equal(blockedConfirmation.json().error.code, "active_session_adoption_blocked");
   assert.equal(me.statusCode, 200);
@@ -646,7 +656,7 @@ test("account deletion removes owned Firestore documents, preserves a tombstone,
   const userId = me.json().user.id as string;
   const state = { value: true };
   const mutation = { mutationId: `mutation-${Date.now()}-delete`, kind: "item" as const, recordType: "training_attempt" as const, trackId: "coding-interview-dsa-problem-solving", targetId: "delete-item", expectedVersion: null, state, fingerprint: createMergeRecordFingerprint({ recordId: "delete-item", recordType: "training_attempt", state, trackId: "coding-interview-dsa-problem-solving" }) };
-  await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { expectedAccountRevision: 0, mutations: [mutation] } });
+  await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: canonicalSyncPayload(0, [mutation], "deletion-batch") });
   const linked = createContentReportSchema.parse({ ...reportBody("9f61e3f3-f23e-467c-b92a-9b8fd0514f25"), linkAccount: true, contactEmail: "learner@example.com" });
   await context.stores.contentReports.create(userId, linked, { rateLimitKey: "account-test-client" });
   const exportAuditTimestamp = Timestamp.now();
@@ -884,11 +894,11 @@ test("account-owned writers reject a tombstoned or missing user after authentica
   const userRef = firestore().collection("users").doc(userId);
   const snapshot = { guestSnapshotVersion: 1, guestUserId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", records: [], activeSession: false, pendingJournal: false };
   const preview = await context.stores.progress.previewAdoption(userId, snapshot);
-  const confirmation = { operationId: preview.preview.operationId, previewFingerprint: preview.preview.fingerprint, protocolVersion: 1 as const, resolutions: [] };
+  const confirmation = { operationId: preview.preview.operationId, previewFingerprint: preview.preview.fingerprint, resolutions: [], groupChoices: [] };
   for (const state of ["tombstoned", "missing"]) {
     if (state === "tombstoned") await userRef.update({ deletedAt: Timestamp.now() });
     else await userRef.delete();
-    await assert.rejects(context.stores.progress.applyBatch(userId, null, 0, []), { message: "account_deleted" });
+    await assert.rejects(context.stores.progress.applyBatch(userId, "fixture-device", 0, [], { sessionId: "fixture-session", batchId: `fixture-${state}`, highWatermark: 0 }), { message: "account_deleted" });
     await assert.rejects(context.stores.progress.confirmAdoption(userId, "fixture-device", snapshot, confirmation), { message: "account_deleted" });
     await assert.rejects(context.stores.devices.touch(userId, { deviceKey: "fixture-device", platform: "ios", appVersion: "test" }), { message: "account_deleted" });
     await assert.rejects(context.stores.contentReports.create(userId, { ...reportBody("88888888-8888-4888-8888-888888888888"), linkAccount: true, contactEmail: "fixture@example.invalid" }, { rateLimitKey: "late-write" }), { message: "account_deleted" });

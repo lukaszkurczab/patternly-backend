@@ -300,7 +300,11 @@ export function collectOpenApiContractErrors(documentValue: unknown): readonly s
       } else if (numericStatus >= 400) {
         const resolved = asRecord(resolveLocalReference(document, response));
         const schema = asRecord(asRecord(asRecord(resolved?.content)?.["application/json"])?.schema);
-        if (schema?.$ref !== COMMON_ERROR_REF) failures.push(`${identity}:error_schema_not_common_envelope:${status}`);
+        if (identity === "GET /ready" && status === "503") {
+          const successResponse = asRecord(responses["200"]);
+          const successSchema = asRecord(asRecord(asRecord(successResponse?.content)?.["application/json"])?.schema);
+          if (JSON.stringify(schema) !== JSON.stringify(successSchema)) failures.push(`${identity}:unavailable_schema_must_match_ready_response:${status}`);
+        } else if (schema?.$ref !== COMMON_ERROR_REF) failures.push(`${identity}:error_schema_not_common_envelope:${status}`);
       }
     }
   }

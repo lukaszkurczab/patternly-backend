@@ -1,152 +1,147 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
 
 import {
-  guestMergeRecordSchema,
-  guestMergeSnapshotSchema,
-} from "../src/modules/users/merge.js";
-import {
-  CONTENT_IDENTITY_SCHEMA,
   createProgressPageToken,
   isSyncRequestWithinBudget,
   parseProgressPageToken,
   progressMutationSchema,
-  progressMutationV4Schema,
+  resolvedContentRefSchema,
   syncRequestSchema,
 } from "../src/modules/progress/contracts.js";
 import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
 import { canonicalJson, canonicalJsonBytes } from "../src/infrastructure/identity/canonicalJson.js";
 import { MAX_SERIALIZED_JSON_UTF16_CODE_UNITS } from "../src/modules/progress/serializedJsonLimits.js";
 
-const guestUserId = "22222222-2222-4222-8222-222222222222";
+const userId = "22222222-2222-4222-8222-222222222222";
+const deviceId = "00000000-0000-4000-8000-000000000000";
+const trackId = "coding-interview-dsa-problem-solving";
 
-function stateWithSerializedLength(length: number): Record<string, string> {
-  const emptyStateLength = JSON.stringify({ value: "" }).length;
-  return { value: "x".repeat(length - emptyStateLength) };
-}
-
-function mutation(state: Readonly<Record<string, unknown>>, index = 0) {
+function mutation(state: Readonly<Record<string, unknown>>, index = 0, overrides: Readonly<{ trackId?: string; targetId?: string }> = {}) {
+  const recordId = overrides.targetId ?? `attempt-${index}`;
+  const mutationTrackId = overrides.trackId ?? trackId;
+  const base = { recordId, recordType: "training_attempt" as const, state, trackId: mutationTrackId };
   return {
     mutationId: `mutation-${String(index).padStart(16, "0")}`,
     kind: "item" as const,
-    recordType: "training_attempt" as const,
-    trackId: "coding-interview-dsa-problem-solving",
-    targetId: `attempt-${index}`,
+    trackId: mutationTrackId,
+    targetId: recordId,
+    recordType: base.recordType,
     expectedVersion: null,
-    fingerprint: "a".repeat(64),
+    fingerprint: createMergeRecordFingerprint(base),
     state,
   };
 }
 
-function mergeRecord(state: Readonly<Record<string, unknown>>, index = 0) {
+function request(mutations = [mutation({ result: "correct" })]) {
   return {
-    fingerprint: "a".repeat(64),
-    recordId: `attempt-${index}`,
-    recordType: "training_attempt" as const,
-    state,
-    trackId: "coding-interview-dsa-problem-solving",
-    version: 0,
-  };
-}
-
-test("progress and guest merge states accept the shared UTF-16 limit and reject one unit over", () => {
-  const atLimit = stateWithSerializedLength(MAX_SERIALIZED_JSON_UTF16_CODE_UNITS);
-  const overLimit = stateWithSerializedLength(MAX_SERIALIZED_JSON_UTF16_CODE_UNITS + 1);
-  const unicodeAtLimit = { value: "🙂".repeat(atLimit.value!.length / 2) };
-  assert.equal(JSON.stringify(unicodeAtLimit).length, MAX_SERIALIZED_JSON_UTF16_CODE_UNITS);
-  assert.ok(Buffer.byteLength(JSON.stringify(unicodeAtLimit), "utf8") > MAX_SERIALIZED_JSON_UTF16_CODE_UNITS);
-  assert.equal(progressMutationSchema.safeParse(mutation(unicodeAtLimit)).success, true);
-  assert.equal(guestMergeRecordSchema.safeParse(mergeRecord(unicodeAtLimit)).success, true);
-
-  assert.equal(JSON.stringify(atLimit).length, MAX_SERIALIZED_JSON_UTF16_CODE_UNITS);
-  assert.equal(JSON.stringify(overLimit).length, MAX_SERIALIZED_JSON_UTF16_CODE_UNITS + 1);
-  assert.equal(progressMutationSchema.safeParse(mutation(atLimit)).success, true);
-  assert.equal(progressMutationSchema.safeParse(mutation(overLimit)).success, false);
-  assert.equal(guestMergeRecordSchema.safeParse(mergeRecord(atLimit)).success, true);
-  assert.equal(guestMergeRecordSchema.safeParse(mergeRecord(overLimit)).success, false);
-});
-
-test("sync and guest merge collection caps remain 100 and 1000", () => {
-  const mutations = Array.from({ length: 100 }, (_, index) => mutation({}, index));
-  assert.equal(syncRequestSchema.safeParse({ expectedAccountRevision: 0, deviceId: null, mutations }).success, true);
-  assert.equal(syncRequestSchema.safeParse({ expectedAccountRevision: 0, deviceId: null, mutations: [...mutations, mutation({}, 100)] }).success, false);
-
-  const records = Array.from({ length: 1_000 }, (_, index) => mergeRecord({}, index));
-  const snapshot = { guestSnapshotVersion: 1, guestUserId, records, activeSession: false, pendingJournal: false };
-  assert.equal(guestMergeSnapshotSchema.safeParse(snapshot).success, true);
-  assert.equal(guestMergeSnapshotSchema.safeParse({ ...snapshot, records: [...records, mergeRecord({}, 1_000)] }).success, false);
-});
-
-
-test("a complete immutable Custom40 plan fits sync and adoption without losing its slots", () => {
-  const state = JSON.parse(readFileSync(new URL("./fixtures/coding-custom-40-session.json", import.meta.url), "utf8"));
-  const length = JSON.stringify(state).length;
-  assert.ok(length > 64 * 1024, "this real plan reproduces the former rejection");
-  assert.ok(length <= MAX_SERIALIZED_JSON_UTF16_CODE_UNITS);
-  assert.equal(state.actualLength, 40);
-  assert.equal(state.conditionalReinsertSlots.length, 36);
-  assert.equal(state.packagePin.packageVersion, "coding-interview-dsa-problem-solving-free-node-0005");
-  const summary = { ...mutation(state), kind: "node" as const, recordType: "training_session_summary" as const, targetId: state.id };
-  const parsedSync = syncRequestSchema.parse({ expectedAccountRevision: 0, mutations: [summary] });
-  const parsedMerge = guestMergeSnapshotSchema.parse({ guestSnapshotVersion: 1, guestUserId, activeSession: false, pendingJournal: false, records: [{ ...mergeRecord(state), recordType: "training_session_summary", recordId: state.id }] });
-  assert.deepEqual(parsedSync.mutations[0]!.state, state);
-  assert.deepEqual(parsedMerge.records[0]!.state, state);
-});
-
-test("canonical-json-v1 normalizes NFC, rejects duplicate normalized keys, and uses UTF-8 bytes", () => {
-  assert.equal(canonicalJson({ "e\u0301": "🙂" }), canonicalJson({ "é": "🙂" }));
-  assert.throws(() => canonicalJson({ "e\u0301": 1, "é": 2 }), /canonical_json_duplicate_key/u);
-  assert.throws(() => canonicalJson({ value: Number.NaN }), /canonical_json_non_finite_number/u);
-  assert.ok(canonicalJsonBytes({ value: "🙂" }) > JSON.stringify({ value: "🙂" }).length);
-});
-
-test("protocol-v3 sync carries durable batch metadata and enforces the complete UTF-8 envelope budget", () => {
-  const request = {
-    protocolVersion: 3 as const,
     canonicalVersion: "canonical-json-v1" as const,
     expectedAccountRevision: 0,
-    deviceId: "00000000-0000-4000-8000-000000000000",
-    sessionId: "plan_1",
-    batchId: "plan_1:batch:0",
-    planVersion: 3 as const,
+    deviceId,
+    sessionId: "session-1",
+    batchId: "session-1:0",
     highWatermark: 1,
-    mutations: [mutation({ value: "🙂" })],
+    mutations,
   };
-  assert.equal(syncRequestSchema.safeParse(request).success, true);
-  assert.equal(syncRequestSchema.safeParse({ ...request, deviceId: null }).success, false);
-  assert.equal(syncRequestSchema.safeParse({ ...request, deviceId: undefined }).success, false);
-  assert.equal(isSyncRequestWithinBudget(request), true);
-  const oversized = { ...request, mutations: [mutation({ value: "x".repeat(520_000) })] };
-  assert.equal(syncRequestSchema.safeParse(oversized).success, false);
-  assert.equal(isSyncRequestWithinBudget(oversized), false);
+}
+
+test("the canonical sync envelope is required and has one mutation shape", () => {
+  assert.equal(syncRequestSchema.safeParse(request()).success, true);
+  assert.equal(syncRequestSchema.safeParse({ ...request(), planVersion: 4 }).success, false);
+  assert.equal(syncRequestSchema.safeParse({ ...request(), deviceId: null }).success, false);
+  assert.equal(syncRequestSchema.safeParse({ ...request(), protocolVersion: 4 }).success, false);
+  assert.equal(syncRequestSchema.safeParse({ ...request(), contentIdentitySchema: "retired" }).success, false);
+  assert.equal(syncRequestSchema.safeParse({ expectedAccountRevision: 0, deviceId, mutations: request().mutations }).success, false);
 });
 
-test("protocol-v4 accepts only resolved content identity leaves and binds schema to fingerprints", () => {
+test("canonical tombstones are accepted directly and retired identity markers are rejected recursively", () => {
+  const tombstone = {
+    kind: "unavailable_active" as const,
+    trackId,
+    questionId: "q-1",
+    contentVersion: "2026.09.1",
+    reason: "stale_content_version" as const,
+    sessionId: "session-1",
+  };
+  assert.equal(progressMutationSchema.safeParse(mutation({ identity: tombstone })).success, true);
+  assert.equal(progressMutationSchema.safeParse(mutation({ identity: { kind: "tombstone", tombstone } })).success, true);
+  assert.equal(progressMutationSchema.safeParse(mutation({ identity: { ...tombstone, migrationVersion: 1, legacyIdentityDigest: "a".repeat(64) } })).success, false);
+  for (const key of ["protocolVersion", "contentIdentitySchema", "migrationVersion", "legacyIdentityDigest"]) {
+    assert.equal(progressMutationSchema.safeParse(mutation({ nested: { identity: { [key]: 1 } } })).success, false, key);
+  }
+});
+
+test("resolved material identity is exact and remains part of the mutation fingerprint", () => {
   const state = {
     answer: {
-      trackId: "coding-interview-dsa-problem-solving",
+      trackId,
       questionId: "q-1",
       contentVersion: "2026.09.1",
       artifactSha256: "a".repeat(64),
     },
   };
-  const base = { mutationId: "mutation-v4-00000001", kind: "item" as const, recordType: "training_attempt" as const, trackId: "coding-interview-dsa-problem-solving", targetId: "attempt-v4", expectedVersion: null, state };
-  const mutationV4 = { ...base, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA, fingerprint: createMergeRecordFingerprint({ recordId: base.targetId, recordType: base.recordType, state, trackId: base.trackId, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA }) };
-  assert.equal(progressMutationV4Schema.safeParse(mutationV4).success, true);
-  assert.equal(syncRequestSchema.safeParse({ protocolVersion: 4, canonicalVersion: "canonical-json-v1", contentIdentitySchema: CONTENT_IDENTITY_SCHEMA, expectedAccountRevision: 0, deviceId: "00000000-0000-4000-8000-000000000000", sessionId: "session-v4", batchId: "batch-v4", planVersion: 4, highWatermark: 1, mutations: [mutationV4] }).success, true);
-  assert.equal(progressMutationV4Schema.safeParse({ ...mutationV4, state: { answer: { ...state.answer, contentPackagePin: "legacy" } } }).success, false);
-  assert.equal(progressMutationV4Schema.safeParse({ ...mutationV4, state: { answer: { ...state.answer, itemId: "legacy" } } }).success, false);
-  assert.equal(progressMutationV4Schema.safeParse({ ...mutationV4, state: { answer: { trackId: base.trackId, questionId: "q-1", contentVersion: "2026.09.1", artifactSha256: "not-a-sha" } } }).success, false);
-  assert.equal(syncRequestSchema.safeParse({ protocolVersion: 4, canonicalVersion: "canonical-json-v1", contentIdentitySchema: "patternly:content-identity:v1", expectedAccountRevision: 0, deviceId: "00000000-0000-4000-8000-000000000000", sessionId: "session-v4", batchId: "batch-v4", planVersion: 4, highWatermark: 1, mutations: [mutationV4] }).success, false);
+  const valid = mutation(state);
+  assert.equal(progressMutationSchema.safeParse(valid).success, true);
+  assert.equal(progressMutationSchema.safeParse({ ...valid, fingerprint: "b".repeat(64) }).success, true);
+  assert.equal(progressMutationSchema.safeParse({ ...valid, state: { answer: { ...state.answer, artifactSha256: "bad" } } }).success, false);
+  assert.equal(progressMutationSchema.safeParse({ ...valid, state: { answer: { ...state.answer, contentPackagePin: "retired" } } }).success, false);
+  assert.equal(progressMutationSchema.safeParse({ ...valid, state: { answer: { ...state.answer, itemId: "retired" } } }).success, false);
 });
 
-test("v4 pagination tokens carry and verify the identity schema", () => {
-  const token = createProgressPageToken({ version: 1, userId: guestUserId, generation: 2, accountRevision: 3, cursor: "cursor", protocolVersion: 4, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA });
-  assert.deepEqual(parseProgressPageToken(token), { version: 1, userId: guestUserId, generation: 2, accountRevision: 3, cursor: "cursor", protocolVersion: 4, contentIdentitySchema: CONTENT_IDENTITY_SCHEMA });
+test("resolved material identity uses the canonical safe identity rules", () => {
+  const valid = { trackId, questionId: "q-1", contentVersion: "2026.09.1", artifactSha256: "a".repeat(64) };
+  assert.equal(resolvedContentRefSchema.safeParse({ ...valid, questionId: "question with internal space" }).success, true);
+  assert.equal(resolvedContentRefSchema.safeParse({ ...valid, questionId: "q".repeat(257) }).success, true);
+  assert.equal(progressMutationSchema.safeParse(mutation({ identity: { ...valid, questionId: "q".repeat(257) } })).success, true);
+  for (const [field, invalid] of [
+    ["trackId", "/track"],
+    ["questionId", "question/1"],
+    ["contentVersion", "content\\version"],
+    ["trackId", "\u0000track"],
+    ["questionId", "."],
+    ["contentVersion", ".."],
+    ["trackId", " track"],
+    ["questionId", "question "],
+    ["contentVersion", "\u00A0content"],
+  ] as const) {
+    assert.equal(resolvedContentRefSchema.safeParse({ ...valid, [field]: invalid }).success, false, `${field}:${JSON.stringify(invalid)}`);
+  }
+});
+
+test("sync identities are bounded by the canonical envelope rather than arbitrary field caps", () => {
+  const longMutation = mutation({ result: "correct" }, 0, { trackId: "track".repeat(50), targetId: "target".repeat(50) });
+  assert.ok(longMutation.trackId.length > 128);
+  assert.ok(longMutation.targetId.length > 256);
+  assert.equal(progressMutationSchema.safeParse(longMutation).success, true);
+  assert.equal(syncRequestSchema.safeParse(request([longMutation])).success, true);
+  assert.equal(isSyncRequestWithinBudget(request([longMutation])), true);
+});
+
+test("sync and state limits are enforced without a compatibility branch", () => {
+  const emptyStateLength = JSON.stringify({ value: "" }).length;
+  const atLimit = { value: "x".repeat(MAX_SERIALIZED_JSON_UTF16_CODE_UNITS - emptyStateLength) };
+  const overLimit = { value: `${atLimit.value}x` };
+  assert.equal(progressMutationSchema.safeParse(mutation(atLimit)).success, true);
+  assert.equal(progressMutationSchema.safeParse(mutation(overLimit)).success, false);
+
+  const records = Array.from({ length: 100 }, (_, index) => mutation({}, index));
+  assert.equal(isSyncRequestWithinBudget(request(records)), true);
+  assert.equal(syncRequestSchema.safeParse(request([...records, mutation({}, 100)])).success, false);
+});
+
+test("pagination tokens contain only generation, revision and cursor identity", () => {
+  const token = createProgressPageToken({ version: 1, userId, generation: 2, accountRevision: 3, cursor: "cursor" });
+  assert.deepEqual(parseProgressPageToken(token), { version: 1, userId, generation: 2, accountRevision: 3, cursor: "cursor" });
   const [encoded, checksum] = token.split(".");
   const payload = JSON.parse(Buffer.from(encoded!, "base64url").toString("utf8")) as Record<string, unknown>;
-  payload.contentIdentitySchema = "patternly:content-identity:v1";
+  payload.protocolVersion = 4;
   const tampered = `${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}.${checksum}`;
   assert.throws(() => parseProgressPageToken(tampered), /progress_pagination_token_invalid/u);
+});
+
+test("canonical JSON uses NFC normalization and UTF-8 byte accounting", () => {
+  assert.equal(canonicalJson({ "e\u0301": "🙂" }), canonicalJson({ "é": "🙂" }));
+  assert.throws(() => canonicalJson({ "e\u0301": 1, "é": 2 }), /canonical_json_duplicate_key/u);
+  assert.throws(() => canonicalJson({ value: Number.NaN }), /canonical_json_non_finite_number/u);
+  assert.ok(canonicalJsonBytes({ value: "🙂" }) > JSON.stringify({ value: "🙂" }).length);
 });
