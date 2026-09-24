@@ -2655,7 +2655,13 @@
             }
           },
           "401": {
-            "description": "Authentication required",
+            "description": "Authentication required or account inactive",
+            "x-patternly-error-codes": [
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
             "content": {
               "application/json": {
                 "schema": {
@@ -2678,7 +2684,7 @@
             }
           },
           "409": {
-            "description": "Generation or idempotency conflict",
+            "description": "Authorization-generation, transfer-generation, or idempotency conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -2739,6 +2745,22 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication rejected or account inactive",
+            "x-patternly-error-codes": [
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Transfer unavailable; account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
@@ -2753,7 +2775,7 @@
             }
           },
           "409": {
-            "description": "Duplicate, state, or idempotency conflict",
+            "description": "Authorization-generation, duplicate, state, or idempotency conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -2824,6 +2846,22 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication rejected or account inactive",
+            "x-patternly-error-codes": [
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Transfer unavailable; account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
@@ -2838,7 +2876,7 @@
             }
           },
           "409": {
-            "description": "Incomplete, stale, or mismatched seal",
+            "description": "Authorization-generation, incomplete, stale, or mismatched seal conflict",
             "content": {
               "application/json": {
                 "schema": {

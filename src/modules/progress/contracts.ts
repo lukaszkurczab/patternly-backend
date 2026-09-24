@@ -243,9 +243,9 @@ export interface ProgressStore {
   previewAdoption(userId: string, guestSnapshot: GuestMergeSnapshot): Promise<AdoptionPreview>;
   confirmAdoption(userId: string, expectedAuthorizationGeneration: number, deviceId: string, guestSnapshot: GuestMergeSnapshot, confirmation: GuestMergeConfirmation): Promise<AdoptionExecution>;
   applyBatch(userId: string, expectedAuthorizationGeneration: number, deviceId: string, expectedAccountRevision: number, mutations: readonly ProgressMutation[], metadata: SyncBatchMetadata): Promise<SyncBatchResult>;
-  startAdoptionTransfer(userId: string, input: AdoptionTransferStart): Promise<Readonly<Record<string, unknown>>>;
-  uploadAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferUpload): Promise<Readonly<Record<string, unknown>>>;
-  sealAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferSeal): Promise<Readonly<Record<string, unknown>>>;
+  startAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, input: AdoptionTransferStart): Promise<Readonly<Record<string, unknown>>>;
+  uploadAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, sessionId: string, input: AdoptionTransferUpload): Promise<Readonly<Record<string, unknown>>>;
+  sealAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, sessionId: string, input: AdoptionTransferSeal): Promise<Readonly<Record<string, unknown>>>;
   previewAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferPreviewRequest): Promise<Readonly<Record<string, unknown>>>;
   confirmAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferConfirm): Promise<Readonly<Record<string, unknown>>>;
   applyAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferApply): Promise<Readonly<Record<string, unknown>>>;

@@ -187,7 +187,15 @@ function requireStores(dependencies: ApplicationDependencies): BackendStores {
 
 function adoptionTransferErrorResponse(error: unknown, reply: FastifyReply): boolean {
   const message = error instanceof Error ? error.message : "internal_error";
-  if (!message.startsWith("adoption_transfer_") && !["active_session_adoption_blocked", "journal_recovery_required", "progress_fingerprint_mismatch", "goal_plan_bundle_invalid", "content_identity_schema_conflict"].includes(message)) return false;
+  if (!message.startsWith("adoption_transfer_") && !["active_session_adoption_blocked", "journal_recovery_required", "progress_fingerprint_mismatch", "goal_plan_bundle_invalid", "content_identity_schema_conflict", "authorization_generation_conflict", "account_deleted"].includes(message)) return false;
+  if (message === "authorization_generation_conflict") {
+    reply.code(409).send({ error: { code: message } });
+    return true;
+  }
+  if (message === "account_deleted") {
+    reply.code(401).send({ error: { code: message } });
+    return true;
+  }
   const notFound = message === "adoption_transfer_not_found";
   const tooLarge = message === "adoption_transfer_record_limit" || message.includes("too_large");
   const conflict = message.includes("conflict") || message.includes("mismatch") || message.includes("stale") || message.includes("precondition") || message.includes("duplicate") || message.includes("generation") || message.includes("cursor") || message.includes("incomplete") || message.includes("sequence");
@@ -840,7 +848,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     const parsed = adoptionTransferStartSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });
     try {
-      return reply.code(200).send(await requireStores(dependencies).progress.startAdoptionTransfer(request.userId!, parsed.data));
+      return reply.code(200).send(await requireStores(dependencies).progress.startAdoptionTransfer(request.userId!, request.expectedAuthorizationGeneration!, parsed.data));
     } catch (error) {
       if (adoptionTransferErrorResponse(error, reply)) return;
       throw error;
@@ -852,7 +860,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     const parsed = adoptionTransferUploadSchema.safeParse(request.body);
     if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
     try {
-      return reply.code(200).send(await requireStores(dependencies).progress.uploadAdoptionTransfer(request.userId!, sessionId, parsed.data));
+      return reply.code(200).send(await requireStores(dependencies).progress.uploadAdoptionTransfer(request.userId!, request.expectedAuthorizationGeneration!, sessionId, parsed.data));
     } catch (error) {
       if (adoptionTransferErrorResponse(error, reply)) return;
       throw error;
@@ -864,7 +872,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     const parsed = adoptionTransferSealSchema.safeParse(request.body);
     if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
     try {
-      return reply.code(200).send(await requireStores(dependencies).progress.sealAdoptionTransfer(request.userId!, sessionId, parsed.data));
+      return reply.code(200).send(await requireStores(dependencies).progress.sealAdoptionTransfer(request.userId!, request.expectedAuthorizationGeneration!, sessionId, parsed.data));
     } catch (error) {
       if (adoptionTransferErrorResponse(error, reply)) return;
       throw error;

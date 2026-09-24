@@ -377,7 +377,7 @@ export class FirestoreProgressStore implements ProgressStore {
     });
   }
 
-  public async startAdoptionTransfer(userId: string, input: AdoptionTransferStart): Promise<Readonly<Record<string, unknown>>> {
+  public async startAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, input: AdoptionTransferStart): Promise<Readonly<Record<string, unknown>>> {
     const parsed = adoptionTransferStartSchema.parse(input);
     const idempotencyKey = parsed.idempotencyKey;
     const sessionId = parsed.sessionId ?? `transfer_${createHash("sha256").update(idempotencyKey, "utf8").digest("hex").slice(0, 48)}`;
@@ -389,7 +389,8 @@ export class FirestoreProgressStore implements ProgressStore {
     return this.db.runTransaction(async (transaction) => {
       const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
       const user = await transaction.get(userRef);
-      if (!user.exists || asRecord(user.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
+      if (!user.exists) throw new Error("account_deleted");
+      assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
       const metadata = await transaction.get(metadataRef);
       const existing = await transaction.get(operation);
       const idempotency = await transaction.get(idempotencyRef);
@@ -417,7 +418,7 @@ export class FirestoreProgressStore implements ProgressStore {
     });
   }
 
-  public async uploadAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferUpload): Promise<Readonly<Record<string, unknown>>> {
+  public async uploadAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, sessionId: string, input: AdoptionTransferUpload): Promise<Readonly<Record<string, unknown>>> {
     const parsed = adoptionTransferUploadSchema.parse(input);
     const records = parsed.records.map((record) => adoptionTransferRecordSchema.parse(record));
     const fullKeys = records.map(adoptionTransferRecordKey);
@@ -429,6 +430,9 @@ export class FirestoreProgressStore implements ProgressStore {
     for (const record of records) if (adoptionRecordFingerprint(record) !== record.fingerprint) throw new Error("progress_fingerprint_mismatch");
     const operation = accountAdoptionRef(this.db, userId, sessionId);
     return this.db.runTransaction(async (transaction) => {
+      const user = await transaction.get(this.db.collection(COLLECTIONS.users).doc(userId));
+      if (!user.exists) throw new Error("account_deleted");
+      assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
       const operationSnapshot = await transaction.get(operation);
       if (!operationSnapshot.exists) throw new Error("adoption_transfer_not_found");
       const storedData = asRecord(operationSnapshot.data(), "adoption_transfer");
@@ -469,10 +473,13 @@ export class FirestoreProgressStore implements ProgressStore {
     });
   }
 
-  public async sealAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferSeal): Promise<Readonly<Record<string, unknown>>> {
+  public async sealAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, sessionId: string, input: AdoptionTransferSeal): Promise<Readonly<Record<string, unknown>>> {
     const parsed = adoptionTransferSealSchema.parse(input);
     const operation = accountAdoptionRef(this.db, userId, sessionId);
     const first = await this.db.runTransaction(async (transaction) => {
+      const user = await transaction.get(this.db.collection(COLLECTIONS.users).doc(userId));
+      if (!user.exists) throw new Error("account_deleted");
+      assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
       const snapshot = await transaction.get(operation);
       if (!snapshot.exists) throw new Error("adoption_transfer_not_found");
       const data = asRecord(snapshot.data(), "adoption_transfer");
@@ -502,6 +509,9 @@ export class FirestoreProgressStore implements ProgressStore {
     if (createAdoptionSnapshotSeal({ guestUserId: transfer.guestUserId, snapshotVersion: transfer.snapshotVersion, records, chunks }) !== parsed.snapshotFingerprint) throw new Error("adoption_transfer_snapshot_seal_mismatch");
     const sealed = sealAdoptionTransfer(Object.freeze({ ...transfer, records, chunks, recordCount: records.length, chunkCount: chunks.length }), { snapshotFingerprint: parsed.snapshotFingerprint, recordCount: parsed.recordCount, chunkCount: parsed.chunkCount, expectedState: "sealing", ...(parsed.idempotencyKey === undefined ? {} : { idempotencyKey: parsed.idempotencyKey }) });
     await this.db.runTransaction(async (transaction) => {
+      const user = await transaction.get(this.db.collection(COLLECTIONS.users).doc(userId));
+      if (!user.exists) throw new Error("account_deleted");
+      assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
       const current = await transaction.get(operation);
       if (!current.exists) throw new Error("adoption_transfer_not_found");
       const data = asRecord(current.data(), "adoption_transfer");
