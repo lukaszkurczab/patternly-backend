@@ -168,6 +168,7 @@ function securityProbeVerifier(): IdentityTokenVerifier {
         email: SECURITY_PROBE_NON_ADMIN_EMAIL,
         emailVerified: true,
         authTime: Math.floor(Date.now() / 1000),
+        authorizationGeneration: 1,
       });
     },
   };
@@ -180,7 +181,7 @@ function securityProbeAppCheckVerifier(): AppCheckTokenVerifier {
 function securityProbeStores(onRegistration?: (call: SecurityProbeRegistrationCall) => void): BackendStores {
   const users = {
     async resolveExistingUser() {
-      return { userId: SECURITY_PROBE_USER_ID };
+      return { userId: SECURITY_PROBE_USER_ID, authorizationGeneration: 1 };
     },
     async registerUser(identity: AuthenticatedIdentity, input: AccountRegistrationInput) {
       onRegistration?.(Object.freeze({ identity, input }));

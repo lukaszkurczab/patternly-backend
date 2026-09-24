@@ -823,7 +823,14 @@
             }
           },
           "401": {
-            "description": "Authentication required or account deleted",
+            "description": "Authentication required, account deleted, or authorization generation claim missing, malformed, or stale",
+            "x-patternly-error-codes": [
+              "authentication_required",
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
             "content": {
               "application/json": {
                 "schema": {
@@ -907,7 +914,14 @@
             }
           },
           "401": {
-            "description": "Authentication required",
+            "description": "Authentication or authorization generation claim is invalid",
+            "x-patternly-error-codes": [
+              "authentication_required",
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
             "content": {
               "application/json": {
                 "schema": {
@@ -920,6 +934,19 @@
             "description": "account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
               "account_not_found"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Account authorization generation changed after request authentication",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict"
             ],
             "content": {
               "application/json": {
@@ -1022,7 +1049,14 @@
             }
           },
           "401": {
-            "description": "Authentication required",
+            "description": "Authentication or authorization generation claim is invalid",
+            "x-patternly-error-codes": [
+              "authentication_required",
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
             "content": {
               "application/json": {
                 "schema": {
@@ -1035,6 +1069,21 @@
             "description": "account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
               "account_not_found"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Legal acceptance, purchase attempt, or account authorization generation conflict",
+            "x-patternly-error-codes": [
+              "legal_acceptance_required",
+              "purchase_attempt_active",
+              "authorization_generation_conflict"
             ],
             "content": {
               "application/json": {

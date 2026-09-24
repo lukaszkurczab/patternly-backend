@@ -31,12 +31,31 @@ export type AccountRegistrationResult = Readonly<{
 }>;
 
 export interface UserStore {
-  resolveExistingUser(identity: AuthenticatedIdentity): Promise<Readonly<{ userId: string }>>;
+  resolveExistingUser(identity: AuthenticatedIdentity): Promise<Readonly<{ userId: string; authorizationGeneration: number }>>;
   pinSessionAuthorization(identity: AuthenticatedIdentity): Promise<Readonly<{ firebaseSubject: string; authorizationGeneration: number }>>;
   registerUser(identity: AuthenticatedIdentity, input: AccountRegistrationInput): Promise<AccountRegistrationResult>;
   readProfile(userId: string): Promise<UserProfile | null>;
-  recordLegalAcceptance(userId: string, termsVersion: string): Promise<Readonly<{ termsVersion: string; acceptedAt: string }>>;
-  recordPurchaseConfirmation(userId: string, input: Readonly<{ confirmationId: string; termsVersion: string; productIdentifier: string; storefrontPrice: string; locale: "en" | "pl" }>): Promise<Readonly<{ confirmationId: string; acceptedAt: string; attemptExpiresAt: string }>>;
+  recordLegalAcceptance(userId: string, expectedAuthorizationGeneration: number, termsVersion: string): Promise<Readonly<{ termsVersion: string; acceptedAt: string }>>;
+  recordPurchaseConfirmation(userId: string, expectedAuthorizationGeneration: number, input: Readonly<{ confirmationId: string; termsVersion: string; productIdentifier: string; storefrontPrice: string; locale: "en" | "pl" }>): Promise<Readonly<{ confirmationId: string; acceptedAt: string; attemptExpiresAt: string }>>;
+}
+
+function storedAuthorizationGeneration(user: Readonly<Record<string, unknown>>): number {
+  const generation = user.authorizationGeneration === undefined ? 1 : user.authorizationGeneration;
+  if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation <= 0) throw new Error("authorization_generation_invalid");
+  return generation;
+}
+
+function activeAuthorizationGeneration(user: Readonly<Record<string, unknown>>): number {
+  if (user.deletedAt !== undefined || (user.authorizationState !== undefined && user.authorizationState !== "active")) throw new Error("account_deleted");
+  return storedAuthorizationGeneration(user);
+}
+
+function assertExpectedAuthorizationGeneration(user: Readonly<Record<string, unknown>>, expectedAuthorizationGeneration: number): void {
+  if (expectedAuthorizationGeneration === undefined) throw new Error("authorization_generation_required");
+  if (typeof expectedAuthorizationGeneration !== "number" || !Number.isSafeInteger(expectedAuthorizationGeneration) || expectedAuthorizationGeneration <= 0) throw new Error("authorization_generation_invalid");
+  const currentGeneration = storedAuthorizationGeneration(user);
+  if (currentGeneration !== expectedAuthorizationGeneration) throw new Error("authorization_generation_conflict");
+  if (user.deletedAt !== undefined || (user.authorizationState !== undefined && user.authorizationState !== "active")) throw new Error("account_deleted");
 }
 
 function isExpiredTombstone(value: unknown): boolean {
@@ -77,7 +96,7 @@ function profileFromStored(userId: string, storedUser: unknown, storedIdentity: 
 export class FirestoreUserStore implements UserStore {
   public constructor(private readonly db: Firestore, private readonly pseudonymKeyRing: PseudonymKeyRing) {}
 
-  public async resolveExistingUser(identity: AuthenticatedIdentity): Promise<Readonly<{ userId: string }>> {
+  public async resolveExistingUser(identity: AuthenticatedIdentity): Promise<Readonly<{ userId: string; authorizationGeneration: number }>> {
     const identityId = identityDocumentId(identity.provider, identity.subject);
     const identityRef = this.db.collection(COLLECTIONS.identityMappings).doc(identityId);
     const deletedIdentityRefs = this.pseudonymKeyRing.candidates(identity.provider, identity.subject).map(({ documentId }) => this.db.collection(COLLECTIONS.deletedIdentities).doc(documentId));
@@ -90,10 +109,14 @@ export class FirestoreUserStore implements UserStore {
       if (typeof existingUserId !== "string") throw new Error("identity_mapping_invalid");
       const existingUserRef = this.db.collection(COLLECTIONS.users).doc(existingUserId);
       const userSnapshot = await transaction.get(existingUserRef);
-      if (!userSnapshot.exists || asRecord(userSnapshot.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
-      return existingUserId;
+      if (!userSnapshot.exists) throw new Error("account_deleted");
+      const user = asRecord(userSnapshot.data(), "user");
+      const authorizationGeneration = activeAuthorizationGeneration(user);
+      if (identity.authorizationGeneration === undefined) throw new Error("authorization_generation_required");
+      if (identity.authorizationGeneration !== authorizationGeneration) throw new Error("authorization_generation_stale");
+      return Object.freeze({ userId: existingUserId, authorizationGeneration });
     }, { readOnly: true });
-    return Object.freeze({ userId: result });
+    return result;
   }
 
   public async pinSessionAuthorization(identity: AuthenticatedIdentity): Promise<Readonly<{ firebaseSubject: string; authorizationGeneration: number }>> {
@@ -206,13 +229,14 @@ export class FirestoreUserStore implements UserStore {
     });
   }
 
-  public async recordLegalAcceptance(userId: string, termsVersion: string): Promise<Readonly<{ termsVersion: string; acceptedAt: string }>> {
+  public async recordLegalAcceptance(userId: string, expectedAuthorizationGeneration: number, termsVersion: string): Promise<Readonly<{ termsVersion: string; acceptedAt: string }>> {
     const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
     const acceptanceRef = userRef.collection("legalAcceptances").doc(`terms-${termsVersion}`);
     const acceptedAt = now();
     const stored = await this.db.runTransaction(async (transaction) => {
       const [user, existing] = await transaction.getAll(userRef, acceptanceRef);
-      if (!user?.exists || asRecord(user.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
+      if (!user?.exists) throw new Error("account_deleted");
+      assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
       if (existing?.exists) return asRecord(existing.data(), "legal_acceptance");
       const evidence = { kind: "terms_and_minimum_age", termsVersion, minimumAgeConfirmed: 18, acceptedAt };
       transaction.create(acceptanceRef, evidence);
@@ -222,7 +246,7 @@ export class FirestoreUserStore implements UserStore {
     return Object.freeze({ termsVersion: String(stored.termsVersion), acceptedAt: asIsoString(stored.acceptedAt, "legal_acceptance_at") });
   }
 
-  public async recordPurchaseConfirmation(userId: string, input: Readonly<{ confirmationId: string; termsVersion: string; productIdentifier: string; storefrontPrice: string; locale: "en" | "pl" }>): Promise<Readonly<{ confirmationId: string; acceptedAt: string; attemptExpiresAt: string }>> {
+  public async recordPurchaseConfirmation(userId: string, expectedAuthorizationGeneration: number, input: Readonly<{ confirmationId: string; termsVersion: string; productIdentifier: string; storefrontPrice: string; locale: "en" | "pl" }>): Promise<Readonly<{ confirmationId: string; acceptedAt: string; attemptExpiresAt: string }>> {
     const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
     const confirmationRef = userRef.collection("purchaseConfirmations").doc(input.confirmationId);
     const activeAttemptRef = userRef.collection("purchaseAttempts").doc("active");
@@ -231,7 +255,10 @@ export class FirestoreUserStore implements UserStore {
     const evidence = { ...input, billingPeriod: "P1M", autoRenews: true, trialOffered: false, immediateStartRequested: true, acceptedAt };
     const result = await this.db.runTransaction(async (transaction) => {
       const [user, existing, activeAttempt] = await transaction.getAll(userRef, confirmationRef, activeAttemptRef);
-      if (!user?.exists || asRecord(user.data(), "user").acceptedTermsVersion !== input.termsVersion) throw new Error("legal_acceptance_required");
+      if (!user?.exists) throw new Error("account_deleted");
+      const userData = asRecord(user.data(), "user");
+      assertExpectedAuthorizationGeneration(userData, expectedAuthorizationGeneration);
+      if (userData.acceptedTermsVersion !== input.termsVersion) throw new Error("legal_acceptance_required");
       if (existing?.exists) {
         const data = asRecord(existing.data(), "purchase_confirmation");
         const storedAcceptedAt = asTimestamp(data.acceptedAt, "purchase_confirmation_at");

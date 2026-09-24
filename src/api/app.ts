@@ -34,6 +34,7 @@ declare module "fastify" {
     authenticatedEmailVerified: boolean | undefined;
     authenticatedIdentity: AuthenticatedIdentity | undefined;
     authTime: number | undefined;
+    expectedAuthorizationGeneration: number | undefined;
   }
   interface FastifyInstance {
     patternlyRouteInventory: RuntimeRouteDescriptor[];
@@ -77,7 +78,8 @@ const authErrorStatus = (error: unknown): number => {
   if (message === "authentication_not_configured") return 503;
   if (message === "firestore_not_ready") return 503;
   if (message === "account_not_found") return 404;
-  if (message === "authentication_required" || message === "account_deleted" || message.startsWith("firebase_")) return 401;
+  if (message === "authentication_required" || message === "account_deleted" || message === "authorization_generation_required" || message === "authorization_generation_invalid" || message === "authorization_generation_stale" || message === "firebase_authorization_generation_invalid" || message.startsWith("firebase_")) return 401;
+  if (message === "authorization_generation_conflict") return 409;
   return 500;
 };
 
@@ -104,6 +106,10 @@ const errorCode = (error: unknown): string => {
   if (message === "authentication_required") return "authentication_required";
   if (message === "authentication_not_configured") return "authentication_not_configured";
   if (message === "recent_reauthentication_required") return "recent_reauthentication_required";
+  if (message === "authorization_generation_required") return "authorization_generation_required";
+  if (message === "authorization_generation_invalid" || message === "firebase_authorization_generation_invalid") return "authorization_generation_invalid";
+  if (message === "authorization_generation_stale") return "authorization_generation_stale";
+  if (message === "authorization_generation_conflict") return "authorization_generation_conflict";
   if (message === "recovery_code_invalid") return "recovery_code_invalid";
   if (message === "recovery_code_used") return "recovery_code_used";
   if (message === "account_deleted") return "account_deleted";
@@ -224,10 +230,11 @@ async function protect(request: FastifyRequest, reply: FastifyReply, dependencie
     request.authenticatedEmail = authenticated.identity.email;
     request.authenticatedEmailVerified = authenticated.identity.emailVerified;
     request.authTime = authenticated.authTime;
+    request.expectedAuthorizationGeneration = authenticated.expectedAuthorizationGeneration;
   } catch (error) {
     const status = authErrorStatus(error);
     const message = error instanceof Error ? error.message : "";
-    const code = message === "account_deleted" || message === "account_not_found"
+    const code = message === "account_deleted" || message === "account_not_found" || message.startsWith("authorization_generation_") || message === "firebase_authorization_generation_invalid"
       ? errorCode(error)
       : status === 401 ? "authentication_required" : errorCode(error);
     reply.code(status).send({ error: { code } });
@@ -512,17 +519,25 @@ export function buildApplication(dependencies: ApplicationDependencies) {
   app.post("/v1/legal-acceptances", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const parsed = z.object({ termsVersion: z.string().regex(/^[A-Za-z0-9._-]{1,80}$/u), minimumAgeConfirmed: z.literal(18) }).strict().safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
-    const acceptance = await requireStores(dependencies).users.recordLegalAcceptance(request.userId!, parsed.data.termsVersion);
-    return reply.code(201).send({ acceptance });
+    try {
+      const acceptance = await requireStores(dependencies).users.recordLegalAcceptance(request.userId!, request.expectedAuthorizationGeneration!, parsed.data.termsVersion);
+      return reply.code(201).send({ acceptance });
+    } catch (error) {
+      if (error instanceof Error && error.message === "authorization_generation_conflict") return reply.code(409).send({ error: { code: error.message } });
+      if (error instanceof Error && (error.message === "account_deleted" || error.message === "authorization_generation_required" || error.message === "authorization_generation_invalid")) return reply.code(401).send({ error: { code: error.message } });
+      throw error;
+    }
   });
 
   app.post("/v1/purchase-confirmations", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const parsed = z.object({ confirmationId: z.string().uuid(), termsVersion: z.string().regex(/^[A-Za-z0-9._-]{1,80}$/u), productIdentifier: z.string().trim().min(1).max(200), storefrontPrice: z.string().trim().min(1).max(80), locale: z.enum(["en", "pl"]), immediateStartRequested: z.literal(true) }).strict().safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     try {
-      const confirmation = await requireStores(dependencies).users.recordPurchaseConfirmation(request.userId!, parsed.data);
+      const confirmation = await requireStores(dependencies).users.recordPurchaseConfirmation(request.userId!, request.expectedAuthorizationGeneration!, parsed.data);
       return reply.code(201).send({ confirmation });
     } catch (error) {
+      if (error instanceof Error && error.message === "authorization_generation_conflict") return reply.code(409).send({ error: { code: error.message } });
+      if (error instanceof Error && (error.message === "account_deleted" || error.message === "authorization_generation_required" || error.message === "authorization_generation_invalid")) return reply.code(401).send({ error: { code: error.message } });
       if (error instanceof Error && error.message === "legal_acceptance_required") return reply.code(409).send({ error: { code: "legal_acceptance_required" } });
       if (error instanceof Error && error.message === "purchase_attempt_active") return reply.code(409).send({ error: { code: "purchase_attempt_active" } });
       throw error;

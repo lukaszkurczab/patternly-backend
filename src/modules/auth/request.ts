@@ -3,7 +3,7 @@ import type { IdentityTokenVerifier } from "../../infrastructure/firebase/verifi
 import type { AuthenticatedIdentity } from "./contracts.js";
 
 export type IdentityResolver = Readonly<{
-  resolveExistingUser(identity: AuthenticatedIdentity): Promise<Readonly<{ userId: string }>>;
+  resolveExistingUser(identity: AuthenticatedIdentity): Promise<Readonly<{ userId: string; authorizationGeneration: number }>>;
 }>;
 
 export async function authenticateIdentity(
@@ -22,8 +22,8 @@ export async function authenticateRequest(
   request: FastifyRequest,
   verifier: IdentityTokenVerifier | null,
   resolver: IdentityResolver,
-): Promise<Readonly<{ identity: AuthenticatedIdentity; userId: string; authTime: number }>> {
+): Promise<Readonly<{ identity: AuthenticatedIdentity; userId: string; authTime: number; expectedAuthorizationGeneration: number }>> {
   const authenticated = await authenticateIdentity(request, verifier);
   const user = await resolver.resolveExistingUser(authenticated.identity);
-  return Object.freeze({ ...authenticated, userId: user.userId });
+  return Object.freeze({ ...authenticated, userId: user.userId, expectedAuthorizationGeneration: user.authorizationGeneration });
 }

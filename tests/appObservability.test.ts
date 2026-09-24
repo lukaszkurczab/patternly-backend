@@ -23,6 +23,7 @@ const identity = Object.freeze({
   email: "private@example.com",
   emailVerified: true,
   authTime: Math.floor(Date.now() / 1000),
+  authorizationGeneration: 1,
 });
 
 function application(progressOverrides: Partial<ProgressStore>, logs: string[], appCheckConfigured = true) {
@@ -35,7 +36,7 @@ function application(progressOverrides: Partial<ProgressStore>, logs: string[], 
     ...progressOverrides,
   } as unknown as ProgressStore;
   const stores = {
-    users: { resolveExistingUser: async () => ({ userId: "server-user" }) },
+    users: { resolveExistingUser: async () => ({ userId: "server-user", authorizationGeneration: 1 }) },
     progress,
   } as unknown as BackendStores;
   return buildApplication({

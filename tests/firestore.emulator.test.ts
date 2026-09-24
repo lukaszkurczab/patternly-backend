@@ -70,6 +70,116 @@ test("Firebase verifier preserves an optional positive authorization generation 
   await assert.rejects(verifier.verify(malformed.idToken), { message: "firebase_authorization_generation_invalid" });
 });
 
+test("account guards require a current signed authorization generation while optional bearer stays guest without a token", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const appCheck = { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const currentHeaders = { ...appCheck, authorization: `Bearer ${auth.idToken}` };
+  assert.equal((await context.app.inject({ method: "GET", url: "/v1/me", headers: currentHeaders })).statusCode, 200);
+  const userRef = firestore().collection(COLLECTIONS.users).doc(auth.userId);
+  await userRef.update({ authorizationGeneration: FieldValue.delete(), authorizationState: "active" });
+  assert.equal((await context.app.inject({ method: "GET", url: "/v1/me", headers: currentHeaders })).statusCode, 200);
+  await userRef.update({ authorizationState: "rotating" });
+  const inactiveLegacy = await context.app.inject({ method: "GET", url: "/v1/me", headers: currentHeaders });
+  assert.equal(inactiveLegacy.statusCode, 401);
+  assert.deepEqual(inactiveLegacy.json(), { error: { code: "account_deleted" } });
+  await userRef.update({ authorizationState: "active", authorizationGeneration: 1 });
+
+  const claimless = await setAuthCustomClaimsAndSignIn(auth, {});
+  const missing = await context.app.inject({ method: "GET", url: "/v1/me", headers: { ...appCheck, authorization: `Bearer ${claimless.idToken}` } });
+  assert.equal(missing.statusCode, 401);
+  assert.deepEqual(missing.json(), { error: { code: "authorization_generation_required" } });
+
+  const malformed = await setAuthCustomClaimsAndSignIn(auth, { authorizationGeneration: "1" });
+  const invalid = await context.app.inject({ method: "GET", url: "/v1/me", headers: { ...appCheck, authorization: `Bearer ${malformed.idToken}` } });
+  assert.equal(invalid.statusCode, 401);
+  assert.deepEqual(invalid.json(), { error: { code: "authorization_generation_invalid" } });
+
+  const stale = await setAuthCustomClaimsAndSignIn(auth, { authorizationGeneration: 2 });
+  const rejected = await context.app.inject({ method: "GET", url: "/v1/me", headers: { ...appCheck, authorization: `Bearer ${stale.idToken}` } });
+  assert.equal(rejected.statusCode, 401);
+  assert.deepEqual(rejected.json(), { error: { code: "authorization_generation_stale" } });
+
+  const anonymous = await context.app.inject({
+    method: "POST", url: "/v1/content/reports", headers: appCheck,
+    payload: reportBody("ce938e14-6a1b-4f33-b27e-646b492b1a11"),
+  });
+  assert.equal(anonymous.statusCode, 201);
+  const staleOptional = await context.app.inject({
+    method: "POST", url: "/v1/content/reports", headers: { ...appCheck, authorization: `Bearer ${stale.idToken}` },
+    payload: reportBody("ce938e14-6a1b-4f33-b27e-646b492b1a12"),
+  });
+  assert.equal(staleOptional.statusCode, 401);
+  assert.deepEqual(staleOptional.json(), { error: { code: "authorization_generation_stale" } });
+});
+
+test("legal acceptance and purchase confirmation transactions reject a generation rotated after the request guard", async () => {
+  async function appThatChangesAccountBefore(method: "recordLegalAcceptance" | "recordPurchaseConfirmation", userId: string, changes: Readonly<Record<string, unknown>> = { authorizationGeneration: 2, authorizationState: "rotating" }) {
+    const originalUsers = context.stores.users;
+    let rotated = false;
+    const users = new Proxy(originalUsers, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property === method && typeof value === "function") {
+          return async (...args: unknown[]) => {
+            if (!rotated) {
+              rotated = true;
+              await firestore().collection(COLLECTIONS.users).doc(userId).update(changes);
+            }
+            return value.apply(target, args);
+          };
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    return buildApplication({
+      environment: testEnvironment,
+      firestore: null,
+      verifier: createFirebaseTokenVerifier(testEnvironment),
+      appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
+      stores: { ...context.stores, users },
+    });
+  }
+
+  const legalAuth = await createRegisteredAuthUser(context);
+  const legalApp = await appThatChangesAccountBefore("recordLegalAcceptance", legalAuth.userId);
+  const legalResponse = await legalApp.inject({
+    method: "POST", url: "/v1/legal-acceptances",
+    headers: { authorization: `Bearer ${legalAuth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
+    payload: { termsVersion: "generation-race-legal", minimumAgeConfirmed: 18 },
+  });
+  await legalApp.close();
+  assert.equal(legalResponse.statusCode, 409);
+  assert.deepEqual(legalResponse.json(), { error: { code: "authorization_generation_conflict" } });
+  const legalEvidence = await firestore().collection(COLLECTIONS.users).doc(legalAuth.userId).collection("legalAcceptances").doc("terms-generation-race-legal").get();
+  assert.equal(legalEvidence.exists, false);
+
+  const inactiveAuth = await createRegisteredAuthUser(context);
+  const inactiveApp = await appThatChangesAccountBefore("recordLegalAcceptance", inactiveAuth.userId, { authorizationState: "deleting" });
+  const inactiveResponse = await inactiveApp.inject({
+    method: "POST", url: "/v1/legal-acceptances",
+    headers: { authorization: `Bearer ${inactiveAuth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
+    payload: { termsVersion: "generation-race-inactive", minimumAgeConfirmed: 18 },
+  });
+  await inactiveApp.close();
+  assert.equal(inactiveResponse.statusCode, 401);
+  assert.deepEqual(inactiveResponse.json(), { error: { code: "account_deleted" } });
+  const inactiveEvidence = await firestore().collection(COLLECTIONS.users).doc(inactiveAuth.userId).collection("legalAcceptances").doc("terms-generation-race-inactive").get();
+  assert.equal(inactiveEvidence.exists, false);
+
+  const purchaseAuth = await createRegisteredAuthUser(context);
+  const purchasePayload = { confirmationId: "00000000-0000-4000-8000-000000000091", termsVersion: "test-baseline-v1", productIdentifier: "com.lkurczab.patternly.premium.monthly", storefrontPrice: "29,99 zł", locale: "pl", immediateStartRequested: true };
+  const purchaseHeaders = { authorization: `Bearer ${purchaseAuth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const first = await context.app.inject({ method: "POST", url: "/v1/purchase-confirmations", headers: purchaseHeaders, payload: purchasePayload });
+  assert.equal(first.statusCode, 201);
+  const purchaseApp = await appThatChangesAccountBefore("recordPurchaseConfirmation", purchaseAuth.userId);
+  const replay = await purchaseApp.inject({ method: "POST", url: "/v1/purchase-confirmations", headers: purchaseHeaders, payload: purchasePayload });
+  await purchaseApp.close();
+  assert.equal(replay.statusCode, 409);
+  assert.deepEqual(replay.json(), { error: { code: "authorization_generation_conflict" } });
+  const confirmations = await firestore().collection(COLLECTIONS.users).doc(purchaseAuth.userId).collection("purchaseConfirmations").get();
+  assert.equal(confirmations.size, 1);
+});
+
 test("a new Firebase identity cannot create a Patternly account through bearer or optional-bearer routes", async () => {
   const auth = await createAuthUser();
   const bearer = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });

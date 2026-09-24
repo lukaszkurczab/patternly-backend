@@ -44,10 +44,10 @@ function application(store: FirestoreDataExportStore, subject = "firebase-subjec
   return buildApplication({
     environment,
     firestore: null,
-    verifier: { verify: async () => ({ provider: "firebase", subject, email: `${currentUser}@example.com`, emailVerified: true, authTime: currentAuthTime }) },
+    verifier: { verify: async () => ({ provider: "firebase", subject, email: `${currentUser}@example.com`, emailVerified: true, authTime: currentAuthTime, authorizationGeneration: 1 }) },
     appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
     stores: {
-      users: { resolveExistingUser: async () => ({ userId: currentUser }) },
+      users: { resolveExistingUser: async () => ({ userId: currentUser, authorizationGeneration: 1 }) },
       dataExport: store,
     } as never,
   });

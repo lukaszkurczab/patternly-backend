@@ -153,7 +153,8 @@ export async function registerAuthUser(
   if (response.statusCode !== 201 && response.statusCode !== 200) throw new Error(`account_registration_failed:${response.statusCode}:${response.body}`);
   const userId = response.json().registration?.user?.id;
   if (typeof userId !== "string") throw new Error("account_registration_response_invalid");
-  return Object.freeze({ ...user, userId });
+  const session = await setAuthCustomClaimsAndSignIn(user, { authorizationGeneration: 1 });
+  return Object.freeze({ ...session, userId });
 }
 
 export async function createRegisteredAuthUser(
