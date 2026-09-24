@@ -2,6 +2,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { createHash, randomUUID } from "node:crypto";
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
+import { activeAuthorizationGeneration } from "../auth/authorizationGeneration.js";
 import { revenueCatEventSchema, reduceRevenueCatEvent, type RevenueCatEvent } from "./revenuecatWebhook.js";
 
 export type PurchaseReceiptDelivery = Readonly<{ userId: string; receiptId: string; deliveryClaimId: string; recipient: string; transactionId: string; confirmationId: string; productIdentifier: string; storefrontPrice: string; locale: "en" | "pl"; termsVersion: string; immediateStartRequested: true }>;
@@ -15,6 +16,18 @@ function strictlyNewer(timestamp: number, eventId: string, snapshot: { exists: b
   const currentTimestamp = snapshot.get("eventTimestampMs"); const currentEventId = snapshot.get("eventId");
   return typeof currentTimestamp !== "number" || timestamp > currentTimestamp || (timestamp === currentTimestamp && typeof currentEventId === "string" && eventId > currentEventId);
 }
+function hasActiveAuthorization(snapshot: { exists: boolean; data(): Record<string, unknown> | undefined }): boolean {
+  if (!snapshot.exists) return false;
+  const user = snapshot.data();
+  if (!user) return false;
+  try {
+    activeAuthorizationGeneration(user);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export class FirestoreRevenueCatWebhookStore implements RevenueCatWebhookStore {
   constructor(private readonly db: Firestore) {}
   async process(event: RevenueCatEvent, appId: string, expectedEnvironment: "PRODUCTION" | "SANDBOX", entitlementId: string, productId: string): Promise<RevenueCatWebhookResult> {
@@ -32,16 +45,21 @@ export class FirestoreRevenueCatWebhookStore implements RevenueCatWebhookStore {
       const existing = await tx.get(eventRef);
       if (existing.exists) {
         const receiptId = existing.get("receiptId");
-        if (typeof receiptId === "string" && userRef) {
-          const receiptRef = userRef.collection("purchaseReceipts").doc(receiptId);
-          const receipt = await tx.get(receiptRef);
-          const deliveryStatus = receipt.get("deliveryStatus");
-          const leaseUntil = receipt.get("deliveryLeaseUntil");
-          const leaseExpired = !(leaseUntil instanceof Timestamp) || leaseUntil.toMillis() <= Date.now();
-          if (receipt.exists && deliveryStatus !== "sent" && (deliveryStatus !== "sending" || leaseExpired)) {
-            const deliveryClaimId = randomUUID();
-            tx.set(receiptRef, { deliveryStatus: "sending", deliveryClaimId, deliveryLeaseUntil: Timestamp.fromMillis(Date.now() + 5 * 60_000), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-            return { outcome: "processed", duplicate: true, receipt: this.receiptDelivery(receiptId, { ...asReceipt(receipt.data()), deliveryClaimId }) };
+        const receiptUserId = existing.get("userId");
+        if (typeof receiptId === "string" && typeof receiptUserId === "string" && receiptUserId.length <= 128) {
+          const receiptUserRef = this.db.collection(COLLECTIONS.users).doc(receiptUserId);
+          const receiptUser = await tx.get(receiptUserRef);
+          if (hasActiveAuthorization(receiptUser)) {
+            const receiptRef = receiptUserRef.collection("purchaseReceipts").doc(receiptId);
+            const receipt = await tx.get(receiptRef);
+            const deliveryStatus = receipt.get("deliveryStatus");
+            const leaseUntil = receipt.get("deliveryLeaseUntil");
+            const leaseExpired = !(leaseUntil instanceof Timestamp) || leaseUntil.toMillis() <= Date.now();
+            if (receipt.exists && deliveryStatus !== "sent" && (deliveryStatus !== "sending" || leaseExpired)) {
+              const deliveryClaimId = randomUUID();
+              tx.set(receiptRef, { deliveryStatus: "sending", deliveryClaimId, deliveryLeaseUntil: Timestamp.fromMillis(Date.now() + 5 * 60_000), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+              return { outcome: "processed", duplicate: true, receipt: this.receiptDelivery(receiptId, { ...asReceipt(receipt.data()), deliveryClaimId }) };
+            }
           }
         }
         return { outcome: existing.get("outcome") === "processed" ? "processed" : "ignored", duplicate: true };
@@ -59,23 +77,27 @@ export class FirestoreRevenueCatWebhookStore implements RevenueCatWebhookStore {
           Promise.all(fromUserRefs.map((ref) => tx.get(ref))), Promise.all(toUserRefs.map((ref) => tx.get(ref))),
           Promise.all(fromEntitlementRefs.map((ref) => tx.get(ref))), Promise.all(toEntitlementRefs.map((ref) => tx.get(ref))),
         ]);
-        const existingTargets = toUsers.map((user, index) => ({ user, target: targets[index]!, ref: toEntitlementRefs[index]! })).filter(({ user }) => user.exists);
-        const activeSources = fromUsers.map((user, index) => ({ user, source: sources[index]!, ref: fromEntitlementRefs[index]! })).filter(({ user, source }) => user.exists && source.exists && source.get("status") === "active");
-        const ordered = [...activeSources.map(({ source }) => source), ...existingTargets.map(({ target }) => target)].every((snapshot) => strictlyNewer(parsed.event_timestamp_ms, parsed.id, snapshot));
-        const canTransfer = existingTargets.length === 1 && activeSources.length > 0 && ordered;
+        const targetCandidates = toUsers.map((user, index) => ({ user, target: targets[index]!, ref: toEntitlementRefs[index]! })).filter(({ user }) => user.exists);
+        const activeTargets = targetCandidates.filter(({ user }) => hasActiveAuthorization(user));
+        const sourceCandidates = fromUsers.map((user, index) => ({ user, source: sources[index]!, ref: fromEntitlementRefs[index]! })).filter(({ user, source }) => user.exists && source.exists && source.get("status") === "active");
+        const activeSources = sourceCandidates.filter(({ user }) => hasActiveAuthorization(user));
+        const allSourcesActive = activeSources.length === sourceCandidates.length;
+        const ordered = [...activeSources.map(({ source }) => source), ...activeTargets.map(({ target }) => target)].every((snapshot) => strictlyNewer(parsed.event_timestamp_ms, parsed.id, snapshot));
+        const canTransfer = targetCandidates.length === 1 && activeTargets.length === 1 && allSourcesActive && activeSources.length > 0 && ordered;
         tx.create(eventRef, { appId, environment: expectedEnvironment, eventId: parsed.id, eventTimestampMs: parsed.event_timestamp_ms, outcome: canTransfer ? "processed" : "ignored", processedAt: FieldValue.serverTimestamp() });
         if (!canTransfer) return { outcome: "ignored", duplicate: false };
         const common = { entitlement: entitlementId, source: "revenuecat", updatedAt: Timestamp.fromMillis(parsed.event_timestamp_ms), eventTimestampMs: parsed.event_timestamp_ms, eventId: parsed.id };
         for (const source of activeSources) tx.set(source.ref, { ...common, status: "revoked", willRenew: false }, { merge: true });
-        const source = activeSources[0]!.source; const target = existingTargets[0]!;
+        const source = activeSources[0]!.source; const target = activeTargets[0]!;
         tx.set(target.ref, { ...common, status: "active", expiresAt: source.get("expiresAt") ?? null, willRenew: source.get("willRenew") !== false }, { merge: true });
         return { outcome: "processed", duplicate: false };
       }
       const user = trusted && projection && userRef ? await tx.get(userRef) : null;
+      const activeUser = user !== null && hasActiveAuthorization(user);
       const current = user?.exists && entitlementRef ? await tx.get(entitlementRef) : null;
       let receipt: PurchaseReceiptDelivery | undefined;
       let receiptId: string | undefined;
-      if (parsed.type === "INITIAL_PURCHASE" && trusted && user?.exists && userRef && activeAttemptRef && typeof parsed.transaction_id === "string" && typeof parsed.purchased_at_ms === "number") {
+      if (parsed.type === "INITIAL_PURCHASE" && trusted && activeUser && userRef && activeAttemptRef && typeof parsed.transaction_id === "string" && typeof parsed.purchased_at_ms === "number") {
         const attempt = await tx.get(activeAttemptRef);
         if (attempt.exists && attempt.get("consumedAt") == null && attempt.get("productIdentifier") === parsed.product_id) {
           const expiresAt = attempt.get("expiresAt");
@@ -101,7 +123,7 @@ export class FirestoreRevenueCatWebhookStore implements RevenueCatWebhookStore {
         }
       }
       const newer = current ? strictlyNewer(parsed.event_timestamp_ms, parsed.id, current) : true;
-      const willProject = Boolean(trusted && projection && user?.exists && entitlementRef && newer);
+      const willProject = Boolean(trusted && projection && activeUser && entitlementRef && newer);
       const outcome = willProject ? "processed" : "ignored";
       tx.create(eventRef, { appId, environment: expectedEnvironment, eventId: parsed.id, eventTimestampMs: parsed.event_timestamp_ms, outcome, ...(receiptId ? { receiptId, userId } : {}), processedAt: FieldValue.serverTimestamp() });
       if (willProject && entitlementRef && projection) tx.set(entitlementRef, {
@@ -115,10 +137,12 @@ export class FirestoreRevenueCatWebhookStore implements RevenueCatWebhookStore {
   }
 
   public async markReceiptDelivery(userId: string, receiptId: string, deliveryClaimId: string, status: "sent" | "failed"): Promise<boolean> {
-    const ref = this.db.collection(COLLECTIONS.users).doc(userId).collection("purchaseReceipts").doc(receiptId);
+    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+    const ref = userRef.collection("purchaseReceipts").doc(receiptId);
     return this.db.runTransaction(async (transaction) => {
+      const user = await transaction.get(userRef);
       const snapshot = await transaction.get(ref);
-      if (!snapshot.exists || snapshot.get("deliveryStatus") !== "sending" || snapshot.get("deliveryClaimId") !== deliveryClaimId) return false;
+      if (!hasActiveAuthorization(user) || !snapshot.exists || snapshot.get("deliveryStatus") !== "sending" || snapshot.get("deliveryClaimId") !== deliveryClaimId) return false;
       transaction.set(ref, { deliveryStatus: status, deliveryClaimId: null, deliveryLeaseUntil: null, updatedAt: FieldValue.serverTimestamp(), ...(status === "sent" ? { deliveredAt: FieldValue.serverTimestamp() } : {}) }, { merge: true });
       return true;
     });

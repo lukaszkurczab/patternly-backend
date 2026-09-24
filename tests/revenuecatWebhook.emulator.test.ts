@@ -55,6 +55,86 @@ test("a trusted paid purchase grants Premium even when durable-receipt evidence 
   assert.equal((await db.collection("users").doc(userId).collection("entitlements").doc("premium").get()).get("status"), "active");
 });
 
+test("inactive, deleted, and missing purchase targets are ignored without receipts or entitlement writes", async () => {
+  const db = firestore();
+  const inactiveId = "revenuecat-inactive-purchase";
+  const inactiveConfirmation = "confirmation-inactive";
+  await db.collection("users").doc(inactiveId).set({ authorizationState: "deleting", contactEmail: "inactive@example.com", contactEmailVerified: true });
+  await db.collection("users").doc(inactiveId).collection("purchaseConfirmations").doc(inactiveConfirmation).set({ confirmationId: inactiveConfirmation, productIdentifier: "monthly", storefrontPrice: "29,99 zł", locale: "pl", termsVersion: "2026-09-01" });
+  await db.collection("users").doc(inactiveId).collection("purchaseAttempts").doc("active").set({ confirmationId: inactiveConfirmation, productIdentifier: "monthly", expiresAt: Timestamp.fromMillis(20_000), consumedAt: null });
+  const store = new FirestoreRevenueCatWebhookStore(db);
+
+  const inactive = await store.process(event("inactive-purchase", "INITIAL_PURCHASE", 1_000, { app_user_id: inactiveId }), "app-1", "SANDBOX", "premium", "monthly");
+  assert.deepEqual(inactive, { outcome: "ignored", duplicate: false });
+  assert.equal((await db.collection("users").doc(inactiveId).collection("purchaseReceipts").get()).size, 0);
+  assert.equal((await db.collection("users").doc(inactiveId).collection("purchaseAttempts").doc("active").get()).get("consumedAt"), null);
+  assert.equal((await db.collection("users").doc(inactiveId).collection("entitlements").doc("premium").get()).exists, false);
+
+  const missing = await store.process(event("missing-purchase", "INITIAL_PURCHASE", 2_000, { app_user_id: "revenuecat-missing-user" }), "app-1", "SANDBOX", "premium", "monthly");
+  assert.deepEqual(missing, { outcome: "ignored", duplicate: false });
+  assert.equal((await db.collection("users").doc("revenuecat-missing-user").get()).exists, false);
+  assert.equal((await db.collection("revenueCatEvents").where("eventId", "==", "inactive-purchase").get()).docs[0]?.get("userId"), undefined);
+
+  const deletedId = "revenuecat-deleted-purchase";
+  await db.collection("users").doc(deletedId).set({ authorizationState: "deleted", deletedAt: Timestamp.now() });
+  assert.deepEqual(await store.process(event("deleted-purchase", "RENEWAL", 3_000, { app_user_id: deletedId }), "app-1", "SANDBOX", "premium", "monthly"), { outcome: "ignored", duplicate: false });
+  assert.equal((await db.collection("users").doc(deletedId).collection("entitlements").doc("premium").get()).exists, false);
+  assert.equal((await db.collection("revenueCatEvents").where("eventId", "==", "deleted-purchase").get()).docs[0]?.get("userId"), undefined);
+
+  const receiptCount = context.purchaseReceipts.length;
+  const response = await context.app.inject({ method: "POST", url: "/v1/webhooks/revenuecat", headers: { authorization: "Bearer test-revenuecat-secret" }, payload: { event: event("inactive-endpoint-purchase", "INITIAL_PURCHASE", 4_000, { app_user_id: inactiveId }) } });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().outcome, "ignored");
+  assert.equal(context.purchaseReceipts.length, receiptCount);
+});
+
+test("a duplicate purchase does not claim or reveal a receipt after its account becomes inactive", async () => {
+  const db = firestore(); await seedPurchasableUser();
+  const store = new FirestoreRevenueCatWebhookStore(db);
+  const original = await store.process(event("delete-before-retry", "INITIAL_PURCHASE", 1_000), "app-1", "SANDBOX", "premium", "monthly");
+  assert.ok(original.receipt);
+  const receiptRef = db.collection("users").doc(userId).collection("purchaseReceipts").doc(original.receipt.receiptId);
+  const before = (await receiptRef.get()).data();
+  await db.collection("users").doc(userId).update({ authorizationState: "deleted", deletedAt: Timestamp.now() });
+
+  assert.deepEqual(await store.process(event("delete-before-retry", "INITIAL_PURCHASE", 1_000), "app-1", "SANDBOX", "premium", "monthly"), { outcome: "processed", duplicate: true });
+  assert.deepEqual((await receiptRef.get()).data(), before);
+});
+
+test("RevenueCat transfer ignores inactive sources and targets without changing either entitlement", async () => {
+  const db = firestore(); const sourceId = "revenuecat-inactive-source"; const targetId = "revenuecat-inactive-target";
+  await seedPurchasableUser(sourceId); await db.collection("users").doc(targetId).set({ authorizationState: "deleting" });
+  const store = new FirestoreRevenueCatWebhookStore(db);
+  await store.process(event("inactive-transfer-source-purchase", "INITIAL_PURCHASE", 1_000, { app_user_id: sourceId }), "app-1", "SANDBOX", "premium", "monthly");
+  const sourceRef = db.collection("users").doc(sourceId).collection("entitlements").doc("premium");
+  const sourceBefore = (await sourceRef.get()).data();
+  const transferToInactive = revenueCatEventSchema.parse({ id: "transfer-to-inactive", type: "TRANSFER", event_timestamp_ms: 2_000, app_id: "app-1", environment: "SANDBOX", transferred_from: [sourceId], transferred_to: [targetId] });
+  assert.deepEqual(await store.process(transferToInactive, "app-1", "SANDBOX", "premium", "monthly"), { outcome: "ignored", duplicate: false });
+  assert.deepEqual((await sourceRef.get()).data(), sourceBefore);
+  assert.equal((await db.collection("users").doc(targetId).collection("entitlements").doc("premium").get()).exists, false);
+
+  const activeTargetId = "revenuecat-active-transfer-target";
+  await db.collection("users").doc(activeTargetId).set({ createdAt: Timestamp.now() });
+  await db.collection("users").doc(sourceId).update({ authorizationState: "deleting" });
+  const transferFromInactive = revenueCatEventSchema.parse({ id: "transfer-from-inactive", type: "TRANSFER", event_timestamp_ms: 3_000, app_id: "app-1", environment: "SANDBOX", transferred_from: [sourceId], transferred_to: [activeTargetId] });
+  assert.deepEqual(await store.process(transferFromInactive, "app-1", "SANDBOX", "premium", "monthly"), { outcome: "ignored", duplicate: false });
+  assert.deepEqual((await sourceRef.get()).data(), sourceBefore);
+  assert.equal((await db.collection("users").doc(activeTargetId).collection("entitlements").doc("premium").get()).exists, false);
+});
+
+test("receipt delivery cannot update a receipt after account deletion", async () => {
+  const db = firestore(); await seedPurchasableUser();
+  const store = new FirestoreRevenueCatWebhookStore(db);
+  const result = await store.process(event("delete-before-delivery", "INITIAL_PURCHASE", 1_000), "app-1", "SANDBOX", "premium", "monthly");
+  assert.ok(result.receipt);
+  const receiptRef = db.collection("users").doc(userId).collection("purchaseReceipts").doc(result.receipt.receiptId);
+  const before = (await receiptRef.get()).data();
+  await db.collection("users").doc(userId).update({ authorizationState: "deleted", deletedAt: Timestamp.now() });
+
+  assert.equal(await store.markReceiptDelivery(userId, result.receipt.receiptId, result.receipt.deliveryClaimId, "sent"), false);
+  assert.deepEqual((await receiptRef.get()).data(), before);
+});
+
 test("RevenueCat endpoint authenticates and materializes the Premium projection", async () => {
   {
     await seedPurchasableUser(userId, Date.now());
