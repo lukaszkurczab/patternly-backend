@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Firestore } from "firebase-admin/firestore";
+import { Timestamp, type Firestore } from "firebase-admin/firestore";
 
 import { buildApplication } from "../src/api/app.js";
 import { FirestoreProgressStore } from "../src/modules/progress/store.js";
 import { adoptionTransferRecordKey, createAdoptionSnapshotSeal, createAdoptionTransferChunkFingerprint } from "../src/modules/users/adoptionTransfer.js";
 import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
 import { createFirebaseTokenVerifier } from "../src/infrastructure/firebase/verifier.js";
+import { progressDocumentId } from "../src/infrastructure/firestore/paths.js";
 import { testEnvironment } from "./support.js";
 import { TEST_APP_CHECK_TOKEN, clearFirestore, createEmulatorContext, createRegisteredAuthUser, firestore, setAuthCustomClaimsAndSignIn, type EmulatorContext } from "./support.js";
 
@@ -76,6 +77,146 @@ test("canonical transfer persists chunks, applies one generation, and retries sa
   assert.equal(Object.hasOwn(operation!, "protocolVersion"), false);
   assert.equal(Object.hasOwn(operation!, "contentIdentitySchema"), false);
   assert.equal((await firestore().collection("users").doc(accountId).collection("progressGenerations").doc("1").collection("records").get()).size, records.length);
+});
+
+test("transfer decision lock and child rows recheck account authorization generation", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const sessionId = "rotation-transfer-confirm";
+  const records = [activeRecord("confirm-rotation-record", "confirm-rotation-track")];
+  const chunkBase = { chunkId: "chunk-0", index: 0, recordKeys: records.map(adoptionTransferRecordKey), bytes: 64 };
+  const chunk = { ...chunkBase, fingerprint: createAdoptionTransferChunkFingerprint(chunkBase) };
+  const start = await context.app.inject({ method: "POST", url: "/v1/account-data/adoption/transfer/start", headers, payload: { canonicalVersion, sessionId, idempotencyKey: sessionId, guestUserId, snapshotVersion: 1, expectedGeneration: 0, deviceId } });
+  assert.equal(start.statusCode, 200, JSON.stringify(start.json()));
+  const upload = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/upload`, headers, payload: { canonicalVersion, deviceId, chunk, records } });
+  assert.equal(upload.statusCode, 200, JSON.stringify(upload.json()));
+  const snapshotFingerprint = createAdoptionSnapshotSeal({ guestUserId, snapshotVersion: 1, records, chunks: [chunk] });
+  const seal = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/seal`, headers, payload: { canonicalVersion, deviceId, snapshotFingerprint, recordCount: records.length, chunkCount: 1 } });
+  assert.equal(seal.statusCode, 200, JSON.stringify(seal.json()));
+  const preview = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/preview`, headers, payload: { canonicalVersion, deviceId } });
+  assert.equal(preview.statusCode, 200, JSON.stringify(preview.json()));
+  const confirmation = { canonicalVersion, deviceId, operationId: preview.json().preview.operationId as string, previewFingerprint: preview.json().preview.fingerprint as string, resolutions: [], groupChoices: [] };
+  const userRef = firestore().collection("users").doc(auth.userId);
+  let transactionCount = 0;
+  const racedDb = new Proxy(firestore(), {
+    get(target, property) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (property === "runTransaction" && typeof value === "function") {
+        return async (...args: unknown[]) => {
+          transactionCount += 1;
+          if (transactionCount === 2) await userRef.update({ authorizationGeneration: 2 });
+          return (value as (...callArgs: unknown[]) => Promise<unknown>).apply(target, args);
+        };
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Firestore;
+  const progress = new FirestoreProgressStore(racedDb);
+  const app = buildApplication({
+    environment: testEnvironment,
+    firestore: null,
+    verifier: createFirebaseTokenVerifier(testEnvironment),
+    appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
+    stores: { ...context.stores, progress },
+  });
+  const confirm = await app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/confirm`, headers, payload: confirmation });
+  assert.equal(transactionCount, 2);
+  assert.equal(confirm.statusCode, 409, JSON.stringify(confirm.json()));
+  assert.deepEqual(confirm.json(), { error: { code: "authorization_generation_conflict" } });
+  const transferRef = transferRefFor(auth.userId, sessionId);
+  assert.equal(typeof (await transferRef.get()).data()?.decisionFingerprint, "string");
+  assert.equal((await transferRef.collection("decisions").get()).size, 0);
+
+  const refreshed = await setAuthCustomClaimsAndSignIn(auth, { authorizationGeneration: 2 });
+  const freshHeaders = { ...headers, authorization: `Bearer ${refreshed.idToken}` };
+  const resumed = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/confirm`, headers: freshHeaders, payload: confirmation });
+  assert.equal(resumed.statusCode, 200, JSON.stringify(resumed.json()));
+  assert.equal(typeof resumed.json().decisionFingerprint, "string");
+  assert.equal((await transferRef.collection("decisions").get()).size, 1);
+
+  const alternate = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/confirm`, headers: freshHeaders, payload: { ...confirmation, decisionFingerprint: "a".repeat(64) } });
+  assert.equal(alternate.statusCode, 409, JSON.stringify(alternate.json()));
+
+  const rejected = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/confirm`, headers, payload: confirmation });
+  assert.equal(rejected.statusCode, 401, JSON.stringify(rejected.json()));
+  assert.deepEqual(rejected.json(), { error: { code: "authorization_generation_stale" } });
+  await app.close();
+});
+
+test("transfer decision chunks stop on rotation and a fresh generation resumes the same decision", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const accountRef = firestore().collection("users").doc(auth.userId);
+  const records = Array.from({ length: 201 }, (_, index) => {
+    const recordId = `chunk-conflict-${index}`;
+    const state = { mastery: "guest" };
+    return { recordType: "training_attempt" as const, recordId, trackId, state, version: 0, fingerprint: createMergeRecordFingerprint({ recordId, recordType: "training_attempt", trackId, state }) };
+  });
+  const storedAt = Timestamp.now();
+  const existing = records.map((record) => {
+    const state = { mastery: "account" };
+    const accountRecord = { ...record, state, fingerprint: createMergeRecordFingerprint({ recordId: record.recordId, recordType: record.recordType, state, trackId: record.trackId }) };
+    return { ...accountRecord, targetId: record.recordId, refId: progressDocumentId({ kind: "item", recordType: "training_attempt", targetId: record.recordId, trackId: record.trackId }) };
+  });
+  const seed = firestore().batch();
+  for (const record of existing) {
+    const { refId, ...value } = record;
+    seed.set(accountRef.collection("progress").doc(refId), { ...value, kind: "item", version: 0, lastMutationId: `seed-${value.recordId}`, updatedAt: storedAt });
+  }
+  await seed.commit();
+
+  const sessionId = "rotation-between-confirm-chunks";
+  const chunkBase = { chunkId: "chunk-0", index: 0, recordKeys: records.map(adoptionTransferRecordKey), bytes: 64 };
+  const chunk = { ...chunkBase, fingerprint: createAdoptionTransferChunkFingerprint(chunkBase) };
+  const start = await context.app.inject({ method: "POST", url: "/v1/account-data/adoption/transfer/start", headers, payload: { canonicalVersion, sessionId, idempotencyKey: sessionId, guestUserId, snapshotVersion: 1, expectedGeneration: 0, deviceId } });
+  assert.equal(start.statusCode, 200, JSON.stringify(start.json()));
+  const upload = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/upload`, headers, payload: { canonicalVersion, deviceId, chunk, records } });
+  assert.equal(upload.statusCode, 200, JSON.stringify(upload.json()));
+  const snapshotFingerprint = createAdoptionSnapshotSeal({ guestUserId, snapshotVersion: 1, records, chunks: [chunk] });
+  const seal = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/seal`, headers, payload: { canonicalVersion, deviceId, snapshotFingerprint, recordCount: records.length, chunkCount: 1 } });
+  assert.equal(seal.statusCode, 200, JSON.stringify(seal.json()));
+  const preview = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/preview`, headers, payload: { canonicalVersion, deviceId } });
+  assert.equal(preview.statusCode, 200, JSON.stringify(preview.json()));
+  assert.equal(preview.json().preview.conflicts.length, records.length);
+  const confirmation = { canonicalVersion, deviceId, operationId: preview.json().preview.operationId as string, previewFingerprint: preview.json().preview.fingerprint as string, resolutions: preview.json().preview.conflicts.map((conflict: { conflictId: string }) => ({ conflictId: conflict.conflictId, resolution: "keep_guest" as const })), groupChoices: [] };
+  const userRef = firestore().collection("users").doc(auth.userId);
+  let transactionCount = 0;
+  const racedDb = new Proxy(firestore(), {
+    get(target, property) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (property === "runTransaction" && typeof value === "function") {
+        return async (...args: unknown[]) => {
+          transactionCount += 1;
+          if (transactionCount === 3) await userRef.update({ authorizationGeneration: 2 });
+          return (value as (...callArgs: unknown[]) => Promise<unknown>).apply(target, args);
+        };
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Firestore;
+  const progress = new FirestoreProgressStore(racedDb);
+  const app = buildApplication({
+    environment: testEnvironment,
+    firestore: null,
+    verifier: createFirebaseTokenVerifier(testEnvironment),
+    appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
+    stores: { ...context.stores, progress },
+  });
+  const interrupted = await app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/confirm`, headers, payload: confirmation });
+  assert.equal(transactionCount, 3);
+  assert.equal(interrupted.statusCode, 409, JSON.stringify(interrupted.json()));
+  assert.deepEqual(interrupted.json(), { error: { code: "authorization_generation_conflict" } });
+  const transferRef = transferRefFor(auth.userId, sessionId);
+  assert.equal((await transferRef.collection("decisions").get()).size, 200);
+  assert.equal(Object.keys((await transferRef.get()).data()?.decisionChunkFingerprints ?? {}).length, 1);
+
+  const refreshed = await setAuthCustomClaimsAndSignIn(auth, { authorizationGeneration: 2 });
+  const freshHeaders = { ...headers, authorization: `Bearer ${refreshed.idToken}` };
+  const resumed = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/confirm`, headers: freshHeaders, payload: confirmation });
+  assert.equal(resumed.statusCode, 200, JSON.stringify(resumed.json()));
+  assert.equal((await transferRef.collection("decisions").get()).size, 202);
+  assert.equal(Object.keys((await transferRef.get()).data()?.decisionChunkFingerprints ?? {}).length, 2);
+  await app.close();
 });
 
 test("the retired transfer route and retired query selector are unavailable", async () => {

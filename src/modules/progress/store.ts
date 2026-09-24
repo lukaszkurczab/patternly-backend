@@ -617,9 +617,10 @@ export class FirestoreProgressStore implements ProgressStore {
     return Object.freeze({ ...adoptionStatusFromData(previewReady), preview: adoption.preview, plan: adoption.plan, remoteRecords: adoption.remoteRecords });
   }
 
-  public async confirmAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferConfirm): Promise<Readonly<Record<string, unknown>>> {
+  public async confirmAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, sessionId: string, input: AdoptionTransferConfirm): Promise<Readonly<Record<string, unknown>>> {
     const parsed = adoptionTransferConfirmSchema.parse(input);
     const operation = accountAdoptionRef(this.db, userId, sessionId);
+    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
     const operationSnapshot = await operation.get();
     if (!operationSnapshot.exists) throw new Error("adoption_transfer_not_found");
     const operationData = asRecord(operationSnapshot.data(), "adoption_transfer");
@@ -630,7 +631,6 @@ export class FirestoreProgressStore implements ProgressStore {
     if (!["preview_ready", "applying", "complete"].includes(transfer.state)) throw new Error("adoption_transfer_precondition_failed");
     const suppliedDecisionFingerprint = createAdoptionDecisionFingerprint(parsed);
     if (parsed.decisionFingerprint !== undefined && parsed.decisionFingerprint !== suppliedDecisionFingerprint) throw new Error("adoption_transfer_decision_mismatch");
-    if (typeof operationData.decisionFingerprint === "string" && operationData.decisionFingerprint !== suppliedDecisionFingerprint) throw new Error("adoption_transfer_decision_mismatch");
     if (typeof operationData.decisionFingerprint !== "string") {
       const records = (await operation.collection(ADOPTION_RECORDS_SUBCOLLECTION).get()).docs.map((document) => parseAdoptionRecord(asRecord(document.data(), "adoption_record"))).sort((left, right) => adoptionTransferRecordKey(left).localeCompare(adoptionTransferRecordKey(right)));
       const active = await this.readSnapshot(userId);
@@ -641,36 +641,70 @@ export class FirestoreProgressStore implements ProgressStore {
       if (adoption.plan.blockingReason === "journal_recovery") throw new Error("journal_recovery_required");
       validateGuestMergeConfirmation(adoption.preview, { operationId: adoption.preview.operationId, previewFingerprint: parsed.previewFingerprint, resolutions: parsed.resolutions, groupChoices: parsed.groupChoices });
     }
-    const confirmed = await this.db.runTransaction(async (transaction) => {
-      const current = await transaction.get(operation);
-      if (!current.exists) throw new Error("adoption_transfer_not_found");
-      const currentData = asRecord(current.data(), "adoption_transfer");
-      if (typeof currentData.decisionFingerprint === "string") { if (currentData.decisionFingerprint !== suppliedDecisionFingerprint) throw new Error("adoption_transfer_decision_mismatch"); return currentData; }
-      if (currentData.state !== "preview_ready") throw new Error("adoption_transfer_precondition_failed");
-      const update = { decisionFingerprint: suppliedDecisionFingerprint, decisionDeviceId: parsed.deviceId, decisionAt: now(), updatedAt: now() };
-      transaction.update(operation, update);
-      return { ...currentData, ...update };
-    });
     const createdAt = now();
     const decisionWrites: Array<Readonly<{ id: string; ref: DocumentReference; value: Record<string, unknown> }>> = [];
     const addDecisionWrite = (id: string, value: Record<string, unknown>): void => { decisionWrites.push({ id, ref: adoptionChildRef(this.db, userId, sessionId, ADOPTION_DECISIONS_SUBCOLLECTION, adoptionTransferDecisionDocumentId(id)), value }); };
     addDecisionWrite("meta", { kind: "meta", deviceId: parsed.deviceId, previewFingerprint: parsed.previewFingerprint, decisionFingerprint: suppliedDecisionFingerprint, createdAt, updatedAt: createdAt, expiresAt: operationData.expiresAt });
     for (const resolution of parsed.resolutions) addDecisionWrite(`resolution:${resolution.conflictId}`, { kind: "resolution", conflictId: resolution.conflictId, resolution: resolution.resolution, deviceId: parsed.deviceId, previewFingerprint: parsed.previewFingerprint, decisionFingerprint: suppliedDecisionFingerprint, createdAt, updatedAt: createdAt, expiresAt: operationData.expiresAt });
     for (const choice of parsed.groupChoices) addDecisionWrite(`group:${choice.groupId}`, { kind: "group_choice", groupId: choice.groupId, resolution: choice.resolution, deviceId: parsed.deviceId, previewFingerprint: parsed.previewFingerprint, decisionFingerprint: suppliedDecisionFingerprint, createdAt, updatedAt: createdAt, expiresAt: operationData.expiresAt });
-    const existingDecisionRows = (await operation.collection(ADOPTION_DECISIONS_SUBCOLLECTION).get()).docs;
-    const expectedById = new Map(decisionWrites.map((write) => [write.ref.id, write.value]));
-    for (const row of existingDecisionRows) {
-      const existing = asRecord(row.data(), "adoption_decision");
-      const expected = expectedById.get(row.id);
-      if (!expected || existing.decisionFingerprint !== suppliedDecisionFingerprint || existing.deviceId !== parsed.deviceId || existing.previewFingerprint !== parsed.previewFingerprint || existing.kind !== expected.kind || (expected.kind === "resolution" && (existing.conflictId !== expected.conflictId || existing.resolution !== expected.resolution)) || (expected.kind === "group_choice" && (existing.groupId !== expected.groupId || existing.resolution !== expected.resolution))) throw new Error("adoption_transfer_decision_mismatch");
+    decisionWrites.sort((left, right) => left.ref.id.localeCompare(right.ref.id));
+    const manifestFingerprint = createHash("sha256").update(canonicalJson(decisionWrites.map((write) => [write.ref.id, write.value.kind, write.value.conflictId ?? null, write.value.groupId ?? null, write.value.resolution ?? null, write.value.deviceId, write.value.previewFingerprint, write.value.decisionFingerprint])), "utf8").digest("hex");
+    const confirmed = await this.db.runTransaction(async (transaction) => {
+      const [user, current] = await transaction.getAll(userRef, operation);
+      if (!user?.exists) throw new Error("account_deleted");
+      assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
+      if (!current?.exists) throw new Error("adoption_transfer_not_found");
+      const currentData = asRecord(current.data(), "adoption_transfer");
+      if (currentData.deviceId !== parsed.deviceId || currentData.previewFingerprint !== parsed.previewFingerprint || currentData.previewOperationId !== (parsed.operationId ?? currentData.previewOperationId)) throw new Error("adoption_transfer_preview_mismatch");
+      if (typeof currentData.decisionFingerprint === "string" && currentData.decisionFingerprint !== suppliedDecisionFingerprint) throw new Error("adoption_transfer_decision_mismatch");
+      if (currentData.state !== "preview_ready" && !["applying", "complete"].includes(String(currentData.state))) throw new Error("adoption_transfer_precondition_failed");
+      if (currentData.decisionManifestFingerprint !== undefined && currentData.decisionManifestFingerprint !== manifestFingerprint) throw new Error("adoption_transfer_decision_mismatch");
+      const update = {
+        decisionFingerprint: suppliedDecisionFingerprint,
+        decisionDeviceId: parsed.deviceId,
+        decisionManifestFingerprint: manifestFingerprint,
+        decisionRowCount: decisionWrites.length,
+        decisionChunkCount: Math.ceil(decisionWrites.length / ADOPTION_TRANSFER_FIRESTORE_BATCH_SIZE),
+        decisionChunkFingerprints: currentData.decisionChunkFingerprints ?? {},
+        ...(typeof currentData.decisionFingerprint === "string" ? {} : { decisionAt: now() }),
+        updatedAt: now(),
+      };
+      transaction.update(operation, update);
+      return { ...currentData, ...update };
+    });
+
+    let lastConfirmed: Record<string, unknown> = confirmed;
+    for (let start = 0; start < decisionWrites.length; start += ADOPTION_TRANSFER_FIRESTORE_BATCH_SIZE) {
+      const chunk = decisionWrites.slice(start, start + ADOPTION_TRANSFER_FIRESTORE_BATCH_SIZE);
+      const chunkIndex = Math.floor(start / ADOPTION_TRANSFER_FIRESTORE_BATCH_SIZE);
+      const chunkFingerprint = createHash("sha256").update(canonicalJson(chunk.map((write) => [write.ref.id, write.value.kind, write.value.conflictId ?? null, write.value.groupId ?? null, write.value.resolution ?? null])), "utf8").digest("hex");
+      lastConfirmed = await this.db.runTransaction(async (transaction) => {
+        const snapshots = await transaction.getAll(userRef, operation, ...chunk.map((write) => write.ref));
+        const [user, current, ...existingRows] = snapshots;
+        if (!user?.exists) throw new Error("account_deleted");
+        assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
+        if (!current?.exists) throw new Error("adoption_transfer_not_found");
+        const currentData = asRecord(current.data(), "adoption_transfer");
+        if (currentData.decisionFingerprint !== suppliedDecisionFingerprint || currentData.decisionDeviceId !== parsed.deviceId || currentData.previewFingerprint !== parsed.previewFingerprint || currentData.decisionManifestFingerprint !== manifestFingerprint) throw new Error("adoption_transfer_decision_mismatch");
+        if (!["preview_ready", "applying", "complete"].includes(String(currentData.state))) throw new Error("adoption_transfer_precondition_failed");
+        const markers = currentData.decisionChunkFingerprints && typeof currentData.decisionChunkFingerprints === "object" ? currentData.decisionChunkFingerprints as Record<string, unknown> : {};
+        if (markers[String(chunkIndex)] !== undefined && markers[String(chunkIndex)] !== chunkFingerprint) throw new Error("adoption_transfer_decision_mismatch");
+        for (let offset = 0; offset < chunk.length; offset += 1) {
+          const expected = chunk[offset]!;
+          const existing = existingRows[offset]!;
+          if (existing?.exists) {
+            const stored = asRecord(existing.data(), "adoption_decision");
+            if (stored.decisionFingerprint !== suppliedDecisionFingerprint || stored.deviceId !== parsed.deviceId || stored.previewFingerprint !== parsed.previewFingerprint || stored.kind !== expected.value.kind || (expected.value.kind === "resolution" && (stored.conflictId !== expected.value.conflictId || stored.resolution !== expected.value.resolution)) || (expected.value.kind === "group_choice" && (stored.groupId !== expected.value.groupId || stored.resolution !== expected.value.resolution))) throw new Error("adoption_transfer_decision_mismatch");
+          } else {
+            transaction.create(expected.ref, expected.value);
+          }
+        }
+        const update = { decisionChunkFingerprints: { ...markers, [String(chunkIndex)]: chunkFingerprint }, updatedAt: now() };
+        transaction.update(operation, update);
+        return { ...currentData, ...update };
+      });
     }
-    const missing = decisionWrites.filter((write) => !existingDecisionRows.some((row) => row.id === write.ref.id));
-    for (let start = 0; start < missing.length; start += ADOPTION_TRANSFER_FIRESTORE_BATCH_SIZE) {
-      const decisionBatch = this.db.batch();
-      for (const write of missing.slice(start, start + ADOPTION_TRANSFER_FIRESTORE_BATCH_SIZE)) decisionBatch.set(write.ref, write.value);
-      if (missing.length > start) await decisionBatch.commit();
-    }
-    return Object.freeze({ ...adoptionStatusFromData(confirmed), decisionFingerprint: suppliedDecisionFingerprint });
+    return Object.freeze({ ...adoptionStatusFromData(lastConfirmed), decisionFingerprint: suppliedDecisionFingerprint });
   }
 
   public async applyAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferApply): Promise<Readonly<Record<string, unknown>>> {

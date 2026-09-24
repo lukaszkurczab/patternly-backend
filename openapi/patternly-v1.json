@@ -2985,7 +2985,7 @@
       "x-patternly-security-profile": "bearer",
       "x-patternly-consumer-scope": "backend-only",
       "post": {
-        "description": "Persist an immutable transfer decision fingerprint and exact conflict resolutions",
+        "description": "Persist an immutable transfer decision fingerprint and exact conflict resolutions in authorization-fenced chunks",
         "parameters": [
           {
             "$ref": "#/components/parameters/AdoptionTransferSessionId"
@@ -3022,6 +3022,22 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication rejected or account inactive",
+            "x-patternly-error-codes": [
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Transfer unavailable; account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
@@ -3036,7 +3052,10 @@
             }
           },
           "409": {
-            "description": "Preview, decision, device, or resolution conflict",
+            "description": "Authorization-generation, preview, decision, device, or resolution conflict",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict"
+            ],
             "content": {
               "application/json": {
                 "schema": {
