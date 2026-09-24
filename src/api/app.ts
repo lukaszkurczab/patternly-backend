@@ -969,10 +969,13 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     const parsed = accountSessionRevokeSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     try {
-      return reply.code(200).send(await requireStores(dependencies).accountLifecycle.revokeSessions(request.userId!, parsed.data.operationId));
+      return reply.code(200).send(await requireStores(dependencies).accountLifecycle.revokeSessions(request.userId!, request.expectedAuthorizationGeneration!, parsed.data.operationId));
     } catch (error) {
-      if (error instanceof Error && error.message === "session_revocation_failed") return reply.code(503).send({ error: { code: "session_revocation_pending" } });
-      if (error instanceof Error && error.message === "session_revocation_operation_conflict") return reply.code(409).send({ error: { code: "session_revocation_operation_conflict" } });
+      const message = error instanceof Error ? error.message : "session_revocation_failed";
+      if (message === "session_revocation_failed") return reply.code(503).send({ error: { code: "session_revocation_pending" } });
+      if (["session_revocation_operation_conflict", "session_revocation_in_progress", "security_operation_conflict"].includes(message)) return reply.code(409).send({ error: { code: message } });
+      if (message === "authorization_generation_conflict") return reply.code(409).send({ error: { code: message } });
+      if (["account_deleted", "authorization_generation_required", "authorization_generation_invalid"].includes(message)) return reply.code(401).send({ error: { code: errorCode(error) } });
       throw error;
     }
   });

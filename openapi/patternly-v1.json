@@ -3427,7 +3427,7 @@
       "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
-        "description": "Revoke current and stale Firebase sessions idempotently",
+        "description": "Revoke current and stale Firebase sessions through the active account security-operation slot. The operation ID is idempotent and bound to the presented authorization generation.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3464,6 +3464,25 @@
               }
             }
           },
+          "401": {
+            "description": "Account is inactive or authorization generation is missing, invalid, or stale",
+            "x-patternly-error-codes": [
+              "app_check_required",
+              "app_check_invalid",
+              "authentication_required",
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
@@ -3477,8 +3496,30 @@
               }
             }
           },
+          "409": {
+            "description": "Authorization generation changed or another security operation owns the account slot",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict",
+              "session_revocation_operation_conflict",
+              "session_revocation_in_progress",
+              "security_operation_conflict"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "description": "Revocation pending; account remains bound",
+            "x-patternly-error-codes": [
+              "app_check_not_configured",
+              "firestore_not_ready",
+              "authentication_not_configured",
+              "session_revocation_pending"
+            ],
             "content": {
               "application/json": {
                 "schema": {

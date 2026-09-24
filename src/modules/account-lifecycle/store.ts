@@ -11,6 +11,7 @@ import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGene
 const RECOVERY_CODE_COUNT = 10;
 const TOMBSTONE_RETENTION_MS = 45 * 24 * 60 * 60 * 1000;
 const PROOF_RETENTION_MS = 3 * 365 * 24 * 60 * 60 * 1000;
+const SESSION_REVOCATION_LEASE_MS = 2 * 60 * 1000;
 
 type RecoveryCodesResult = Readonly<{ generationId: string; codes: readonly string[] }>;
 type DeletionProof = Readonly<{ status: "deleted"; operationId: string; proofId: string }>;
@@ -40,7 +41,7 @@ const DELETION_PHASES: readonly DeletionPhase[] = Object.freeze(Object.keys(DELE
 export interface AccountLifecycleStore {
   issueRecoveryCodes(userId: string, expectedAuthorizationGeneration: number): Promise<RecoveryCodesResult>;
   consumeRecoveryCode(code: string): Promise<Readonly<{ customToken: string }>>;
-  revokeSessions(userId: string, operationId: string): Promise<Readonly<{ status: "revoked"; operationId: string }>>;
+  revokeSessions(userId: string, expectedAuthorizationGeneration: number, operationId: string): Promise<Readonly<{ status: "revoked"; operationId: string }>>;
   deleteAccount(userId: string, operationId: string, operationSecret: string): Promise<AccountDeletionResult>;
   completeDeletion(operationId: string, proofId: string): Promise<CompletedDeletion>;
   resumeDeletion(operationId: string, operationSecret: string): Promise<DeletionOperationStatus | null>;
@@ -213,28 +214,87 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
     return Object.freeze({ customToken: await this.auth.createCustomToken(recovered.subject, { authorizationGeneration: recovered.authorizationGeneration }) });
   }
 
-  public async revokeSessions(userId: string, operationId: string): Promise<Readonly<{ status: "revoked"; operationId: string }>> {
-    const ref = this.db.collection(COLLECTIONS.sessionRevocationOperations).doc(operationId);
-    const writeResult = async (status: "failed" | "revoked") => this.db.runTransaction(async (transaction) => {
-      const user = await transaction.get(this.db.collection(COLLECTIONS.users).doc(userId));
-      if (!user.exists || asRecord(user.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
-      transaction.set(ref, { operationId, userId, status, ...(status === "failed" ? { failureCode: "session_revocation_failed" } : {}), updatedAt: now() }, { merge: true });
+  public async revokeSessions(userId: string, expectedAuthorizationGeneration: number, operationId: string): Promise<Readonly<{ status: "revoked"; operationId: string }>> {
+    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+    const operationRef = this.db.collection(COLLECTIONS.sessionRevocationOperations).doc(operationId);
+    const claimedAt = now();
+    const leaseUntil = Timestamp.fromMillis(claimedAt.toMillis() + SESSION_REVOCATION_LEASE_MS);
+    const fence = randomUUID();
+    const claim = await this.db.runTransaction(async (transaction) => {
+      const user = await transaction.get(userRef);
+      const operation = await transaction.get(operationRef);
+      if (!user.exists) throw new Error("account_deleted");
+      const userData = asRecord(user.data(), "user");
+      assertExpectedAuthorizationGeneration(userData, expectedAuthorizationGeneration);
+
+      let operationData: Record<string, unknown> | null = null;
+      if (operation.exists) {
+        operationData = asRecord(operation.data(), "session_revocation");
+        if (operationData.userId !== userId) throw new Error("session_revocation_operation_conflict");
+        if (operationData.expectedAuthorizationGeneration !== expectedAuthorizationGeneration) throw new Error("session_revocation_operation_conflict");
+        if (operationData.status === "revoked") return Object.freeze({ kind: "complete" as const });
+      }
+
+      const currentSlot = userData.securityOperation;
+      if (currentSlot !== undefined) {
+        if (typeof currentSlot !== "object" || currentSlot === null || Array.isArray(currentSlot)) throw new Error("security_operation_conflict");
+        const slot = currentSlot as Record<string, unknown>;
+        if (typeof slot.kind !== "string" || typeof slot.operationId !== "string" || typeof slot.fence !== "string" || !(slot.leaseUntil instanceof Timestamp || slot.leaseUntil instanceof Date)) throw new Error("security_operation_conflict");
+        const slotLeaseUntil = slot.leaseUntil instanceof Timestamp ? slot.leaseUntil.toMillis() : slot.leaseUntil.getTime();
+        if (slotLeaseUntil > claimedAt.toMillis()) {
+          if (slot.kind === "session_revoke" && slot.operationId === operationId) {
+            if (slot.expectedAuthorizationGeneration !== expectedAuthorizationGeneration) throw new Error("session_revocation_operation_conflict");
+            return Object.freeze({ kind: "in_progress" as const });
+          }
+          throw new Error("session_revocation_operation_conflict");
+        }
+      }
+
+      const identities = await transaction.get(this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId));
+      const subjects = identities.docs
+        .map((document) => asRecord(document.data(), "identity_mapping"))
+        .filter((identity) => identity.provider === "firebase" && typeof identity.subject === "string")
+        .map((identity) => identity.subject as string);
+      const securityOperation = Object.freeze({ kind: "session_revoke", operationId, expectedAuthorizationGeneration, fence, leaseUntil });
+      transaction.set(userRef, { securityOperation }, { merge: true });
+      transaction.set(operationRef, {
+        operationId,
+        userId,
+        expectedAuthorizationGeneration,
+        status: "pending",
+        updatedAt: claimedAt,
+        failureCode: FieldValue.delete(),
+      }, { merge: true });
+      return Object.freeze({ kind: "claimed" as const, subjects: Object.freeze(subjects), fence });
     });
-    const existing = await ref.get();
-    if (existing.exists) {
-      const data = asRecord(existing.data(), "session_revocation");
-      if (data.userId !== userId) throw new Error("session_revocation_operation_conflict");
-      if (data.status === "revoked") return Object.freeze({ status: "revoked", operationId });
-    }
-    const identities = await this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId).get();
-    const subjects = identities.docs.map((document) => asRecord(document.data(), "identity_mapping")).filter((data) => data.provider === "firebase" && typeof data.subject === "string").map((data) => data.subject as string);
+    if (claim.kind === "complete") return Object.freeze({ status: "revoked", operationId });
+    if (claim.kind === "in_progress") throw new Error("session_revocation_in_progress");
+
+    const finalize = async (status: "failed" | "revoked"): Promise<void> => this.db.runTransaction(async (transaction) => {
+      const user = await transaction.get(userRef);
+      const operation = await transaction.get(operationRef);
+      if (!user.exists) throw new Error("account_deleted");
+      const userData = asRecord(user.data(), "user");
+      assertExpectedAuthorizationGeneration(userData, expectedAuthorizationGeneration);
+      const slotValue = userData.securityOperation;
+      if (typeof slotValue !== "object" || slotValue === null || Array.isArray(slotValue)) throw new Error("session_revocation_operation_conflict");
+      const slot = slotValue as Record<string, unknown>;
+      if (slot.kind !== "session_revoke" || slot.operationId !== operationId || slot.expectedAuthorizationGeneration !== expectedAuthorizationGeneration || slot.fence !== claim.fence) throw new Error("session_revocation_operation_conflict");
+      if (!operation.exists) throw new Error("session_revocation_operation_conflict");
+      const operationData = asRecord(operation.data(), "session_revocation");
+      if (operationData.userId !== userId || operationData.expectedAuthorizationGeneration !== expectedAuthorizationGeneration || operationData.status !== "pending") throw new Error("session_revocation_operation_conflict");
+      const updatedAt = now();
+      transaction.set(operationRef, { status, updatedAt, ...(status === "failed" ? { failureCode: "session_revocation_failed" } : { failureCode: FieldValue.delete() }) }, { merge: true });
+      transaction.set(userRef, { securityOperation: FieldValue.delete() }, { merge: true });
+    });
+
     try {
-      for (const subject of subjects) await this.auth.revokeRefreshTokens(subject);
+      for (const subject of claim.subjects) await this.auth.revokeRefreshTokens(subject);
     } catch {
-      await writeResult("failed");
+      await finalize("failed");
       throw new Error("session_revocation_failed");
     }
-    await writeResult("revoked");
+    await finalize("revoked");
     return Object.freeze({ status: "revoked", operationId });
   }
 
