@@ -2937,6 +2937,16 @@
               }
             }
           },
+          "401": {
+            "description": "Account authorization is no longer active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Transfer unavailable; account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [

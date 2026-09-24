@@ -246,7 +246,7 @@ export interface ProgressStore {
   startAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, input: AdoptionTransferStart): Promise<Readonly<Record<string, unknown>>>;
   uploadAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, sessionId: string, input: AdoptionTransferUpload): Promise<Readonly<Record<string, unknown>>>;
   sealAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, sessionId: string, input: AdoptionTransferSeal): Promise<Readonly<Record<string, unknown>>>;
-  previewAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferPreviewRequest): Promise<Readonly<Record<string, unknown>>>;
+  previewAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, sessionId: string, input: AdoptionTransferPreviewRequest): Promise<Readonly<Record<string, unknown>>>;
   confirmAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferConfirm): Promise<Readonly<Record<string, unknown>>>;
   applyAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferApply): Promise<Readonly<Record<string, unknown>>>;
   statusAdoptionTransfer(userId: string, sessionId: string, deviceId: string): Promise<Readonly<Record<string, unknown>> | null>;

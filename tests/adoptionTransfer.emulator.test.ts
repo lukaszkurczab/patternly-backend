@@ -215,11 +215,147 @@ test("transfer seal rechecks authorization generation in its final transaction",
   await app.close();
 });
 
+test("transfer preview fences reservation, finalization, and ready replay", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const userRef = firestore().collection("users").doc(auth.userId);
+
+  async function seedSealedTransfer(sessionId: string) {
+    const records = [activeRecord(`preview-${sessionId}`, `preview-track-${sessionId}`, "preview-value")];
+    const start = await context.app.inject({ method: "POST", url: "/v1/account-data/adoption/transfer/start", headers, payload: { canonicalVersion, sessionId, idempotencyKey: sessionId, guestUserId, snapshotVersion: 1, expectedGeneration: 0, deviceId } });
+    assert.equal(start.statusCode, 200, JSON.stringify(start.json()));
+    const chunkBase = { chunkId: "chunk-0", index: 0, recordKeys: records.map(adoptionTransferRecordKey), bytes: 64 };
+    const chunk = { ...chunkBase, fingerprint: createAdoptionTransferChunkFingerprint(chunkBase) };
+    const upload = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/upload`, headers, payload: { canonicalVersion, deviceId, chunk, records } });
+    assert.equal(upload.statusCode, 200, JSON.stringify(upload.json()));
+    const chunks = [chunk];
+    const snapshotFingerprint = createAdoptionSnapshotSeal({ guestUserId, snapshotVersion: 1, records, chunks });
+    const seal = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/seal`, headers, payload: { canonicalVersion, deviceId, snapshotFingerprint, recordCount: records.length, chunkCount: chunks.length } });
+    assert.equal(seal.statusCode, 200, JSON.stringify(seal.json()));
+    return records;
+  }
+
+  // Rotation after request authentication but before the reservation transaction must not create result data.
+  const beforeStage = "preview-rotate-before-stage";
+  await seedSealedTransfer(beforeStage);
+  const beforeStageApp = buildTransferRotationApp(auth.userId, "previewAdoptionTransfer", "authorizationGeneration");
+  const beforeStageResponse = await beforeStageApp.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${beforeStage}/preview`, headers, payload: { canonicalVersion, deviceId } });
+  assert.equal(beforeStageResponse.statusCode, 409, JSON.stringify(beforeStageResponse.json()));
+  assert.deepEqual(beforeStageResponse.json(), { error: { code: "authorization_generation_conflict" } });
+  assert.equal((await transferRefFor(auth.userId, beforeStage).get()).data()?.state, "sealed");
+  assert.equal((await transferRefFor(auth.userId, beforeStage).collection("results").get()).size, 0);
+  await beforeStageApp.close();
+
+  await userRef.update({ authorizationGeneration: 1, authorizationState: "active" });
+  // Rotation after the one bounded result transaction but before finalization leaves no ready preview.
+  const beforeFinalization = "preview-rotate-before-finalization";
+  await seedSealedTransfer(beforeFinalization);
+  let transactionCount = 0;
+  const racedDb = new Proxy(firestore(), {
+    get(target, property) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (property === "runTransaction" && typeof value === "function") {
+        return async (...args: unknown[]) => {
+          transactionCount += 1;
+          if (transactionCount === 3) await userRef.update({ authorizationGeneration: 2 });
+          return (value as (...callArgs: unknown[]) => Promise<unknown>).apply(target, args);
+        };
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Firestore;
+  const racedProgress = new FirestoreProgressStore(racedDb);
+  const chunkApp = buildApplication({
+    environment: testEnvironment,
+    firestore: null,
+    verifier: createFirebaseTokenVerifier(testEnvironment),
+    appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
+    stores: { ...context.stores, progress: racedProgress },
+  });
+  const beforeFinalizationResponse = await chunkApp.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${beforeFinalization}/preview`, headers, payload: { canonicalVersion, deviceId } });
+  assert.equal(transactionCount, 3);
+  assert.equal(beforeFinalizationResponse.statusCode, 409, JSON.stringify(beforeFinalizationResponse.json()));
+  assert.deepEqual(beforeFinalizationResponse.json(), { error: { code: "authorization_generation_conflict" } });
+  const partial = (await transferRefFor(auth.userId, beforeFinalization).get()).data();
+  assert.equal(partial?.state, "result_building");
+  assert.equal(partial?.previewFingerprint, undefined);
+  assert.equal((await transferRefFor(auth.userId, beforeFinalization).collection("results").get()).size, 1);
+  await chunkApp.close();
+
+  await userRef.update({ authorizationGeneration: 1, authorizationState: "active" });
+  // The retry fills any missing chunk, then finalization stores preview_ready.
+  const retry = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${beforeFinalization}/preview`, headers, payload: { canonicalVersion, deviceId } });
+  assert.equal(retry.statusCode, 200, JSON.stringify(retry.json()));
+  assert.equal((await transferRefFor(auth.userId, beforeFinalization).collection("results").get()).size, 1);
+  assert.equal((await transferRefFor(auth.userId, beforeFinalization).get()).data()?.state, "preview_ready");
+
+  // A ready preview replay also validates authorization before returning its stored result.
+  const replayApp = buildTransferRotationApp(auth.userId, "previewAdoptionTransfer", "authorizationGeneration");
+  const replay = await replayApp.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${beforeFinalization}/preview`, headers, payload: { canonicalVersion, deviceId } });
+  assert.equal(replay.statusCode, 409, JSON.stringify(replay.json()));
+  assert.deepEqual(replay.json(), { error: { code: "authorization_generation_conflict" } });
+  assert.equal((await transferRefFor(auth.userId, beforeFinalization).get()).data()?.state, "preview_ready");
+  await replayApp.close();
+});
+
+test("empty transfer preview fences finalization and replays without result chunks", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const sessionId = "preview-empty-transfer";
+  const start = await context.app.inject({ method: "POST", url: "/v1/account-data/adoption/transfer/start", headers, payload: { canonicalVersion, sessionId, idempotencyKey: sessionId, guestUserId, snapshotVersion: 1, expectedGeneration: 0, deviceId } });
+  assert.equal(start.statusCode, 200, JSON.stringify(start.json()));
+  const snapshotFingerprint = createAdoptionSnapshotSeal({ guestUserId, snapshotVersion: 1, records: [], chunks: [] });
+  const seal = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/seal`, headers, payload: { canonicalVersion, deviceId, snapshotFingerprint, recordCount: 0, chunkCount: 0 } });
+  assert.equal(seal.statusCode, 200, JSON.stringify(seal.json()));
+
+  const userRef = firestore().collection("users").doc(auth.userId);
+  let transactionCount = 0;
+  const racedDb = new Proxy(firestore(), {
+    get(target, property) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (property === "runTransaction" && typeof value === "function") {
+        return async (...args: unknown[]) => {
+          transactionCount += 1;
+          if (transactionCount === 2) await userRef.update({ authorizationGeneration: 2 });
+          return (value as (...callArgs: unknown[]) => Promise<unknown>).apply(target, args);
+        };
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Firestore;
+  const racedProgress = new FirestoreProgressStore(racedDb);
+  const racedApp = buildApplication({
+    environment: testEnvironment,
+    firestore: null,
+    verifier: createFirebaseTokenVerifier(testEnvironment),
+    appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
+    stores: { ...context.stores, progress: racedProgress },
+  });
+  const previewPath = `/v1/account-data/adoption/transfer/${sessionId}/preview`;
+  const rotated = await racedApp.inject({ method: "POST", url: previewPath, headers, payload: { canonicalVersion, deviceId } });
+  assert.equal(transactionCount, 2);
+  assert.equal(rotated.statusCode, 409, JSON.stringify(rotated.json()));
+  assert.deepEqual(rotated.json(), { error: { code: "authorization_generation_conflict" } });
+  assert.equal((await transferRefFor(auth.userId, sessionId).get()).data()?.state, "result_building");
+  assert.equal((await transferRefFor(auth.userId, sessionId).collection("results").get()).size, 0);
+  await racedApp.close();
+
+  await userRef.update({ authorizationGeneration: 1, authorizationState: "active" });
+  const preview = await context.app.inject({ method: "POST", url: previewPath, headers, payload: { canonicalVersion, deviceId } });
+  assert.equal(preview.statusCode, 200, JSON.stringify(preview.json()));
+  assert.equal((await transferRefFor(auth.userId, sessionId).get()).data()?.state, "preview_ready");
+  assert.equal((await transferRefFor(auth.userId, sessionId).collection("results").get()).size, 0);
+  const replay = await context.app.inject({ method: "POST", url: previewPath, headers, payload: { canonicalVersion, deviceId } });
+  assert.equal(replay.statusCode, 200, JSON.stringify(replay.json()));
+  assert.equal(replay.json().preview.fingerprint, preview.json().preview.fingerprint);
+  assert.equal((await transferRefFor(auth.userId, sessionId).get()).data()?.state, "preview_ready");
+});
+
 function transferRefFor(userId: string, sessionId: string) {
   return firestore().collection("accounts").doc(userId).collection("adoptionTransfers").doc(sessionId);
 }
 
-function buildTransferRotationApp(userId: string, method: "startAdoptionTransfer" | "uploadAdoptionTransfer" | "sealAdoptionTransfer", field: "authorizationGeneration" | "authorizationState") {
+function buildTransferRotationApp(userId: string, method: "startAdoptionTransfer" | "uploadAdoptionTransfer" | "sealAdoptionTransfer" | "previewAdoptionTransfer", field: "authorizationGeneration" | "authorizationState") {
   const original = context.stores.progress;
   const userRef = firestore().collection("users").doc(userId);
   const progress = new Proxy(original, {

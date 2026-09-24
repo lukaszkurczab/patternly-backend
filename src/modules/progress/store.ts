@@ -44,7 +44,6 @@ import {
   appendAdoptionTransferRecord,
   adoptionTransferRecordKey,
   beginAdoptionApply,
-  beginAdoptionResultBuild,
   buildAdoptionResultChunks,
   completeAdoptionTransfer,
   createAdoptionSnapshotSeal,
@@ -522,15 +521,25 @@ export class FirestoreProgressStore implements ProgressStore {
     return adoptionStatusFromData(asRecord((await operation.get()).data(), "adoption_transfer"));
   }
 
-  public async previewAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferPreviewRequest): Promise<Readonly<Record<string, unknown>>> {
+  public async previewAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, sessionId: string, input: AdoptionTransferPreviewRequest): Promise<Readonly<Record<string, unknown>>> {
     const parsed = adoptionTransferPreviewSchema.parse(input);
     const operation = accountAdoptionRef(this.db, userId, sessionId);
-    const operationSnapshot = await operation.get();
-    if (!operationSnapshot.exists) throw new Error("adoption_transfer_not_found");
-    const operationData = asRecord(operationSnapshot.data(), "adoption_transfer");
+    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+    const operationData = await this.db.runTransaction(async (transaction) => {
+      const user = await transaction.get(userRef);
+      if (!user.exists) throw new Error("account_deleted");
+      assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
+      const current = await transaction.get(operation);
+      if (!current.exists) throw new Error("adoption_transfer_not_found");
+      const data = asRecord(current.data(), "adoption_transfer");
+      const state = readStoredAdoptionTransfer(data).state;
+      if (data.deviceId !== parsed.deviceId) throw new Error("adoption_transfer_device_mismatch");
+      if (!["sealed", "result_building", "preview_ready", "applying", "complete"].includes(state)) throw new Error("adoption_transfer_precondition_failed");
+      if (typeof data.snapshotFingerprint !== "string") throw new Error("adoption_transfer_snapshot_seal_mismatch");
+      if (state === "sealed") transaction.update(operation, { state: "result_building", updatedAt: now() });
+      return { ...data, ...(state === "sealed" ? { state: "result_building" } : {}) } as Record<string, unknown>;
+    });
     const transfer = readStoredAdoptionTransfer(operationData);
-    if (operationData.deviceId !== parsed.deviceId) throw new Error("adoption_transfer_device_mismatch");
-    if (!["sealed", "result_building", "preview_ready", "applying", "complete"].includes(transfer.state)) throw new Error("adoption_transfer_precondition_failed");
     const records = (await operation.collection(ADOPTION_RECORDS_SUBCOLLECTION).get()).docs.map((document) => parseAdoptionRecord(asRecord(document.data(), "adoption_record"))).sort((left, right) => adoptionTransferRecordKey(left).localeCompare(adoptionTransferRecordKey(right)));
     const active = await this.readSnapshot(userId);
     ensureFullIdentityUniqueness(records);
@@ -543,35 +552,64 @@ export class FirestoreProgressStore implements ProgressStore {
     if (operationData.previewGeneration !== undefined && operationData.previewGeneration !== (active.generation ?? 0)) throw new Error("adoption_transfer_preview_stale");
     if (typeof operationData.previewFingerprint === "string") return Object.freeze({ ...adoptionStatusFromData(operationData), preview: adoption.preview, plan: adoption.plan, remoteRecords: adoption.remoteRecords });
     const resultChunks = buildAdoptionResultChunks(records);
+    if (resultChunks.length > 1) throw new Error("adoption_transfer_result_chunk_limit");
     const resultRefs = resultChunks.map((_, index) => adoptionChildRef(this.db, userId, sessionId, ADOPTION_RESULTS_SUBCOLLECTION, String(index).padStart(8, "0")));
-    const resultExisting = await this.db.getAll(...resultRefs);
+    const resultManifest = resultChunks.map((result, index) => {
+      const recordKeys = result.map(adoptionTransferRecordKey);
+      const fingerprint = createHash("sha256").update(canonicalJson({ index, recordKeys, records: result.map((record) => record.fingerprint) }), "utf8").digest("hex");
+      return { recordKeys, fingerprint };
+    });
     const createdAt = now();
     for (let start = 0; start < resultChunks.length; start += ADOPTION_TRANSFER_FIRESTORE_BATCH_SIZE) {
-      const resultBatch = this.db.batch();
-      let pending = 0;
-      for (let index = start; index < Math.min(start + ADOPTION_TRANSFER_FIRESTORE_BATCH_SIZE, resultChunks.length); index += 1) {
-        const result = resultChunks[index]!;
-        const recordKeys = result.map(adoptionTransferRecordKey);
-        const fingerprint = createHash("sha256").update(canonicalJson({ index, recordKeys, records: result.map((record) => record.fingerprint) }), "utf8").digest("hex");
-        if (resultExisting[index]?.exists) {
-          const existing = asRecord(resultExisting[index]!.data(), "adoption_result");
-          if (existing.fingerprint !== fingerprint || canonicalJson(existing.recordKeys) !== canonicalJson(recordKeys)) throw new Error("adoption_transfer_result_chunk_conflict");
-        } else {
-          resultBatch.create(resultRefs[index]!, { index, recordKeys, fingerprint, createdAt, updatedAt: createdAt, expiresAt: operationData.expiresAt });
-          pending += 1;
+      const end = Math.min(start + ADOPTION_TRANSFER_FIRESTORE_BATCH_SIZE, resultChunks.length);
+      const indexes = Array.from({ length: end - start }, (_, offset) => start + offset);
+      await this.db.runTransaction(async (transaction) => {
+        const snapshots = await transaction.getAll(userRef, operation, ...indexes.map((index) => resultRefs[index]!));
+        const [user, current, ...existingResults] = snapshots;
+        if (!user?.exists) throw new Error("account_deleted");
+        assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
+        if (!current?.exists) throw new Error("adoption_transfer_not_found");
+        const currentData = asRecord(current.data(), "adoption_transfer");
+        if (currentData.deviceId !== parsed.deviceId || currentData.snapshotFingerprint !== transfer.snapshotFingerprint) throw new Error("adoption_transfer_snapshot_seal_mismatch");
+        const isReadyReplay = ["preview_ready", "applying", "complete"].includes(String(currentData.state));
+        if (currentData.state !== "result_building" && !isReadyReplay) throw new Error("adoption_transfer_precondition_failed");
+        if (isReadyReplay && currentData.previewFingerprint !== adoption.preview.fingerprint) throw new Error("adoption_transfer_preview_mismatch");
+        for (let offset = 0; offset < indexes.length; offset += 1) {
+          const index = indexes[offset]!;
+          const expected = resultManifest[index]!;
+          if (currentData.previewResultChunkFingerprint !== undefined && currentData.previewResultChunkFingerprint !== expected.fingerprint) throw new Error("adoption_transfer_result_chunk_conflict");
+          const existing = existingResults[offset]!;
+          if (existing.exists) {
+            const stored = asRecord(existing.data(), "adoption_result");
+            if (stored.index !== index || stored.fingerprint !== expected.fingerprint || canonicalJson(stored.recordKeys) !== canonicalJson(expected.recordKeys)) throw new Error("adoption_transfer_result_chunk_conflict");
+          } else {
+            if (isReadyReplay) throw new Error("adoption_transfer_result_chunk_incomplete");
+            transaction.create(resultRefs[index]!, { index, recordKeys: expected.recordKeys, fingerprint: expected.fingerprint, createdAt, updatedAt: createdAt, expiresAt: operationData.expiresAt });
+          }
         }
-      }
-      if (pending > 0) await resultBatch.commit();
+        if (!isReadyReplay) transaction.update(operation, { previewResultChunkFingerprint: resultManifest[0]!.fingerprint, updatedAt: now() });
+      });
     }
     const previewReady = await this.db.runTransaction(async (transaction) => {
-      const current = await transaction.get(operation);
-      if (!current.exists) throw new Error("adoption_transfer_not_found");
+      const snapshots = await transaction.getAll(userRef, operation, ...resultRefs);
+      const [user, current, ...resultSnapshots] = snapshots;
+      if (!user?.exists) throw new Error("account_deleted");
+      assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
+      if (!current?.exists) throw new Error("adoption_transfer_not_found");
       const currentData = asRecord(current.data(), "adoption_transfer");
+      if (currentData.deviceId !== parsed.deviceId || currentData.snapshotFingerprint !== transfer.snapshotFingerprint) throw new Error("adoption_transfer_snapshot_seal_mismatch");
       if (typeof currentData.previewFingerprint === "string") { if (currentData.previewFingerprint !== adoption.preview.fingerprint) throw new Error("adoption_transfer_preview_mismatch"); return currentData; }
-      if (currentData.state !== "sealed" && currentData.state !== "result_building") throw new Error("adoption_transfer_precondition_failed");
+      if (currentData.state !== "result_building") throw new Error("adoption_transfer_precondition_failed");
+      for (let index = 0; index < resultManifest.length; index += 1) {
+        const expected = resultManifest[index]!;
+        if (currentData.previewResultChunkFingerprint !== expected.fingerprint) throw new Error("adoption_transfer_result_chunk_incomplete");
+        const stored = resultSnapshots[index]!;
+        if (!stored.exists) throw new Error("adoption_transfer_result_chunk_incomplete");
+        const data = asRecord(stored.data(), "adoption_result");
+        if (data.index !== index || data.fingerprint !== expected.fingerprint || canonicalJson(data.recordKeys) !== canonicalJson(expected.recordKeys)) throw new Error("adoption_transfer_result_chunk_conflict");
+      }
       const transferWithChildren = Object.freeze({ ...readStoredAdoptionTransfer(currentData), records, chunks: Object.freeze([]), resultChunks: Object.freeze([]) });
-      const transitioned = currentData.state === "sealed" ? beginAdoptionResultBuild(transferWithChildren, parsed.idempotencyKey ?? transferWithChildren.idempotencyKey) : transferWithChildren;
-      const marked = markAdoptionPreviewReady(transitioned, parsed.idempotencyKey ?? transferWithChildren.idempotencyKey);
+      const marked = markAdoptionPreviewReady(transferWithChildren, parsed.idempotencyKey ?? transferWithChildren.idempotencyKey);
       const update = { state: marked.state, previewFingerprint: adoption.preview.fingerprint, previewOperationId: adoption.preview.operationId, previewAccountRevision: active.accountRevision, previewGeneration: active.generation ?? 0, previewConflictCount: adoption.preview.conflicts.length, previewRecordCount: adoption.remoteRecords.length, previewPlanCaseId: adoption.plan.caseId, previewBlockingReason: adoption.plan.blockingReason, previewUploadCount: adoption.plan.uploadRecordIds.length, previewRestoreCount: adoption.plan.restoreRecordIds.length, previewDeduplicatedCount: adoption.plan.deduplicatedRecordIds.length, previewUpdatedAt: now(), updatedAt: now() };
       transaction.update(operation, update);
       return { ...currentData, ...update };
