@@ -241,8 +241,8 @@ export interface ProgressStore {
   read(userId: string): Promise<readonly ProgressRecord[]>;
   readSnapshot(userId: string): Promise<ProgressSnapshot>;
   previewAdoption(userId: string, guestSnapshot: GuestMergeSnapshot): Promise<AdoptionPreview>;
-  confirmAdoption(userId: string, deviceId: string, guestSnapshot: GuestMergeSnapshot, confirmation: GuestMergeConfirmation): Promise<AdoptionExecution>;
-  applyBatch(userId: string, deviceId: string, expectedAccountRevision: number, mutations: readonly ProgressMutation[], metadata: SyncBatchMetadata): Promise<SyncBatchResult>;
+  confirmAdoption(userId: string, expectedAuthorizationGeneration: number, deviceId: string, guestSnapshot: GuestMergeSnapshot, confirmation: GuestMergeConfirmation): Promise<AdoptionExecution>;
+  applyBatch(userId: string, expectedAuthorizationGeneration: number, deviceId: string, expectedAccountRevision: number, mutations: readonly ProgressMutation[], metadata: SyncBatchMetadata): Promise<SyncBatchResult>;
   startAdoptionTransfer(userId: string, input: AdoptionTransferStart): Promise<Readonly<Record<string, unknown>>>;
   uploadAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferUpload): Promise<Readonly<Record<string, unknown>>>;
   sealAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferSeal): Promise<Readonly<Record<string, unknown>>>;

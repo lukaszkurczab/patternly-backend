@@ -264,7 +264,8 @@ test("explicit registration is atomic under concurrency and replay never changes
     termsVersion: "2026-09-05",
   });
   assert.deepEqual(Object.keys(evidence.docs[0]?.data() ?? {}).sort(), ["acceptedAt", "kind", "privacyPolicyAcknowledged", "privacyPolicyLocale", "privacyPolicyVersion", "termsLocale", "termsVersion"]);
-  const me = await context.app.inject({ method: "GET", url: "/v1/me", headers });
+  const currentSession = await setAuthCustomClaimsAndSignIn(auth, { authorizationGeneration: 1 });
+  const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${currentSession.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
   assert.equal(me.statusCode, 200);
   assert.equal(me.json().user.id, created.json().registration.user.id);
 });
@@ -497,6 +498,144 @@ test("Firestore transaction preserves sync CAS and idempotency under concurrent 
   assert.equal(conflict.statusCode, 409);
   assert.equal(conflict.json().conflicts[0].current.version, 1);
   assert.equal(conflict.json().conflicts[0].current.state.mastery, "learning");
+});
+
+test("progress sync rejects fresh writes and batch replays when authorization rotates after the request guard", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const userRef = firestore().collection(COLLECTIONS.users).doc(auth.userId);
+  const state = { mastery: "learning" };
+  const trackId = "coding-interview-dsa-problem-solving";
+  const syncMutation = {
+    mutationId: `generation-race-sync-${Date.now()}`,
+    kind: "item" as const,
+    recordType: "training_attempt" as const,
+    trackId,
+    targetId: "generation-race-attempt",
+    expectedVersion: null,
+    state,
+    fingerprint: createMergeRecordFingerprint({ recordId: "generation-race-attempt", recordType: "training_attempt", state, trackId }),
+  };
+  const payload = canonicalSyncPayload(0, [syncMutation], "authorization-generation-race-sync");
+
+  async function appThatChangesBeforeSync(changes: Readonly<Record<string, unknown>> = { authorizationGeneration: 2 }) {
+    const originalProgress = context.stores.progress;
+    let rotated = false;
+    const progress = new Proxy(originalProgress, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property === "applyBatch" && typeof value === "function") return async (...args: unknown[]) => {
+          if (!rotated) {
+            rotated = true;
+            await userRef.update(changes);
+          }
+          return value.apply(target, args);
+        };
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    return buildApplication({ environment: testEnvironment, firestore: null, verifier: createFirebaseTokenVerifier(testEnvironment), appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } }, stores: { ...context.stores, progress } });
+  }
+
+  const freshRaceApp = await appThatChangesBeforeSync();
+  const fresh = await freshRaceApp.inject({ method: "POST", url: "/v1/progress/sync", headers, payload });
+  await freshRaceApp.close();
+  assert.equal(fresh.statusCode, 409);
+  assert.deepEqual(fresh.json(), { error: { code: "authorization_generation_conflict" } });
+  assert.equal((await userRef.collection("progress").get()).size, 0);
+  assert.equal((await userRef.collection("syncMutations").get()).size, 0);
+  assert.equal((await userRef.collection("syncBatches").get()).size, 0);
+
+  await userRef.update({ authorizationGeneration: 1 });
+  const first = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload });
+  assert.equal(first.statusCode, 200, first.body);
+  const replayRaceApp = await appThatChangesBeforeSync();
+  const replay = await replayRaceApp.inject({ method: "POST", url: "/v1/progress/sync", headers, payload });
+  await replayRaceApp.close();
+  assert.equal(replay.statusCode, 409);
+  assert.deepEqual(replay.json(), { error: { code: "authorization_generation_conflict" } });
+  assert.equal((await userRef.collection("progress").get()).size, 1);
+  assert.equal((await userRef.collection("syncMutations").get()).size, 1);
+  assert.equal((await userRef.collection("syncBatches").get()).size, 1);
+
+  await userRef.update({ authorizationGeneration: 1, authorizationState: "active" });
+  const inactiveRaceApp = await appThatChangesBeforeSync({ authorizationState: "rotating" });
+  const inactive = await inactiveRaceApp.inject({ method: "POST", url: "/v1/progress/sync", headers, payload });
+  await inactiveRaceApp.close();
+  assert.equal(inactive.statusCode, 401);
+  assert.deepEqual(inactive.json(), { error: { code: "account_deleted" } });
+  assert.equal((await userRef.collection("progress").get()).size, 1);
+  assert.equal((await userRef.collection("syncMutations").get()).size, 1);
+  assert.equal((await userRef.collection("syncBatches").get()).size, 1);
+});
+
+test("one-shot adoption rejects fresh confirmation and operation replay when authorization rotates after the request guard", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const userRef = firestore().collection(COLLECTIONS.users).doc(auth.userId);
+  const state = { trackId: "coding-interview-dsa-problem-solving" };
+  const guestUserId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const snapshot = {
+    guestSnapshotVersion: 1,
+    guestUserId,
+    records: [{ fingerprint: createMergeRecordFingerprint({ recordId: "generation-race-active", recordType: "active_track", state, trackId: state.trackId }), recordId: "generation-race-active", recordType: "active_track" as const, state, trackId: state.trackId, version: 0 }],
+    activeSession: false,
+    pendingJournal: false,
+  };
+  const previewResponse = await context.app.inject({ method: "POST", url: "/v1/account-data/adoption/preview", headers, payload: snapshot });
+  assert.equal(previewResponse.statusCode, 200, previewResponse.body);
+  const preview = previewResponse.json().preview;
+  const payload = { deviceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", snapshot, confirmation: { operationId: preview.operationId, previewFingerprint: preview.fingerprint, resolutions: [], groupChoices: [] } };
+
+  async function appThatChangesBeforeConfirm(changes: Readonly<Record<string, unknown>> = { authorizationGeneration: 2 }) {
+    const originalProgress = context.stores.progress;
+    let rotated = false;
+    const progress = new Proxy(originalProgress, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property === "confirmAdoption" && typeof value === "function") return async (...args: unknown[]) => {
+          if (!rotated) {
+            rotated = true;
+            await userRef.update(changes);
+          }
+          return value.apply(target, args);
+        };
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    return buildApplication({ environment: testEnvironment, firestore: null, verifier: createFirebaseTokenVerifier(testEnvironment), appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } }, stores: { ...context.stores, progress } });
+  }
+
+  const freshRaceApp = await appThatChangesBeforeConfirm();
+  const fresh = await freshRaceApp.inject({ method: "POST", url: "/v1/account-data/adoption/confirm", headers, payload });
+  await freshRaceApp.close();
+  assert.equal(fresh.statusCode, 409);
+  assert.deepEqual(fresh.json(), { error: { code: "authorization_generation_conflict" } });
+  assert.equal((await userRef.collection("progress").get()).size, 0);
+  assert.equal((await userRef.collection("syncMutations").get()).size, 0);
+  assert.equal((await userRef.collection("syncOperations").get()).size, 0);
+
+  await userRef.update({ authorizationGeneration: 1 });
+  const first = await context.app.inject({ method: "POST", url: "/v1/account-data/adoption/confirm", headers, payload });
+  assert.equal(first.statusCode, 200, first.body);
+  const replayRaceApp = await appThatChangesBeforeConfirm();
+  const replay = await replayRaceApp.inject({ method: "POST", url: "/v1/account-data/adoption/confirm", headers, payload });
+  await replayRaceApp.close();
+  assert.equal(replay.statusCode, 409);
+  assert.deepEqual(replay.json(), { error: { code: "authorization_generation_conflict" } });
+  assert.equal((await userRef.collection("progress").get()).size, 1);
+  assert.equal((await userRef.collection("syncMutations").get()).size, 1);
+  assert.equal((await userRef.collection("syncOperations").get()).size, 1);
+
+  await userRef.update({ authorizationGeneration: 1, authorizationState: "active" });
+  const inactiveRaceApp = await appThatChangesBeforeConfirm({ authorizationState: "rotating" });
+  const inactive = await inactiveRaceApp.inject({ method: "POST", url: "/v1/account-data/adoption/confirm", headers, payload });
+  await inactiveRaceApp.close();
+  assert.equal(inactive.statusCode, 401);
+  assert.deepEqual(inactive.json(), { error: { code: "account_deleted" } });
+  assert.equal((await userRef.collection("progress").get()).size, 1);
+  assert.equal((await userRef.collection("syncMutations").get()).size, 1);
+  assert.equal((await userRef.collection("syncOperations").get()).size, 1);
 });
 
 test("sync rejects duplicate mutations before writing and applies distinct targets", async () => {
@@ -879,7 +1018,7 @@ test("destructive deletion rejects an old authenticated session before touching 
   const staleApp = buildApplication({
     environment: testEnvironment,
     firestore: null,
-    verifier: { verify: async () => ({ provider: "firebase", subject: auth.localId, email: auth.email, emailVerified: true, authTime: Math.floor(Date.now() / 1000) - 301 }) },
+    verifier: { verify: async () => ({ provider: "firebase", subject: auth.localId, email: auth.email, emailVerified: true, authTime: Math.floor(Date.now() / 1000) - 301, authorizationGeneration: 1 }) },
     appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
     stores: context.stores,
   });
@@ -1138,8 +1277,8 @@ test("account-owned writers reject a tombstoned or missing user after authentica
   for (const state of ["tombstoned", "missing"]) {
     if (state === "tombstoned") await userRef.update({ deletedAt: Timestamp.now() });
     else await userRef.delete();
-    await assert.rejects(context.stores.progress.applyBatch(userId, "fixture-device", 0, [], { sessionId: "fixture-session", batchId: `fixture-${state}`, highWatermark: 0 }), { message: "account_deleted" });
-    await assert.rejects(context.stores.progress.confirmAdoption(userId, "fixture-device", snapshot, confirmation), { message: "account_deleted" });
+    await assert.rejects(context.stores.progress.applyBatch(userId, 1, "fixture-device", 0, [], { sessionId: "fixture-session", batchId: `fixture-${state}`, highWatermark: 0 }), { message: "account_deleted" });
+    await assert.rejects(context.stores.progress.confirmAdoption(userId, 1, "fixture-device", snapshot, confirmation), { message: "account_deleted" });
     await assert.rejects(context.stores.devices.touch(userId, { deviceKey: "fixture-device", platform: "ios", appVersion: "test" }), { message: "account_deleted" });
     await assert.rejects(context.stores.contentReports.create(userId, { ...reportBody("88888888-8888-4888-8888-888888888888"), linkAccount: true, contactEmail: "fixture@example.invalid" }, { rateLimitKey: "late-write" }), { message: "account_deleted" });
     await assert.rejects(context.stores.accountLifecycle.revokeSessions(userId, `late-revoke-${state}`), { message: "account_deleted" });

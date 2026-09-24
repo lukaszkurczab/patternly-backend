@@ -150,6 +150,7 @@ const ACCOUNT_SYNC_REJECTION_CODES = new Set([
   "sync_request_too_large",
   "progress_pagination_token_invalid",
   "progress_generation_conflict",
+  "authorization_generation_conflict",
   "mutation_id_reuse",
   "content_identity_schema_conflict",
   "merge_preview_mismatch",
@@ -731,7 +732,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
     try {
       const metadata = { sessionId: parsed.data.sessionId, batchId: parsed.data.batchId, highWatermark: parsed.data.highWatermark } as const;
-      const result = await requireStores(dependencies).progress.applyBatch(request.userId!, parsed.data.deviceId, parsed.data.expectedAccountRevision, parsed.data.mutations, metadata);
+      const result = await requireStores(dependencies).progress.applyBatch(request.userId!, request.expectedAuthorizationGeneration!, parsed.data.deviceId, parsed.data.expectedAccountRevision, parsed.data.mutations, metadata);
       if (result.conflicts.length > 0 || result.accountRevisionConflict) {
         logAccountSyncRejection(request, "sync", result.accountRevisionConflict?.code ?? result.conflicts[0]?.code);
         return reply.code(409).send(result.accountRevisionConflict ? { error: result.accountRevisionConflict } : result);
@@ -751,6 +752,11 @@ export function buildApplication(dependencies: ApplicationDependencies) {
         logAccountSyncRejection(request, "sync", message);
         return reply.code(409).send({ error: { code: errorCode(error) } });
       }
+      if (message === "authorization_generation_conflict") {
+        logAccountSyncRejection(request, "sync", message);
+        return reply.code(409).send({ error: { code: errorCode(error) } });
+      }
+      if (message === "account_deleted") return reply.code(401).send({ error: { code: "account_deleted" } });
       throw error;
     }
   });
@@ -787,13 +793,18 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       return reply.code(400).send({ error: { code: "invalid_request" } });
     }
     try {
-      return reply.code(200).send(await requireStores(dependencies).progress.confirmAdoption(request.userId!, deviceId, snapshot.data, confirmation.data));
+      return reply.code(200).send(await requireStores(dependencies).progress.confirmAdoption(request.userId!, request.expectedAuthorizationGeneration!, deviceId, snapshot.data, confirmation.data));
     } catch (error) {
       const message = error instanceof Error ? error.message : "internal_error";
       if (["merge_preview_mismatch", "merge_resolution_incomplete", "merge_resolution_mismatch", "merge_conflict_requires_manual_resolution", "merge_group_choice_incomplete", "merge_group_choice_mismatch", "active_session_adoption_blocked", "journal_recovery_required", "mutation_id_reuse", "content_identity_schema_conflict"].includes(message)) {
         logAccountSyncRejection(request, "confirm", message);
         return reply.code(409).send({ error: { code: errorCode(error) } });
       }
+      if (message === "authorization_generation_conflict") {
+        logAccountSyncRejection(request, "confirm", message);
+        return reply.code(409).send({ error: { code: errorCode(error) } });
+      }
+      if (message === "account_deleted") return reply.code(401).send({ error: { code: "account_deleted" } });
       if (message === "progress_fingerprint_mismatch" || message === "goal_plan_bundle_invalid") {
         logAccountSyncRejection(request, "confirm", message);
         return reply.code(400).send({ error: { code: errorCode(error) } });

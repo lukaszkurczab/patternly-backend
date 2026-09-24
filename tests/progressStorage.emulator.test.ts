@@ -40,13 +40,13 @@ test("canonical sync persists exact identity records and replays by batch metada
   const userId = await account();
   const state = { identity: { kind: "resolved", ref: { trackId, questionId: "question-1", contentVersion: "2026.09.1", artifactSha256: "a".repeat(64) } }, result: "correct" };
   const firstMutation = mutation("training_attempt", "attempt-1", state);
-  const first = await store.applyBatch(userId, deviceId, 0, [firstMutation], metadata());
+  const first = await store.applyBatch(userId, 1, deviceId, 0, [firstMutation], metadata());
   assert.equal(first.applied.length, 1);
   assert.equal(first.accountRevision, 1);
   const snapshot = await store.readSnapshot(userId);
   assert.deepEqual(snapshot.records[0]?.state, state);
   assert.equal(snapshot.records[0]?.fingerprint, firstMutation.fingerprint);
-  const replay = await store.applyBatch(userId, deviceId, 0, [firstMutation], metadata());
+  const replay = await store.applyBatch(userId, 1, deviceId, 0, [firstMutation], metadata());
   assert.equal(replay.applied.length, 1);
   assert.deepEqual(replay.duplicates, []);
   const persisted = (await db.collection("users").doc(userId).collection("progress").get()).docs[0]!.data();
@@ -70,7 +70,7 @@ test("long sync identities persist through hashed Firestore document keys", asyn
     state,
     fingerprint: createMergeRecordFingerprint(base),
   };
-  const result = await store.applyBatch(userId, deviceId, 0, [longMutation], metadata(10));
+  const result = await store.applyBatch(userId, 1, deviceId, 0, [longMutation], metadata(10));
   assert.equal(result.applied.length, 1);
   assert.equal(result.applied[0]?.trackId, longTrackId);
   assert.equal(result.applied[0]?.targetId, longTargetId);
@@ -101,9 +101,9 @@ test("one-shot adoption uses the same exact identity and explicit group choice s
   const snapshot = { guestSnapshotVersion: 1, guestUserId, records: [{ recordId: "attempt-1", recordType: "training_attempt" as const, trackId, state, version: 0, fingerprint: createMergeRecordFingerprint({ recordId: "attempt-1", recordType: "training_attempt", trackId, state }) }], activeSession: false, pendingJournal: false };
   const preview = await store.previewAdoption(userId, snapshot);
   const confirmation = { operationId: preview.preview.operationId, previewFingerprint: preview.preview.fingerprint, resolutions: [], groupChoices: [] };
-  const first = await store.confirmAdoption(userId, deviceId, snapshot, confirmation);
+  const first = await store.confirmAdoption(userId, 1, deviceId, snapshot, confirmation);
   assert.equal(first.records.length, 1);
-  const replay = await store.confirmAdoption(userId, deviceId, snapshot, confirmation);
+  const replay = await store.confirmAdoption(userId, 1, deviceId, snapshot, confirmation);
   assert.deepEqual(replay, first);
 });
 
@@ -111,6 +111,6 @@ test("legacy identity leaves are rejected before a write", async () => {
   const userId = await account();
   const state = { identity: { trackId, questionId: "question-1", contentVersion: "2026.09.1", artifactSha256: "a".repeat(64), packagePin: "retired" } };
   const invalid = mutation("training_attempt", "attempt-legacy", state);
-  await assert.rejects(() => store.applyBatch(userId, deviceId, 0, [invalid], metadata()), /content_identity_schema_conflict/u);
+  await assert.rejects(() => store.applyBatch(userId, 1, deviceId, 0, [invalid], metadata()), /content_identity_schema_conflict/u);
   assert.equal((await store.readSnapshot(userId)).records.length, 0);
 });

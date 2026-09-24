@@ -61,6 +61,7 @@ import {
   type AdoptionTransferStart,
   type AdoptionTransferUpload,
 } from "../users/adoptionTransfer.js";
+import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
 import {
   assertContentIdentityState,
   progressMutationSchema,
@@ -293,14 +294,15 @@ export class FirestoreProgressStore implements ProgressStore {
     return buildGuestMergePreview({ accountUserId: userId, accountSnapshotVersion: remote.accountRevision, guestSnapshot: parsedSnapshot, remoteRecords: remote.records.map(progressRecordToMergeRecord) });
   }
 
-  public async confirmAdoption(userId: string, deviceId: string, guestSnapshot: GuestMergeSnapshot, confirmation: GuestMergeConfirmation): Promise<AdoptionExecution> {
+  public async confirmAdoption(userId: string, expectedAuthorizationGeneration: number, deviceId: string, guestSnapshot: GuestMergeSnapshot, confirmation: GuestMergeConfirmation): Promise<AdoptionExecution> {
     const parsedGuestSnapshot = guestMergeSnapshotSchema.parse(guestSnapshot);
     const parsedConfirmation = guestMergeConfirmationSchema.parse(confirmation);
     const db = this.db;
     return this.db.runTransaction(async (transaction) => {
       const userRef = db.collection(COLLECTIONS.users).doc(userId);
       const user = await transaction.get(userRef);
-      if (!user.exists || asRecord(user.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
+      if (!user.exists) throw new Error("account_deleted");
+      assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
       const metaRef = accountMetadataRef(db, userId);
       const operation = operationRef(db, userId, parsedConfirmation.operationId);
       const metaSnapshot = await transaction.get(metaRef);
@@ -738,7 +740,7 @@ export class FirestoreProgressStore implements ProgressStore {
     return adoptionStatusFromData(data);
   }
 
-  public async applyBatch(userId: string, deviceId: string, expectedAccountRevision: number, mutations: readonly ProgressMutation[], metadata: SyncBatchMetadata): Promise<SyncBatchResult> {
+  public async applyBatch(userId: string, expectedAuthorizationGeneration: number, deviceId: string, expectedAccountRevision: number, mutations: readonly ProgressMutation[], metadata: SyncBatchMetadata): Promise<SyncBatchResult> {
     for (const mutation of mutations) {
       const parsedMutation = progressMutationSchema.safeParse(mutation);
       if (!parsedMutation.success) {
@@ -752,7 +754,8 @@ export class FirestoreProgressStore implements ProgressStore {
     return this.db.runTransaction(async (transaction) => {
       const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
       const user = await transaction.get(userRef);
-      if (!user.exists || asRecord(user.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
+      if (!user.exists) throw new Error("account_deleted");
+      assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
       const metaRef = accountMetadataRef(this.db, userId);
       const batchRef = syncBatchRef(this.db, userId, metadata);
       const metaSnapshot = await transaction.get(metaRef);

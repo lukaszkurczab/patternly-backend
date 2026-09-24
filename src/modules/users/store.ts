@@ -3,6 +3,7 @@ import { Timestamp, type Firestore } from "firebase-admin/firestore";
 import { COLLECTIONS, identityDocumentId } from "../../infrastructure/firestore/paths.js";
 import { asIsoString, asRecord, asTimestamp, now } from "../../infrastructure/firestore/values.js";
 import type { AuthenticatedIdentity } from "../auth/contracts.js";
+import { activeAuthorizationGeneration, assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
 import type { PseudonymKeyRing } from "../../infrastructure/security/pseudonymKeyRing.js";
 
 export type UserProfile = Readonly<{
@@ -37,25 +38,6 @@ export interface UserStore {
   readProfile(userId: string): Promise<UserProfile | null>;
   recordLegalAcceptance(userId: string, expectedAuthorizationGeneration: number, termsVersion: string): Promise<Readonly<{ termsVersion: string; acceptedAt: string }>>;
   recordPurchaseConfirmation(userId: string, expectedAuthorizationGeneration: number, input: Readonly<{ confirmationId: string; termsVersion: string; productIdentifier: string; storefrontPrice: string; locale: "en" | "pl" }>): Promise<Readonly<{ confirmationId: string; acceptedAt: string; attemptExpiresAt: string }>>;
-}
-
-function storedAuthorizationGeneration(user: Readonly<Record<string, unknown>>): number {
-  const generation = user.authorizationGeneration === undefined ? 1 : user.authorizationGeneration;
-  if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation <= 0) throw new Error("authorization_generation_invalid");
-  return generation;
-}
-
-function activeAuthorizationGeneration(user: Readonly<Record<string, unknown>>): number {
-  if (user.deletedAt !== undefined || (user.authorizationState !== undefined && user.authorizationState !== "active")) throw new Error("account_deleted");
-  return storedAuthorizationGeneration(user);
-}
-
-function assertExpectedAuthorizationGeneration(user: Readonly<Record<string, unknown>>, expectedAuthorizationGeneration: number): void {
-  if (expectedAuthorizationGeneration === undefined) throw new Error("authorization_generation_required");
-  if (typeof expectedAuthorizationGeneration !== "number" || !Number.isSafeInteger(expectedAuthorizationGeneration) || expectedAuthorizationGeneration <= 0) throw new Error("authorization_generation_invalid");
-  const currentGeneration = storedAuthorizationGeneration(user);
-  if (currentGeneration !== expectedAuthorizationGeneration) throw new Error("authorization_generation_conflict");
-  if (user.deletedAt !== undefined || (user.authorizationState !== undefined && user.authorizationState !== "active")) throw new Error("account_deleted");
 }
 
 function isExpiredTombstone(value: unknown): boolean {

@@ -118,7 +118,7 @@ test("isolated emulator fixture preserves canonical progress across service rein
       highWatermark: 2,
       mutations,
     });
-    const applied = await context.stores.progress.applyBatch(authUid, request.deviceId, request.expectedAccountRevision, request.mutations, {
+    const applied = await context.stores.progress.applyBatch(authUid, 1, request.deviceId, request.expectedAccountRevision, request.mutations, {
       sessionId: request.sessionId,
       batchId: request.batchId,
       highWatermark: request.highWatermark,

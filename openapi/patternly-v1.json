@@ -2320,6 +2320,19 @@
               }
             }
           },
+          "401": {
+            "description": "Account is inactive",
+            "x-patternly-error-codes": [
+              "account_deleted"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
@@ -2334,7 +2347,10 @@
             }
           },
           "409": {
-            "description": "Progress or account revision conflict",
+            "description": "Progress, account revision, or authorization generation conflict",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict"
+            ],
             "content": {
               "application/json": {
                 "schema": {
@@ -2452,6 +2468,19 @@
               }
             }
           },
+          "401": {
+            "description": "Account is inactive",
+            "x-patternly-error-codes": [
+              "account_deleted"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
@@ -2466,7 +2495,10 @@
             }
           },
           "409": {
-            "description": "Preview, resolution, active-session or idempotency conflict",
+            "description": "Preview, resolution, active-session, idempotency, or authorization generation conflict",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict"
+            ],
             "content": {
               "application/json": {
                 "schema": {
