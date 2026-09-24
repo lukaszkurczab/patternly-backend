@@ -82,12 +82,21 @@ const ADOPTION_DECISIONS_SUBCOLLECTION = "decisions";
 const ADOPTION_RESULTS_SUBCOLLECTION = "results";
 const ADOPTION_GENERATIONS_SUBCOLLECTION = "progressGenerations";
 const ADOPTION_PROMOTION_LEASE_MS = 5 * 60 * 1_000;
+const ADOPTION_APPLY_MAX_TRANSACTION_BYTES = 6 * 1024 * 1024;
 
 function adoptionPromotionLease(): Timestamp { return Timestamp.fromMillis(Date.now() + ADOPTION_PROMOTION_LEASE_MS); }
 function hasActiveAdoptionPromotionLease(data: Record<string, unknown> | undefined): boolean {
   const sessionId = data?.adoptionPromotionSessionId;
   const expiresAt = data?.adoptionPromotionLeaseExpiresAt;
   return typeof sessionId === "string" && expiresAt instanceof Timestamp && expiresAt.toMillis() > Date.now();
+}
+function assertAdoptionApplySource(metadata: Record<string, unknown> | undefined, generation: number, revision: number): void {
+  if (readAccountGeneration(metadata) !== generation || readAccountRevision(metadata) !== revision) throw new Error("adoption_transfer_generation_conflict");
+}
+function adoptionApplyLeaseIsValid(metadata: Record<string, unknown> | undefined, sessionId: string): boolean {
+  return metadata?.adoptionPromotionSessionId === sessionId
+    && metadata.adoptionPromotionLeaseExpiresAt instanceof Timestamp
+    && metadata.adoptionPromotionLeaseExpiresAt.toMillis() > Date.now();
 }
 function expiresAfterSyncRetention(createdAt: Timestamp): Timestamp { return Timestamp.fromMillis(createdAt.toMillis() + SYNC_RETENTION_MS); }
 
@@ -707,18 +716,35 @@ export class FirestoreProgressStore implements ProgressStore {
     return Object.freeze({ ...adoptionStatusFromData(lastConfirmed), decisionFingerprint: suppliedDecisionFingerprint });
   }
 
-  public async applyAdoptionTransfer(userId: string, sessionId: string, input: AdoptionTransferApply): Promise<Readonly<Record<string, unknown>>> {
+  public async applyAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, sessionId: string, input: AdoptionTransferApply): Promise<Readonly<Record<string, unknown>>> {
     const parsed = adoptionTransferApplySchema.parse(input);
     const operation = accountAdoptionRef(this.db, userId, sessionId);
-    const operationSnapshot = await operation.get();
-    if (!operationSnapshot.exists) throw new Error("adoption_transfer_not_found");
-    let operationData = asRecord(operationSnapshot.data(), "adoption_transfer");
-    const transfer = readStoredAdoptionTransfer(operationData);
+    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+    const metadataRef = accountMetadataRef(this.db, userId);
+    const initial = await operation.get();
+    if (!initial.exists) throw new Error("adoption_transfer_not_found");
+    let operationData = asRecord(initial.data(), "adoption_transfer");
+    let transfer = readStoredAdoptionTransfer(operationData);
     if (operationData.deviceId !== parsed.deviceId) throw new Error("adoption_transfer_device_mismatch");
     if (typeof operationData.decisionFingerprint !== "string") throw new Error("adoption_transfer_confirmation_required");
     if (parsed.decisionFingerprint !== undefined && parsed.decisionFingerprint !== operationData.decisionFingerprint) throw new Error("adoption_transfer_decision_mismatch");
-    if (transfer.state === "complete") return adoptionStatusFromData(operationData);
+    if (parsed.expectedGeneration !== undefined && parsed.expectedGeneration !== transfer.expectedGeneration) throw new Error("adoption_transfer_generation_conflict");
+
+    // Even a completed replay must re-read the account in the same transaction as the result.
+    if (transfer.state === "complete") {
+      const completedReplay = await this.db.runTransaction(async (transaction) => {
+        const [user, current] = await transaction.getAll(userRef, operation);
+        if (!user?.exists) throw new Error("account_deleted");
+        assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
+        if (!current?.exists) throw new Error("adoption_transfer_not_found");
+        const data = asRecord(current.data(), "adoption_transfer");
+        if (data.state !== "complete" || data.deviceId !== parsed.deviceId || data.decisionFingerprint !== operationData.decisionFingerprint) throw new Error("adoption_transfer_apply_cursor_conflict");
+        return data;
+      });
+      return adoptionStatusFromData(completedReplay);
+    }
     if (transfer.state !== "preview_ready" && transfer.state !== "applying") throw new Error("adoption_transfer_precondition_failed");
+
     const decisions = await operation.collection(ADOPTION_DECISIONS_SUBCOLLECTION).get();
     const storedConfirmation = parseAdoptionDecisionRows(decisions.docs);
     if (!storedConfirmation || createAdoptionDecisionFingerprint(storedConfirmation) !== operationData.decisionFingerprint) throw new Error("adoption_transfer_decision_incomplete");
@@ -734,77 +760,115 @@ export class FirestoreProgressStore implements ProgressStore {
     const domainConfirmation: GuestMergeConfirmation = { operationId: adoption.preview.operationId, previewFingerprint: String(operationData.previewFingerprint), resolutions: storedConfirmation.resolutions, groupChoices: storedConfirmation.groupChoices };
     validateGuestMergeConfirmation(adoption.preview, domainConfirmation);
     const materialization = buildAdoptionMaterialization(sessionId, guestSnapshot.records, active.records.map(progressRecordToMergeRecord), domainConfirmation);
-    const expectedGeneration = parsed.expectedGeneration ?? transfer.expectedGeneration;
-    if (expectedGeneration !== transfer.expectedGeneration) throw new Error("adoption_transfer_generation_conflict");
     const targetGeneration = transfer.targetGeneration;
-    const targetCollection = progressCollectionRef(this.db, userId, targetGeneration);
-    if (transfer.state === "preview_ready") {
-      operationData = await this.db.runTransaction(async (transaction) => {
-        const current = await transaction.get(operation);
-        const metadata = await transaction.get(accountMetadataRef(this.db, userId));
-        if (!current.exists) throw new Error("adoption_transfer_not_found");
-        const currentData = asRecord(current.data(), "adoption_transfer");
-        const currentTransfer = readStoredAdoptionTransfer(currentData);
-        const metadataData = metadata.data() as Record<string, unknown> | undefined;
-        const currentGeneration = readAccountGeneration(metadataData);
-        const currentRevision = readAccountRevision(metadataData);
-        if (currentTransfer.state === "complete") return currentData;
-        if (currentTransfer.state !== "preview_ready") throw new Error("adoption_transfer_precondition_failed");
-        if (currentGeneration !== currentTransfer.expectedGeneration || currentRevision !== Number(currentData.previewAccountRevision)) throw new Error("adoption_transfer_generation_conflict");
-        if (hasActiveAdoptionPromotionLease(metadataData) && metadataData?.adoptionPromotionSessionId !== sessionId) throw new Error("adoption_transfer_generation_conflict");
+    const targetGenerationRef = progressGenerationRef(this.db, userId, targetGeneration);
+
+    operationData = await this.db.runTransaction(async (transaction) => {
+      const [user, current, metadataSnapshot, targetGenerationSnapshot] = await transaction.getAll(userRef, operation, metadataRef, targetGenerationRef);
+      if (!user?.exists) throw new Error("account_deleted");
+      assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
+      if (!current?.exists) throw new Error("adoption_transfer_not_found");
+      const currentData = asRecord(current.data(), "adoption_transfer");
+      const currentTransfer = readStoredAdoptionTransfer(currentData);
+      const metadata = metadataSnapshot?.data() as Record<string, unknown> | undefined;
+      if (currentData.deviceId !== parsed.deviceId || currentData.decisionFingerprint !== operationData.decisionFingerprint) throw new Error("adoption_transfer_decision_mismatch");
+      if (currentTransfer.state === "complete") return currentData;
+      const previewGeneration = Number(currentData.previewGeneration ?? currentTransfer.expectedGeneration);
+      const previewRevision = Number(currentData.previewAccountRevision);
+      if (!Number.isSafeInteger(previewRevision) || previewRevision < 0) throw new Error("adoption_transfer_revision_invalid");
+      if (currentTransfer.state === "preview_ready") {
+        assertAdoptionApplySource(metadata, previewGeneration, previewRevision);
+        if (hasActiveAdoptionPromotionLease(metadata) && metadata?.adoptionPromotionSessionId !== sessionId) throw new Error("adoption_transfer_generation_conflict");
         const applying = beginAdoptionApply(Object.freeze({ ...currentTransfer, records: [], chunks: [], decisions: [], resultChunks: [] }), currentTransfer.expectedGeneration, parsed.idempotencyKey ?? currentTransfer.idempotencyKey);
-        const leaseExpiresAt = adoptionPromotionLease();
-        const update = { state: applying.state, targetGeneration, applyCursor: 0, applyTotal: materialization.records.length, applyAccountRevision: currentRevision + materialization.changes.length, applyChangeCount: materialization.changes.length, applyStartedAt: now(), updatedAt: now() };
-        transaction.set(progressGenerationRef(this.db, userId, targetGeneration), { userId, generation: targetGeneration, sourceSessionId: sessionId, state: "building", createdAt: currentData.createdAt ?? update.applyStartedAt, updatedAt: update.updatedAt, expiresAt: currentData.expiresAt }, { merge: true });
-        transaction.set(accountMetadataRef(this.db, userId), { adoptionPromotionSessionId: sessionId, adoptionPromotionTargetGeneration: targetGeneration, adoptionPromotionLeaseExpiresAt: leaseExpiresAt, updatedAt: update.updatedAt }, { merge: true });
+        const startedAt = now();
+        const update = { state: applying.state, targetGeneration, applyCursor: 0, applyTotal: materialization.records.length, applyAccountRevision: previewRevision + materialization.changes.length, applyChangeCount: materialization.changes.length, applySourceGeneration: previewGeneration, applySourceRevision: previewRevision, applyStartedAt: startedAt, updatedAt: startedAt };
+        transaction.set(targetGenerationRef, { userId, generation: targetGeneration, sourceSessionId: sessionId, state: "building", createdAt: currentData.createdAt ?? startedAt, updatedAt: startedAt, expiresAt: currentData.expiresAt }, { merge: true });
+        transaction.set(metadataRef, { adoptionPromotionSessionId: sessionId, adoptionPromotionTargetGeneration: targetGeneration, adoptionPromotionSourceGeneration: previewGeneration, adoptionPromotionSourceRevision: previewRevision, adoptionPromotionLeaseExpiresAt: adoptionPromotionLease(), updatedAt: startedAt }, { merge: true });
         transaction.update(operation, update);
         return { ...currentData, ...update };
-      });
-    }
+      }
+      if (currentTransfer.state !== "applying") throw new Error("adoption_transfer_precondition_failed");
+      const sourceGeneration = Number(currentData.applySourceGeneration);
+      const sourceRevision = Number(currentData.applySourceRevision);
+      if (!Number.isSafeInteger(sourceGeneration) || !Number.isSafeInteger(sourceRevision)) throw new Error("adoption_transfer_revision_invalid");
+      assertAdoptionApplySource(metadata, sourceGeneration, sourceRevision);
+      const metadataLeaseOwner = metadata?.adoptionPromotionSessionId;
+      if (metadataLeaseOwner !== sessionId || Number(metadata?.adoptionPromotionTargetGeneration) !== targetGeneration) throw new Error("adoption_transfer_generation_conflict");
+      if (!targetGenerationSnapshot?.exists) throw new Error("adoption_transfer_generation_conflict");
+      const generationData = asRecord(targetGenerationSnapshot.data(), "progress_generation");
+      if (generationData.state !== "building" || generationData.sourceSessionId !== sessionId || Number(generationData.generation) !== targetGeneration) throw new Error("adoption_transfer_generation_conflict");
+      // Re-acquisition after expiry is a CAS over the pinned source generation and revision above.
+      const updatedAt = now();
+      transaction.set(metadataRef, { adoptionPromotionLeaseExpiresAt: adoptionPromotionLease(), updatedAt }, { merge: true });
+      transaction.update(operation, { updatedAt });
+      return { ...currentData, updatedAt };
+    });
+    transfer = readStoredAdoptionTransfer(operationData);
+    if (transfer.state === "complete") return adoptionStatusFromData(operationData);
     const applyTotal = Number(operationData.applyTotal ?? materialization.records.length);
     let cursor = Number(operationData.applyCursor ?? 0);
-    if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > applyTotal) throw new Error("adoption_transfer_cursor_invalid");
+    if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > applyTotal || applyTotal !== materialization.records.length) throw new Error("adoption_transfer_cursor_invalid");
     const applyAccountRevision = Number(operationData.applyAccountRevision);
-    if (!Number.isSafeInteger(applyAccountRevision) || applyAccountRevision < 0) throw new Error("adoption_transfer_revision_invalid");
+    const applySourceGeneration = Number(operationData.applySourceGeneration);
+    const applySourceRevision = Number(operationData.applySourceRevision);
+    if (!Number.isSafeInteger(applyAccountRevision) || applyAccountRevision < 0 || !Number.isSafeInteger(applySourceGeneration) || !Number.isSafeInteger(applySourceRevision)) throw new Error("adoption_transfer_revision_invalid");
     const changedMutationIds = new Map(materialization.changes.map((change) => [adoptionTransferRecordKey(change.record), change.mutationId]));
     while (cursor < materialization.records.length) {
-      const batch = this.db.batch();
-      const nextCursor = Math.min(cursor + ADOPTION_TRANSFER_FIRESTORE_BATCH_SIZE, materialization.records.length);
-      for (const record of materialization.records.slice(cursor, nextCursor)) {
+      const chunk: Array<{ ref: DocumentReference; value: Record<string, unknown> }> = [];
+      let chunkBytes = 0;
+      const chunkUpdatedAt = now();
+      for (const record of materialization.records.slice(cursor, cursor + ADOPTION_TRANSFER_FIRESTORE_BATCH_SIZE)) {
         const key = adoptionTransferRecordKey(record);
         const mutationId = changedMutationIds.get(key) ?? `adoption_carry_${sessionId.replaceAll("-", "")}_${createHash("sha256").update(key, "utf8").digest("hex").slice(0, 24)}`;
-        batch.set(targetCollection.doc(progressDocumentId({ kind: adoptionKind(record.recordType), recordType: record.recordType as ProgressMutation["recordType"], targetId: record.recordId, trackId: record.trackId })), { kind: adoptionKind(record.recordType), recordType: record.recordType, trackId: record.trackId, targetId: record.recordId, version: record.version, fingerprint: record.fingerprint, state: record.state, lastMutationId: mutationId, generation: targetGeneration, sourceSessionId: sessionId, updatedAt: now(), expiresAt: operationData.expiresAt });
+        const value = { kind: adoptionKind(record.recordType), recordType: record.recordType, trackId: record.trackId, targetId: record.recordId, version: record.version, fingerprint: record.fingerprint, state: record.state, lastMutationId: mutationId, generation: targetGeneration, sourceSessionId: sessionId, updatedAt: chunkUpdatedAt, expiresAt: operationData.expiresAt };
+        const bytes = canonicalJsonBytes({ ...value, updatedAt: chunkUpdatedAt.toDate().toISOString(), expiresAt: operationData.expiresAt instanceof Timestamp ? operationData.expiresAt.toDate().toISOString() : null }) + 512;
+        if (chunk.length > 0 && chunkBytes + bytes > ADOPTION_APPLY_MAX_TRANSACTION_BYTES) break;
+        if (bytes > ADOPTION_APPLY_MAX_TRANSACTION_BYTES) throw new Error("adoption_transfer_record_too_large");
+        chunk.push({ ref: progressCollectionRef(this.db, userId, targetGeneration).doc(progressDocumentId({ kind: adoptionKind(record.recordType), recordType: record.recordType as ProgressMutation["recordType"], targetId: record.recordId, trackId: record.trackId })), value });
+        chunkBytes += bytes;
       }
-      await batch.commit();
+      if (chunk.length === 0) throw new Error("adoption_transfer_record_too_large");
+      const nextCursor = cursor + chunk.length;
       await this.db.runTransaction(async (transaction) => {
-        const current = await transaction.get(operation);
-        if (!current.exists) throw new Error("adoption_transfer_not_found");
+        const [user, current, metadataSnapshot, targetGenerationSnapshot] = await transaction.getAll(userRef, operation, metadataRef, targetGenerationRef);
+        if (!user?.exists) throw new Error("account_deleted");
+        assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
+        if (!current?.exists) throw new Error("adoption_transfer_not_found");
         const data = asRecord(current.data(), "adoption_transfer");
-        if (data.state === "complete") return;
-        if (data.state !== "applying" || Number(data.applyCursor ?? 0) !== cursor) throw new Error("adoption_transfer_apply_cursor_conflict");
-        const metadataRef = accountMetadataRef(this.db, userId);
-        const metadataSnapshot = await transaction.get(metadataRef);
-        const metadata = metadataSnapshot.data() as Record<string, unknown> | undefined;
-        if (metadata?.adoptionPromotionSessionId !== sessionId || Number(metadata.adoptionPromotionTargetGeneration) !== targetGeneration) throw new Error("adoption_transfer_generation_conflict");
-        transaction.update(operation, { applyCursor: nextCursor, updatedAt: now() });
-        transaction.set(metadataRef, { adoptionPromotionLeaseExpiresAt: adoptionPromotionLease(), updatedAt: now() }, { merge: true });
+        const metadata = metadataSnapshot?.data() as Record<string, unknown> | undefined;
+        if (data.state !== "applying" || Number(data.applyCursor ?? 0) !== cursor || Number(data.applyTotal) !== applyTotal) throw new Error("adoption_transfer_apply_cursor_conflict");
+        if (Number(data.applySourceGeneration) !== applySourceGeneration || Number(data.applySourceRevision) !== applySourceRevision || Number(data.targetGeneration) !== targetGeneration) throw new Error("adoption_transfer_generation_conflict");
+        assertAdoptionApplySource(metadata, applySourceGeneration, applySourceRevision);
+        if (!adoptionApplyLeaseIsValid(metadata, sessionId) || Number(metadata?.adoptionPromotionTargetGeneration) !== targetGeneration || Number(metadata?.adoptionPromotionSourceGeneration) !== applySourceGeneration || Number(metadata?.adoptionPromotionSourceRevision) !== applySourceRevision) throw new Error("adoption_transfer_generation_conflict");
+        if (!targetGenerationSnapshot?.exists) throw new Error("adoption_transfer_generation_conflict");
+        const generationData = asRecord(targetGenerationSnapshot.data(), "progress_generation");
+        if (generationData.state !== "building" || generationData.sourceSessionId !== sessionId || Number(generationData.generation) !== targetGeneration) throw new Error("adoption_transfer_generation_conflict");
+        const updatedAt = now();
+        for (const row of chunk) transaction.set(row.ref, { ...row.value, updatedAt });
+        transaction.update(operation, { applyCursor: nextCursor, updatedAt });
+        transaction.set(metadataRef, { adoptionPromotionLeaseExpiresAt: adoptionPromotionLease(), updatedAt }, { merge: true });
       });
       cursor = nextCursor;
     }
-    const metadataRef = accountMetadataRef(this.db, userId);
     const completed = await this.db.runTransaction(async (transaction) => {
-      const current = await transaction.get(operation);
-      const metadataSnapshot = await transaction.get(metadataRef);
-      if (!current.exists) throw new Error("adoption_transfer_not_found");
+      const [user, current, metadataSnapshot, targetGenerationSnapshot] = await transaction.getAll(userRef, operation, metadataRef, targetGenerationRef);
+      if (!user?.exists) throw new Error("account_deleted");
+      assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
+      if (!current?.exists) throw new Error("adoption_transfer_not_found");
       const data = asRecord(current.data(), "adoption_transfer");
       if (data.state === "complete") return data;
-      if (data.state !== "applying" || Number(data.applyCursor ?? 0) < Number(data.applyTotal ?? 0)) throw new Error("adoption_transfer_apply_incomplete");
-      const metadata = metadataSnapshot.data() as Record<string, unknown> | undefined;
-      if (metadata?.adoptionPromotionSessionId !== sessionId || Number(metadata.adoptionPromotionTargetGeneration) !== targetGeneration) throw new Error("adoption_transfer_generation_conflict");
+      const metadata = metadataSnapshot?.data() as Record<string, unknown> | undefined;
+      if (data.state !== "applying" || Number(data.applyCursor ?? 0) !== Number(data.applyTotal ?? -1) || Number(data.applyTotal) !== applyTotal) throw new Error("adoption_transfer_apply_incomplete");
+      if (Number(data.applySourceGeneration) !== applySourceGeneration || Number(data.applySourceRevision) !== applySourceRevision || Number(data.targetGeneration) !== targetGeneration) throw new Error("adoption_transfer_generation_conflict");
+      assertAdoptionApplySource(metadata, applySourceGeneration, applySourceRevision);
+      if (!adoptionApplyLeaseIsValid(metadata, sessionId) || Number(metadata?.adoptionPromotionTargetGeneration) !== targetGeneration || Number(metadata?.adoptionPromotionSourceGeneration) !== applySourceGeneration || Number(metadata?.adoptionPromotionSourceRevision) !== applySourceRevision) throw new Error("adoption_transfer_generation_conflict");
+      if (!targetGenerationSnapshot?.exists) throw new Error("adoption_transfer_generation_conflict");
+      const generationData = asRecord(targetGenerationSnapshot.data(), "progress_generation");
+      if (generationData.state !== "building" || generationData.sourceSessionId !== sessionId || Number(generationData.generation) !== targetGeneration) throw new Error("adoption_transfer_generation_conflict");
       const complete = completeAdoptionTransfer(Object.freeze({ ...readStoredAdoptionTransfer(data), records: [], chunks: [], decisions: [], resultChunks: [] }), transfer.expectedGeneration, targetGeneration);
       const updatedAt = now();
-      transaction.set(metadataRef, { generation: targetGeneration, activeGeneration: targetGeneration, accountRevision: applyAccountRevision, adoptionPromotionSessionId: FieldValue.delete(), adoptionPromotionTargetGeneration: FieldValue.delete(), adoptionPromotionLeaseExpiresAt: FieldValue.delete(), updatedAt }, { merge: true });
-      transaction.set(progressGenerationRef(this.db, userId, targetGeneration), { userId, generation: targetGeneration, sourceSessionId: sessionId, state: "active", updatedAt, expiresAt: FieldValue.delete() }, { merge: true });
+      transaction.set(metadataRef, { generation: targetGeneration, activeGeneration: targetGeneration, accountRevision: applyAccountRevision, adoptionPromotionSessionId: FieldValue.delete(), adoptionPromotionTargetGeneration: FieldValue.delete(), adoptionPromotionSourceGeneration: FieldValue.delete(), adoptionPromotionSourceRevision: FieldValue.delete(), adoptionPromotionLeaseExpiresAt: FieldValue.delete(), updatedAt }, { merge: true });
+      transaction.set(targetGenerationRef, { userId, generation: targetGeneration, sourceSessionId: sessionId, state: "active", updatedAt, expiresAt: FieldValue.delete() }, { merge: true });
       transaction.set(operation.collection("markers").doc(String(targetGeneration)), { sessionId, targetGeneration, accountRevision: applyAccountRevision, committedAt: updatedAt, expiresAt: data.expiresAt });
       const update = { state: complete.state, generation: complete.generation, activeGeneration: targetGeneration, accountRevision: applyAccountRevision, committedAt: updatedAt, updatedAt };
       transaction.update(operation, update);

@@ -3080,7 +3080,7 @@
       "x-patternly-security-profile": "bearer",
       "x-patternly-consumer-scope": "backend-only",
       "post": {
-        "description": "Materialize confirmed adoption into an invisible generation and atomically flip the active generation",
+        "description": "Materialize confirmed adoption in authorization-fenced transactions. Each target chunk and its cursor commit together; the active generation changes only after every chunk completes.",
         "parameters": [
           {
             "$ref": "#/components/parameters/AdoptionTransferSessionId"
@@ -3117,6 +3117,22 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication rejected or account inactive",
+            "x-patternly-error-codes": [
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Transfer unavailable; account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
@@ -3131,7 +3147,20 @@
             }
           },
           "409": {
-            "description": "Generation, cursor, or decision conflict",
+            "description": "Authorization, source generation, cursor, lease, or decision conflict",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "A transfer record exceeds the safe transaction budget",
             "content": {
               "application/json": {
                 "schema": {
@@ -3183,6 +3212,22 @@
           },
           "400": {
             "description": "Invalid or mismatched device",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication rejected or account inactive",
+            "x-patternly-error-codes": [
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
             "content": {
               "application/json": {
                 "schema": {

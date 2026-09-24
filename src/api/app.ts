@@ -916,7 +916,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     const parsed = adoptionTransferApplySchema.safeParse(request.body);
     if (!sessionId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request", ...(parsed.success ? {} : { issues: parsed.error.issues.map((issue) => issue.path.join(".")) }) } });
     try {
-      return reply.code(200).send(await requireStores(dependencies).progress.applyAdoptionTransfer(request.userId!, sessionId, parsed.data));
+      return reply.code(200).send(await requireStores(dependencies).progress.applyAdoptionTransfer(request.userId!, request.expectedAuthorizationGeneration!, sessionId, parsed.data));
     } catch (error) {
       if (adoptionTransferErrorResponse(error, reply)) return;
       throw error;

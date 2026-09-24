@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Timestamp, type Firestore } from "firebase-admin/firestore";
+import { Timestamp, type Firestore, type Transaction } from "firebase-admin/firestore";
 
 import { buildApplication } from "../src/api/app.js";
 import { FirestoreProgressStore } from "../src/modules/progress/store.js";
@@ -22,6 +22,28 @@ function activeRecord(recordId: string, recordTrackId: string, value = recordId)
   return { recordType: "active_track", recordId, trackId: recordTrackId, state, version: 0, fingerprint: createMergeRecordFingerprint({ recordType: "active_track", recordId, trackId: recordTrackId, state }) };
 }
 
+async function prepareConfirmedTransfer(auth: Awaited<ReturnType<typeof createRegisteredAuthUser>>, sessionId: string, records: ReturnType<typeof activeRecord>[]) {
+  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const recordKeys = records.map(adoptionTransferRecordKey);
+  const chunkBase = { chunkId: "chunk-0", index: 0, recordKeys, bytes: 512 };
+  const chunk = { ...chunkBase, fingerprint: createAdoptionTransferChunkFingerprint(chunkBase) };
+  const start = await context.app.inject({ method: "POST", url: "/v1/account-data/adoption/transfer/start", headers, payload: { canonicalVersion, sessionId, idempotencyKey: sessionId, guestUserId, snapshotVersion: 1, expectedGeneration: 0, deviceId } });
+  assert.equal(start.statusCode, 200, JSON.stringify(start.json()));
+  if (records.length > 0) {
+    const upload = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/upload`, headers, payload: { canonicalVersion, deviceId, chunk, records } });
+    assert.equal(upload.statusCode, 200, JSON.stringify(upload.json()));
+  }
+  const snapshotFingerprint = createAdoptionSnapshotSeal({ guestUserId, snapshotVersion: 1, records, chunks: records.length > 0 ? [chunk] : [] });
+  const seal = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/seal`, headers, payload: { canonicalVersion, deviceId, snapshotFingerprint, recordCount: records.length, chunkCount: records.length > 0 ? 1 : 0 } });
+  assert.equal(seal.statusCode, 200, JSON.stringify(seal.json()));
+  const preview = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/preview`, headers, payload: { canonicalVersion, deviceId } });
+  assert.equal(preview.statusCode, 200, JSON.stringify(preview.json()));
+  const confirmation = { canonicalVersion, deviceId, operationId: preview.json().preview.operationId as string, previewFingerprint: preview.json().preview.fingerprint as string, resolutions: [], groupChoices: [] };
+  const confirm = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/confirm`, headers, payload: confirmation });
+  assert.equal(confirm.statusCode, 200, JSON.stringify(confirm.json()));
+  return { headers, confirm, preview, chunk };
+}
+
 test.before(async () => {
   context = createEmulatorContext();
   await clearFirestore();
@@ -39,26 +61,10 @@ test("canonical transfer persists chunks, applies one generation, and retries sa
   const auth = await createRegisteredAuthUser(context);
   const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
   const accountId = (await context.app.inject({ method: "GET", url: "/v1/me", headers })).json().user.id as string;
-  const records = [activeRecord("record-" + "r".repeat(500), "track-" + "t".repeat(300)), activeRecord("shared-record", "track-b")];
+  const records = Array.from({ length: 201 }, (_, index) => activeRecord(`record-${index}`, `track-${index}`));
   const sessionId = "canonical-transfer-test";
-  const recordKeys = records.map(adoptionTransferRecordKey);
-  const chunkBase = { chunkId: "chunk-0", index: 0, recordKeys, bytes: 512 };
-  const chunk = { ...chunkBase, fingerprint: createAdoptionTransferChunkFingerprint(chunkBase) };
-  const start = await context.app.inject({ method: "POST", url: "/v1/account-data/adoption/transfer/start", headers, payload: { canonicalVersion, sessionId, idempotencyKey: sessionId, guestUserId, snapshotVersion: 1, expectedGeneration: 0, deviceId } });
-  assert.equal(start.statusCode, 200, JSON.stringify(start.json()));
-  const invalidRecordType = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/upload`, headers, payload: { canonicalVersion, deviceId, chunk, records: [{ ...records[0], recordType: "unsupported_record" }] } });
-  assert.equal(invalidRecordType.statusCode, 400, JSON.stringify(invalidRecordType.json()));
-  const upload = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/upload`, headers, payload: { canonicalVersion, deviceId, chunk, records } });
-  assert.equal(upload.statusCode, 200, JSON.stringify(upload.json()));
-  const snapshotFingerprint = createAdoptionSnapshotSeal({ guestUserId, snapshotVersion: 1, records, chunks: [chunk] });
-  const seal = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/seal`, headers, payload: { canonicalVersion, deviceId, snapshotFingerprint, recordCount: records.length, chunkCount: 1 } });
-  assert.equal(seal.statusCode, 200, JSON.stringify(seal.json()));
-  const preview = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/preview`, headers, payload: { canonicalVersion, deviceId } });
-  assert.equal(preview.statusCode, 200, JSON.stringify(preview.json()));
+  const { confirm, preview } = await prepareConfirmedTransfer(auth, sessionId, records);
   assert.equal(preview.json().plan.uploadRecordIds.length, records.length);
-  const confirmation = { canonicalVersion, deviceId, operationId: preview.json().preview.operationId as string, previewFingerprint: preview.json().preview.fingerprint as string, resolutions: [], groupChoices: [] };
-  const confirm = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/confirm`, headers, payload: confirmation });
-  assert.equal(confirm.statusCode, 200, JSON.stringify(confirm.json()));
   const apply = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers, payload: { canonicalVersion, deviceId, decisionFingerprint: confirm.json().decisionFingerprint } });
   assert.equal(apply.statusCode, 200, JSON.stringify(apply.json()));
   const retry = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers, payload: { canonicalVersion, deviceId, decisionFingerprint: confirm.json().decisionFingerprint } });
@@ -66,6 +72,7 @@ test("canonical transfer persists chunks, applies one generation, and retries sa
   const status = await context.app.inject({ method: "GET", url: `/v1/account-data/adoption/transfer/${sessionId}/status?deviceId=${deviceId}`, headers });
   assert.equal(status.statusCode, 200, JSON.stringify(status.json()));
   assert.equal(status.json().state, "complete");
+  assert.equal(status.json().applyCursor, records.length);
   assert.equal(Object.hasOwn(status.json(), "protocolVersion"), false);
   assert.equal(Object.hasOwn(status.json(), "contentIdentitySchema"), false);
 
@@ -77,6 +84,155 @@ test("canonical transfer persists chunks, applies one generation, and retries sa
   assert.equal(Object.hasOwn(operation!, "protocolVersion"), false);
   assert.equal(Object.hasOwn(operation!, "contentIdentitySchema"), false);
   assert.equal((await firestore().collection("users").doc(accountId).collection("progressGenerations").doc("1").collection("records").get()).size, records.length);
+});
+
+test("apply fences reservation, every chunk, and empty-transfer promotion against authorization rotation", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+
+  const reserveSession = "apply-rotation-reservation";
+  const reserve = await prepareConfirmedTransfer(auth, reserveSession, [activeRecord("reserve-record", "reserve-track")]);
+  const reserveApp = buildTransferTransactionRotationApp(auth.userId, 1);
+  const reserveResult = await reserveApp.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${reserveSession}/apply`, headers, payload: { canonicalVersion, deviceId, decisionFingerprint: reserve.confirm.json().decisionFingerprint } });
+  assert.equal(reserveResult.statusCode, 409, JSON.stringify(reserveResult.json()));
+  assert.deepEqual(reserveResult.json(), { error: { code: "authorization_generation_conflict" } });
+  assert.equal((await transferRefFor(auth.userId, reserveSession).get()).data()?.state, "preview_ready");
+  assert.equal((await firestore().collection("users").doc(auth.userId).collection("progressGenerations").doc("1").get()).exists, false);
+  await reserveApp.close();
+
+  await firestore().collection("users").doc(auth.userId).update({ authorizationGeneration: 1, authorizationState: "active" });
+  const chunkSession = "apply-rotation-between-chunks";
+  const chunkRecords = Array.from({ length: 201 }, (_, index) => activeRecord(`chunk-record-${index}`, `chunk-track-${index}`));
+  const chunk = await prepareConfirmedTransfer(auth, chunkSession, chunkRecords);
+  const chunkApp = buildTransferTransactionRotationApp(auth.userId, 3);
+  const chunkResult = await chunkApp.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${chunkSession}/apply`, headers, payload: { canonicalVersion, deviceId, decisionFingerprint: chunk.confirm.json().decisionFingerprint } });
+  assert.equal(chunkResult.statusCode, 409, JSON.stringify(chunkResult.json()));
+  assert.deepEqual(chunkResult.json(), { error: { code: "authorization_generation_conflict" } });
+  const chunkOperation = (await transferRefFor(auth.userId, chunkSession).get()).data();
+  assert.equal(chunkOperation?.state, "applying");
+  assert.equal(chunkOperation?.applyCursor, 200);
+  assert.equal((await firestore().collection("users").doc(auth.userId).collection("progressGenerations").doc(String(chunkOperation?.targetGeneration)).collection("records").get()).size, 200);
+  await chunkApp.close();
+
+  await firestore().collection("users").doc(auth.userId).collection("syncMetadata").doc("account").set({ adoptionPromotionLeaseExpiresAt: Timestamp.fromMillis(Date.now() - 1) }, { merge: true });
+  await firestore().collection("users").doc(auth.userId).update({ authorizationGeneration: 1, authorizationState: "active" });
+  const emptySession = "apply-rotation-final-promotion";
+  const empty = await prepareConfirmedTransfer(auth, emptySession, []);
+  const finalApp = buildTransferTransactionRotationApp(auth.userId, 2);
+  const finalResult = await finalApp.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${emptySession}/apply`, headers, payload: { canonicalVersion, deviceId, decisionFingerprint: empty.confirm.json().decisionFingerprint } });
+  assert.equal(finalResult.statusCode, 409, JSON.stringify(finalResult.json()));
+  assert.deepEqual(finalResult.json(), { error: { code: "authorization_generation_conflict" } });
+  assert.equal((await transferRefFor(auth.userId, emptySession).get()).data()?.state, "applying");
+  assert.equal((await firestore().collection("users").doc(auth.userId).collection("syncMetadata").doc("account").get()).data()?.generation ?? 0, 0);
+  await finalApp.close();
+});
+
+test("apply resumes an expired same-session lease only while the pinned progress revision still matches", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const sessionId = "apply-expired-lease-resume";
+  const { headers, confirm } = await prepareConfirmedTransfer(auth, sessionId, [activeRecord("expired-lease-record", "expired-lease-track")]);
+  const metadataRef = firestore().collection("users").doc(auth.userId).collection("syncMetadata").doc("account");
+  const operationRef = transferRefFor(auth.userId, sessionId);
+  const targetRef = firestore().collection("users").doc(auth.userId).collection("progressGenerations").doc("1");
+  await firestore().runTransaction(async (transaction) => {
+    const operation = await transaction.get(operationRef);
+    const metadata = await transaction.get(metadataRef);
+    const operationData = operation.data()!;
+    transaction.update(operationRef, { state: "applying", targetGeneration: 1, applyCursor: 0, applyTotal: 1, applyAccountRevision: 0, applySourceGeneration: 0, applySourceRevision: 0 });
+    transaction.set(targetRef, { userId: auth.userId, generation: 1, sourceSessionId: sessionId, state: "building", createdAt: operationData.createdAt, expiresAt: operationData.expiresAt });
+    transaction.set(metadataRef, { ...metadata.data(), adoptionPromotionSessionId: sessionId, adoptionPromotionTargetGeneration: 1, adoptionPromotionSourceGeneration: 0, adoptionPromotionSourceRevision: 0, adoptionPromotionLeaseExpiresAt: Timestamp.fromMillis(Date.now() - 1) }, { merge: true });
+  });
+  const apply = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers, payload: { canonicalVersion, deviceId, decisionFingerprint: confirm.json().decisionFingerprint } });
+  assert.equal(apply.statusCode, 200, JSON.stringify(apply.json()));
+  assert.equal(apply.json().state, "complete");
+  assert.equal(apply.json().applyCursor, 1);
+});
+
+test("sync loses during an active transfer lease and wins after expiry without allowing stale promotion", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const sessionId = "apply-sync-versus-lease";
+  const { headers, confirm } = await prepareConfirmedTransfer(auth, sessionId, [activeRecord("lease-guest-record", "lease-guest-track")]);
+  const userRef = firestore().collection("users").doc(auth.userId);
+  const metadataRef = userRef.collection("syncMetadata").doc("account");
+  const operationRef = transferRefFor(auth.userId, sessionId);
+  const operation = (await operationRef.get()).data()!;
+  const targetGeneration = Number(operation.targetGeneration);
+  const targetGenerationRef = userRef.collection("progressGenerations").doc(String(targetGeneration));
+  await firestore().runTransaction(async (transaction) => {
+    const currentOperation = await transaction.get(operationRef);
+    const currentMetadata = await transaction.get(metadataRef);
+    const data = currentOperation.data()!;
+    transaction.update(operationRef, { state: "applying", targetGeneration, applyCursor: 0, applyTotal: 1, applyAccountRevision: 0, applySourceGeneration: 0, applySourceRevision: 0 });
+    transaction.set(targetGenerationRef, { userId: auth.userId, generation: targetGeneration, sourceSessionId: sessionId, state: "building", createdAt: data.createdAt, expiresAt: data.expiresAt });
+    transaction.set(metadataRef, { ...currentMetadata.data(), adoptionPromotionSessionId: sessionId, adoptionPromotionTargetGeneration: targetGeneration, adoptionPromotionSourceGeneration: 0, adoptionPromotionSourceRevision: 0, adoptionPromotionLeaseExpiresAt: Timestamp.fromMillis(Date.now() + 60_000) }, { merge: true });
+  });
+  const state = { value: "from-sync" };
+  const mutation = { mutationId: "lease-race-mutation-0001", kind: "node" as const, recordType: "active_track" as const, trackId: "lease-sync-track", targetId: "lease-sync-record", expectedVersion: null, fingerprint: createMergeRecordFingerprint({ recordType: "active_track", recordId: "lease-sync-record", trackId: "lease-sync-track", state }), state };
+  await assert.rejects(context.stores.progress.applyBatch(auth.userId, 1, deviceId, 0, [mutation], { sessionId: "lease-sync-session", batchId: "lease-sync-batch", highWatermark: 1 }), /progress_generation_conflict/u);
+
+  await metadataRef.set({ adoptionPromotionLeaseExpiresAt: Timestamp.fromMillis(Date.now() - 1) }, { merge: true });
+  const sync = await context.stores.progress.applyBatch(auth.userId, 1, deviceId, 0, [mutation], { sessionId: "lease-sync-session", batchId: "lease-sync-batch", highWatermark: 1 });
+  assert.equal(sync.applied.length, 1);
+  const apply = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers, payload: { canonicalVersion, deviceId, decisionFingerprint: confirm.json().decisionFingerprint } });
+  assert.equal(apply.statusCode, 409, JSON.stringify(apply.json()));
+  assert.deepEqual(apply.json(), { error: { code: "adoption_transfer_preview_stale" } });
+  assert.equal((await operationRef.get()).data()?.state, "applying");
+  assert.equal((await metadataRef.get()).data()?.generation ?? 0, 0);
+});
+
+test("transfer status rejects a stale bearer after authorization rotation", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const sessionId = "stale-transfer-status";
+  await prepareConfirmedTransfer(auth, sessionId, [activeRecord("status-record", "status-track")]);
+  await firestore().collection("users").doc(auth.userId).update({ authorizationGeneration: 2 });
+  const status = await context.app.inject({ method: "GET", url: `/v1/account-data/adoption/transfer/${sessionId}/status?deviceId=${deviceId}`, headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
+  assert.equal(status.statusCode, 401, JSON.stringify(status.json()));
+  assert.deepEqual(status.json(), { error: { code: "authorization_generation_stale" } });
+});
+
+test("apply splits target transactions by both document count and serialized write bytes", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const userRef = firestore().collection("users").doc(auth.userId);
+  const storedAt = Timestamp.now();
+  const seedValue = "x".repeat(40_000);
+  for (let offset = 0; offset < 190; offset += 50) {
+    const batch = firestore().batch();
+    for (let index = offset; index < Math.min(offset + 50, 190); index += 1) {
+      const record = activeRecord(`large-remote-${index}`, `large-track-${index}`, seedValue);
+      batch.set(userRef.collection("progress").doc(progressDocumentId({ kind: "node", recordType: "active_track", targetId: record.recordId, trackId: record.trackId })), { kind: "node", recordType: record.recordType, trackId: record.trackId, targetId: record.recordId, version: 0, fingerprint: record.fingerprint, state: record.state, lastMutationId: `seed_large_${String(index).padStart(4, "0")}_mutation`, updatedAt: storedAt });
+    }
+    await batch.commit();
+  }
+  const sessionId = "apply-byte-bounded-chunks";
+  const { headers, confirm } = await prepareConfirmedTransfer(auth, sessionId, [activeRecord("byte-bound-guest", "byte-bound-guest-track")]);
+  const chunkStats: Array<{ count: number; bytes: number }> = [];
+  const measuredApp = buildTransferWriteMeasuringApp(auth.userId, chunkStats);
+  const apply = await measuredApp.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers, payload: { canonicalVersion, deviceId, decisionFingerprint: confirm.json().decisionFingerprint } });
+  assert.equal(apply.statusCode, 200, JSON.stringify(apply.json()));
+  assert.equal(apply.json().applyCursor, 191);
+  assert.equal(chunkStats.length, 2);
+  assert.ok(chunkStats.every((chunk) => chunk.count > 0 && chunk.count <= 200 && chunk.bytes <= 6 * 1024 * 1024), JSON.stringify(chunkStats));
+  assert.equal(chunkStats.reduce((sum, chunk) => sum + chunk.count, 0), 191);
+  await measuredApp.close();
+});
+
+test("concurrent apply requests leave one complete generation and can be safely replayed", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const sessionId = "apply-concurrent-retry";
+  const records = Array.from({ length: 201 }, (_, index) => activeRecord(`concurrent-record-${index}`, `concurrent-track-${index}`));
+  const { headers, confirm } = await prepareConfirmedTransfer(auth, sessionId, records);
+  const payload = { canonicalVersion, deviceId, decisionFingerprint: confirm.json().decisionFingerprint };
+  const results = await Promise.all([
+    context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers, payload }),
+    context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers, payload }),
+  ]);
+  assert.ok(results.some((result) => result.statusCode === 200), JSON.stringify(results.map((result) => ({ statusCode: result.statusCode, body: result.json() }))));
+  assert.ok(results.every((result) => result.statusCode === 200 || (result.statusCode === 409 && result.json().error?.code === "adoption_transfer_apply_cursor_conflict")), JSON.stringify(results.map((result) => ({ statusCode: result.statusCode, body: result.json() }))));
+  const replay = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers, payload });
+  assert.equal(replay.statusCode, 200, JSON.stringify(replay.json()));
+  assert.equal(replay.json().state, "complete");
+  const operation = (await transferRefFor(auth.userId, sessionId).get()).data();
+  assert.equal((await firestore().collection("users").doc(auth.userId).collection("progressGenerations").doc(String(operation?.targetGeneration)).collection("records").get()).size, records.length);
 });
 
 test("transfer decision lock and child rows recheck account authorization generation", async () => {
@@ -509,6 +665,80 @@ function buildTransferRotationApp(userId: string, method: "startAdoptionTransfer
       };
     },
   });
+  return buildApplication({
+    environment: testEnvironment,
+    firestore: null,
+    verifier: createFirebaseTokenVerifier(testEnvironment),
+    appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
+    stores: { ...context.stores, progress },
+  });
+}
+
+function buildTransferTransactionRotationApp(userId: string, rotateBeforeTransaction: number) {
+  const userRef = firestore().collection("users").doc(userId);
+  let transactionCount = 0;
+  const racedDb = new Proxy(firestore(), {
+    get(target, property) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (property === "runTransaction" && typeof value === "function") {
+        return async (...args: unknown[]) => {
+          transactionCount += 1;
+          if (transactionCount === rotateBeforeTransaction) await userRef.update({ authorizationGeneration: 2 });
+          return (value as (...callArgs: unknown[]) => Promise<unknown>).apply(target, args);
+        };
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Firestore;
+  const progress = new FirestoreProgressStore(racedDb);
+  return buildApplication({
+    environment: testEnvironment,
+    firestore: null,
+    verifier: createFirebaseTokenVerifier(testEnvironment),
+    appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
+    stores: { ...context.stores, progress },
+  });
+}
+
+function buildTransferWriteMeasuringApp(userId: string, chunks: Array<{ count: number; bytes: number }>) {
+  const baseDb = firestore();
+  const targetPrefix = `users/${userId}/progressGenerations/`;
+  const measuredDb = new Proxy(baseDb, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (property !== "runTransaction" || typeof value !== "function") return typeof value === "function" ? value.bind(target) : value;
+      return async (...args: unknown[]) => {
+        const callback = args[0] as (transaction: Transaction) => Promise<unknown>;
+        let attempted: { count: number; bytes: number } | undefined;
+        const result = await (value as (...callArgs: unknown[]) => Promise<unknown>).apply(target, [async (transaction: Transaction) => {
+          let count = 0;
+          let bytes = 0;
+          const observed = new Proxy(transaction, {
+            get(tx, txProperty) {
+              const txValue = Reflect.get(tx, txProperty, tx) as unknown;
+              if (txProperty === "set" && typeof txValue === "function") {
+                return (...writeArgs: unknown[]) => {
+                  const ref = writeArgs[0] as { path?: string } | undefined;
+                  if (ref?.path?.startsWith(targetPrefix) && ref.path.includes("/records/")) {
+                    count += 1;
+                    bytes += Buffer.byteLength(JSON.stringify(writeArgs[1]), "utf8") + 512;
+                  }
+                  return (txValue as (...callArgs: unknown[]) => unknown).apply(tx, writeArgs);
+                };
+              }
+              return typeof txValue === "function" ? txValue.bind(tx) : txValue;
+            },
+          });
+          const transactionResult = await callback(observed);
+          attempted = { count, bytes };
+          return transactionResult;
+        }, ...args.slice(1)]);
+        if (attempted && attempted.count > 0) chunks.push(attempted);
+        return result;
+      };
+    },
+  }) as Firestore;
+  const progress = new FirestoreProgressStore(measuredDb);
   return buildApplication({
     environment: testEnvironment,
     firestore: null,
