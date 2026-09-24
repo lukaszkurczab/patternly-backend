@@ -17,6 +17,7 @@ const db = getFirestore(firebaseApp);
 const now = Timestamp.fromMillis(Date.now());
 const userId = "account-a";
 const otherUserId = "account-b";
+const raceUserId = "account-export-race";
 const authTime = Math.floor(Date.now() / 1_000);
 const environment = loadEnvironment({
   NODE_ENV: "test",
@@ -85,6 +86,7 @@ test.after(async () => {
   await db.recursiveDelete(db.collection(COLLECTIONS.users).doc(userId));
   await db.recursiveDelete(db.collection(COLLECTIONS.users).doc(otherUserId));
   await db.recursiveDelete(db.collection(COLLECTIONS.users).doc("account-c"));
+  await db.recursiveDelete(db.collection(COLLECTIONS.users).doc(raceUserId));
   await db.recursiveDelete(db.collection(COLLECTIONS.contentReports).doc("report-a"));
   await db.recursiveDelete(db.collection(COLLECTIONS.contentReports).doc("report-b"));
   await db.recursiveDelete(db.collection(COLLECTIONS.contentReports).doc("report-anonymous"));
@@ -207,7 +209,7 @@ test("export history is ordered by createdAt, excludes the current export and ca
     });
   }
 
-  const result = await exportStore().create(historyUserId);
+  const result = await exportStore().create(historyUserId, { kind: "account", expectedAuthorizationGeneration: 1 });
   const body = JSON.parse(result.serialized) as Record<string, unknown>;
   const history = ((body.accountContext as Record<string, unknown>).exportHistory as Array<Record<string, unknown>>);
   assert.equal(history.length, 100);
@@ -222,17 +224,96 @@ test("stable exports complete only after their consumer and never rebuild after 
   const store = exportStore();
   const exportId = `export_${"s".repeat(32)}`;
   let statusDuringCallback = "";
-  await assert.rejects(store.create(userId, exportId, async () => {
+  const authorization = { kind: "admin_privacy_request" as const, administratorUserId: "admin-a", privacyRequestId: "pr_00000000-0000-4000-8000-000000000001", expectedRevision: 1 };
+  await assert.rejects(store.create(userId, authorization, exportId, async () => {
     statusDuringCallback = String((await db.collection(COLLECTIONS.accountDataExportAudits).doc(exportId).get()).data()?.status);
     throw new Error("consumer_unavailable");
   }), /consumer_unavailable/u);
   assert.equal(statusDuringCallback, "started");
   assert.equal((await db.collection(COLLECTIONS.accountDataExportAudits).doc(exportId).get()).data()?.status, "failed");
 
-  const completed = await store.create(userId, exportId, async () => undefined);
+  const completed = await store.create(userId, authorization, exportId, async () => undefined);
   assert.equal(completed.exportId, exportId);
   assert.equal((await db.collection(COLLECTIONS.accountDataExportAudits).doc(exportId).get()).data()?.status, "completed");
-  await assert.rejects(store.create(userId, exportId, async () => undefined), /account_data_export_already_completed/u);
+  await assert.rejects(store.create(userId, authorization, exportId, async () => undefined), /account_data_export_already_completed/u);
+});
+
+test("account export rejects a generation rotated after the request guard and before its transactional claim", async () => {
+  await db.collection(COLLECTIONS.users).doc(raceUserId).set({ createdAt: now, updatedAt: now, authorizationGeneration: 1, authorizationState: "active" });
+  const store = exportStore();
+  const rotatingStore = {
+    create: async (...args: Parameters<FirestoreDataExportStore["create"]>) => {
+      await db.collection(COLLECTIONS.users).doc(raceUserId).set({ authorizationGeneration: 2 }, { merge: true });
+      return store.create(...args);
+    },
+  };
+  const app = application(rotatingStore as FirestoreDataExportStore, "firebase-subject-race", raceUserId);
+  try {
+    const response = await app.inject({ method: "GET", url: "/v1/account-data/export", headers: { authorization: "Bearer valid", "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
+    assert.equal(response.statusCode, 409);
+    assert.deepEqual(response.json(), { error: { code: "authorization_generation_conflict" } });
+    assert.equal((await db.collection(COLLECTIONS.accountDataExportAudits).where("userId", "==", raceUserId).get()).size, 0);
+    assert.equal((await db.collection(COLLECTIONS.accountDataExportRateLimits).doc(raceUserId).get()).exists, false);
+  } finally {
+    await app.close();
+  }
+});
+
+test("account export returns no document when generation rotates during its read before finalization", async () => {
+  await db.collection(COLLECTIONS.users).doc(raceUserId).set({ createdAt: now, updatedAt: now, authorizationGeneration: 1, authorizationState: "active" });
+  const realCollection = db.collection.bind(db);
+  let rotatedDuringRead = false;
+  const readRaceDb = new Proxy(db, {
+    get(target, property) {
+      if (property === "collection") return (collectionName: string) => {
+        const collection = realCollection(collectionName);
+        if (collectionName !== COLLECTIONS.users) return collection;
+        const realDoc = collection.doc.bind(collection);
+        return new Proxy(collection, {
+          get(collectionTarget, collectionProperty) {
+            if (collectionProperty !== "doc") return Reflect.get(collectionTarget, collectionProperty, collectionTarget);
+            return (documentId: string) => {
+              const reference = realDoc(documentId);
+              if (documentId !== raceUserId) return reference;
+              const realGet = reference.get.bind(reference);
+              return new Proxy(reference, {
+                get(referenceTarget, referenceProperty) {
+                  if (referenceProperty !== "get") return Reflect.get(referenceTarget, referenceProperty, referenceTarget);
+                  return async (...args: Parameters<typeof realGet>) => {
+                    const snapshot = await realGet(...args);
+                    if (!rotatedDuringRead) {
+                      rotatedDuringRead = true;
+                      await realCollection(COLLECTIONS.users).doc(raceUserId).set({ authorizationGeneration: 2 }, { merge: true });
+                    }
+                    return snapshot;
+                  };
+                },
+              });
+            };
+          },
+        });
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const store = new FirestoreDataExportStore(readRaceDb, {
+    rateLimitMax: environment.accountDataExportRateLimitMax,
+    rateLimitWindowSeconds: environment.accountDataExportRateLimitWindowSeconds,
+    maxSerializedBytes: environment.accountDataExportMaxSerializedBytes,
+  });
+  const app = application(store, "firebase-subject-race", raceUserId);
+  try {
+    const response = await app.inject({ method: "GET", url: "/v1/account-data/export", headers: { authorization: "Bearer valid", "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
+    assert.equal(rotatedDuringRead, true);
+    assert.equal(response.statusCode, 409);
+    assert.deepEqual(response.json(), { error: { code: "authorization_generation_conflict" } });
+    assert.equal(response.body.includes("account-data-export-v1"), false);
+    const audit = (await db.collection(COLLECTIONS.accountDataExportAudits).where("userId", "==", raceUserId).get()).docs[0]?.data();
+    assert.equal(audit?.status, "started");
+  } finally {
+    await app.close();
+  }
 });
 
 test("OpenAPI describes the versioned attachment contract and protected route", () => {

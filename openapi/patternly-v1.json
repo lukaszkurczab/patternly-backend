@@ -1468,7 +1468,7 @@
       "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "get": {
-        "description": "Download a bounded JSON account-data export after recent reauthentication. The response is an attachment and is never persisted as a payload.",
+        "description": "Download a bounded JSON account-data export after recent reauthentication and a final authorization-generation check. The response is an attachment and is never persisted as a payload.",
         "responses": {
           "200": {
             "description": "JSON account-data attachment",
@@ -1494,7 +1494,13 @@
             }
           },
           "401": {
-            "description": "Authentication or recent reauthentication required",
+            "description": "Authentication, recent reauthentication, or active account required",
+            "x-patternly-error-codes": [
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "recent_reauthentication_required"
+            ],
             "headers": {
               "Cache-Control": {
                 "schema": {
@@ -1515,6 +1521,19 @@
             "description": "account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
               "account_not_found"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Account authorization generation changed before export completion",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict"
             ],
             "content": {
               "application/json": {

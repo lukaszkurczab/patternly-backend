@@ -601,7 +601,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     reply.header("cache-control", "private, no-store");
     if (!requireRecentReauthentication(request, reply)) return;
     try {
-      const result = await requireStores(dependencies).dataExport.create(request.userId!);
+      const result = await requireStores(dependencies).dataExport.create(request.userId!, { kind: "account", expectedAuthorizationGeneration: request.expectedAuthorizationGeneration! });
       return reply
         .header("content-disposition", 'attachment; filename="patternly-account-data.json"')
         .type("application/json; charset=utf-8")
@@ -609,6 +609,8 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     } catch (error) {
       if (error instanceof DataExportRateLimitError) return reply.header("retry-after", String(error.retryAfterSeconds)).code(429).send({ error: { code: "data_export_rate_limited" } });
       if (error instanceof DataExportTooLargeError) return reply.code(413).send({ error: { code: "data_export_too_large" } });
+      if (error instanceof Error && error.message === "authorization_generation_conflict") return reply.code(409).send({ error: { code: error.message } });
+      if (error instanceof Error && ["account_deleted", "authorization_generation_required", "authorization_generation_invalid"].includes(error.message)) return reply.code(401).send({ error: { code: error.message } });
       throw error;
     }
   });
@@ -1115,7 +1117,12 @@ export function buildApplication(dependencies: ApplicationDependencies) {
         if (context.channel !== "account" || !context.userId || (context.right !== "access" && context.right !== "portability")) return reply.code(409).send({ error: { code: "privacy_request_executor_unavailable" } });
         const stableExportId = `export_${createHash("sha256").update(`privacy:${requestId}`, "utf8").digest("base64url").slice(0, 32)}`;
         let result: Awaited<ReturnType<typeof privacy.prepareExecutedResponse>> | null = null;
-        await requireStores(dependencies).dataExport.create(context.userId, stableExportId, async (exported) => {
+        await requireStores(dependencies).dataExport.create(context.userId, {
+          kind: "admin_privacy_request",
+          administratorUserId: request.userId!,
+          privacyRequestId: requestId,
+          expectedRevision: parsed.data.expectedRevision,
+        }, stableExportId, async (exported) => {
           result = await privacy.prepareExecutedResponse(requestId, request.userId!, parsed.data.expectedRevision, exported.serialized, `${context.right === "access" ? "article_15_export" : "portability_export"}:${exported.exportId}`);
         });
         if (!result) throw new Error("privacy_request_executor_incomplete");

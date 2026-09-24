@@ -10,6 +10,7 @@ import {
   DataExportRateLimitError,
   DataExportTooLargeError,
   type DataExportContentReport,
+  type DataExportAuthorization,
   type DataExportDocument,
   type DataExportOptions,
   type DataExportProgressRecord,
@@ -18,6 +19,7 @@ import {
   type DataExportStore,
 } from "./contracts.js";
 import { projectContentReportContext } from "../content-reports/contracts.js";
+import { activeAuthorizationGeneration, assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
 
 const USER_COLLECTIONS = Object.freeze({
   progress: "progress",
@@ -78,33 +80,26 @@ type ExportSnapshot = Readonly<{
 export class FirestoreDataExportStore implements DataExportStore {
   public constructor(private readonly db: Firestore, private readonly options: DataExportOptions) {}
 
-  public async create(userId: string, stableExportId?: string, onCompleted?: (result: DataExportResult) => Promise<void>): Promise<DataExportResult> {
+  public async create(userId: string, authorization: DataExportAuthorization, stableExportId?: string, onCompleted?: (result: DataExportResult) => Promise<void>): Promise<DataExportResult> {
     const exportId = stableExportId ?? createExportId();
     if (!/^export_[A-Za-z0-9_-]{32}$/u.test(exportId)) throw new Error("account_data_export_id_invalid");
     const createdAt = now();
     const auditRef = this.auditRef(exportId);
-
-    let retryFailedAudit = false;
-    if (stableExportId) {
-      const existing = await auditRef.get();
-      if (existing.exists) {
-        const audit = asRecord(existing.data(), "account_data_export_audit");
-        if (audit.userId !== userId) throw new Error("account_data_export_operation_conflict");
-        if (audit.status === "failed") retryFailedAudit = true;
-        else throw new Error(audit.status === "completed" ? "account_data_export_already_completed" : "account_data_export_operation_conflict");
-      }
-    }
-
-    if (retryFailedAudit) await auditRef.update({ status: "started", createdAt });
-    else await this.claimRateLimitAndCreateAudit(userId, exportId, createdAt, auditRef);
+    const retryAfterSeconds = await this.claimRateLimitAndCreateAudit(userId, authorization, exportId, createdAt, auditRef, stableExportId !== undefined);
+    if (retryAfterSeconds !== null) throw new DataExportRateLimitError(retryAfterSeconds);
 
     try {
       const result = await this.buildResult(userId, exportId, createdAt);
       await onCompleted?.(result);
-      await this.updateAudit(auditRef, "completed");
+      await this.updateAudit(userId, authorization, auditRef, "completed");
+      await this.assertAuthorizationCurrent(userId, authorization);
       return result;
     } catch (error) {
-      await this.updateAudit(auditRef, error instanceof DataExportTooLargeError ? "too_large" : "failed").catch(() => undefined);
+      try {
+        await this.updateAudit(userId, authorization, auditRef, error instanceof DataExportTooLargeError ? "too_large" : "failed");
+      } catch (statusError) {
+        if (isAuthorizationError(statusError)) throw statusError;
+      }
       throw error;
     }
   }
@@ -125,49 +120,77 @@ export class FirestoreDataExportStore implements DataExportStore {
     return this.db.collection(COLLECTIONS.accountDataExportRateLimits).doc(userId);
   }
 
-  private async claimRateLimitAndCreateAudit(userId: string, exportId: string, createdAt: Timestamp, auditRef: DocumentReference): Promise<void> {
+  private async claimRateLimitAndCreateAudit(userId: string, authorization: DataExportAuthorization, exportId: string, createdAt: Timestamp, auditRef: DocumentReference, allowFailedRetry: boolean): Promise<number | null> {
     const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
     const rateLimitRef = this.rateLimitRef(userId);
-    try {
-      await this.db.runTransaction(async (transaction) => {
-        const [userSnapshot, rateLimitSnapshot] = await transaction.getAll(userRef, rateLimitRef);
-        if (!userSnapshot || !rateLimitSnapshot) throw new Error("account_data_export_snapshot_missing");
-        if (!userSnapshot.exists || asRecord(userSnapshot.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
+    return this.db.runTransaction(async (transaction) => {
+      const [userSnapshot, rateLimitSnapshot, auditSnapshot] = await transaction.getAll(userRef, rateLimitRef, auditRef);
+      if (!userSnapshot || !rateLimitSnapshot || !auditSnapshot) throw new Error("account_data_export_snapshot_missing");
+      if (!userSnapshot.exists) throw new Error("account_deleted");
+      const user = asRecord(userSnapshot.data(), "user");
+      this.assertAuthorization(user, authorization);
 
-        const rateLimit = rateLimitSnapshot.exists ? asRecord(rateLimitSnapshot.data(), "account_data_export_rate_limit") : null;
-        const windowStartedAt = asOptionalTimestamp(rateLimit?.windowStartedAt);
-        const count = asNonNegativeInteger(rateLimit?.count);
-        const windowMillis = this.options.rateLimitWindowSeconds * 1_000;
-        const withinWindow = windowStartedAt !== null && createdAt.toMillis() - windowStartedAt.toMillis() < windowMillis;
-        if (withinWindow && count >= this.options.rateLimitMax) {
-          const retryAfterSeconds = Math.max(1, Math.ceil((windowStartedAt!.toMillis() + windowMillis - createdAt.toMillis()) / 1_000));
-          throw new DataExportRateLimitError(retryAfterSeconds);
+      if (auditSnapshot.exists) {
+        const audit = asRecord(auditSnapshot.data(), "account_data_export_audit");
+        if (audit.userId !== userId || !allowFailedRetry || audit.status !== "failed") {
+          throw new Error(audit.status === "completed" ? "account_data_export_already_completed" : "account_data_export_operation_conflict");
         }
-
-        const nextWindowStartedAt = withinWindow ? windowStartedAt! : createdAt;
-        const nextCount = withinWindow ? count + 1 : 1;
-        transaction.set(rateLimitRef, {
-          windowStartedAt: nextWindowStartedAt,
-          count: nextCount,
-          updatedAt: createdAt,
-          expiresAt: Timestamp.fromMillis(nextWindowStartedAt.toMillis() + windowMillis),
-        }, { merge: true });
-        transaction.create(auditRef, auditData(exportId, userId, createdAt, "started"));
-      });
-    } catch (error) {
-      if (error instanceof DataExportRateLimitError) {
-        await this.writeRateLimitedAudit(auditRef, exportId, userId, createdAt);
+        transaction.update(auditRef, { status: "started", createdAt });
+        return null;
       }
-      throw error;
+
+      const rateLimit = rateLimitSnapshot.exists ? asRecord(rateLimitSnapshot.data(), "account_data_export_rate_limit") : null;
+      const windowStartedAt = asOptionalTimestamp(rateLimit?.windowStartedAt);
+      const count = asNonNegativeInteger(rateLimit?.count);
+      const windowMillis = this.options.rateLimitWindowSeconds * 1_000;
+      const withinWindow = windowStartedAt !== null && createdAt.toMillis() - windowStartedAt.toMillis() < windowMillis;
+      if (withinWindow && count >= this.options.rateLimitMax) {
+        const retryAfterSeconds = Math.max(1, Math.ceil((windowStartedAt!.toMillis() + windowMillis - createdAt.toMillis()) / 1_000));
+        transaction.create(auditRef, auditData(exportId, userId, createdAt, "rate_limited"));
+        return retryAfterSeconds;
+      }
+
+      const nextWindowStartedAt = withinWindow ? windowStartedAt! : createdAt;
+      const nextCount = withinWindow ? count + 1 : 1;
+      transaction.set(rateLimitRef, {
+        windowStartedAt: nextWindowStartedAt,
+        count: nextCount,
+        updatedAt: createdAt,
+        expiresAt: Timestamp.fromMillis(nextWindowStartedAt.toMillis() + windowMillis),
+      }, { merge: true });
+      transaction.create(auditRef, auditData(exportId, userId, createdAt, "started"));
+      return null;
+    });
+  }
+
+  private async updateAudit(userId: string, authorization: DataExportAuthorization, auditRef: DocumentReference, status: DataExportStatus): Promise<void> {
+    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+    await this.db.runTransaction(async (transaction) => {
+      const [userSnapshot, auditSnapshot] = await transaction.getAll(userRef, auditRef);
+      if (!userSnapshot?.exists) throw new Error("account_deleted");
+      this.assertAuthorization(asRecord(userSnapshot.data(), "user"), authorization);
+      if (!auditSnapshot?.exists || asRecord(auditSnapshot.data(), "account_data_export_audit").userId !== userId) throw new Error("account_data_export_operation_conflict");
+      transaction.update(auditRef, { status });
+    });
+  }
+
+  private async assertAuthorizationCurrent(userId: string, authorization: DataExportAuthorization): Promise<void> {
+    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+    await this.db.runTransaction(async (transaction) => {
+      const userSnapshot = await transaction.get(userRef);
+      if (!userSnapshot.exists) throw new Error("account_deleted");
+      this.assertAuthorization(asRecord(userSnapshot.data(), "user"), authorization);
+    }, { readOnly: true });
+  }
+
+  private assertAuthorization(user: Readonly<Record<string, unknown>>, authorization: DataExportAuthorization): void {
+    if (authorization.kind === "account") {
+      activeAuthorizationGeneration(user);
+      assertExpectedAuthorizationGeneration(user, authorization.expectedAuthorizationGeneration);
+      return;
     }
-  }
-
-  private async writeRateLimitedAudit(auditRef: DocumentReference, exportId: string, userId: string, createdAt: Timestamp): Promise<void> {
-    await auditRef.create(auditData(exportId, userId, createdAt, "rate_limited")).catch(() => undefined);
-  }
-
-  private async updateAudit(auditRef: DocumentReference, status: DataExportStatus): Promise<void> {
-    await auditRef.update({ status });
+    if (authorization.kind !== "admin_privacy_request" || authorization.administratorUserId.length === 0 || authorization.privacyRequestId.length === 0 || !Number.isSafeInteger(authorization.expectedRevision) || authorization.expectedRevision < 0) throw new Error("account_data_export_authorization_invalid");
+    activeAuthorizationGeneration(user);
   }
 
   private async readSnapshot(userId: string, currentExportId: string): Promise<ExportSnapshot> {
@@ -380,6 +403,16 @@ function asOptionalTimestamp(value: unknown): Timestamp | null {
 
 function asNonNegativeInteger(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function isAuthorizationError(error: unknown): boolean {
+  return error instanceof Error && [
+    "account_deleted",
+    "authorization_generation_required",
+    "authorization_generation_invalid",
+    "authorization_generation_conflict",
+    "account_data_export_authorization_invalid",
+  ].includes(error.message);
 }
 
 function isRecordLike(value: unknown): value is Record<string, unknown> {

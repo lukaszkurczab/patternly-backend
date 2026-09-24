@@ -136,6 +136,13 @@ export type DataExportOptions = Readonly<{
   maxSerializedBytes: number;
 }>;
 
+/** Account exports carry the generation authenticated by the request guard.
+ * Admin privacy exports use a distinct capability created only after the
+ * administrator and privacy-request revision have been verified by the API. */
+export type DataExportAuthorization =
+  | Readonly<{ kind: "account"; expectedAuthorizationGeneration: number }>
+  | Readonly<{ kind: "admin_privacy_request"; administratorUserId: string; privacyRequestId: string; expectedRevision: number }>;
+
 export class DataExportRateLimitError extends Error {
   public readonly code = "data_export_rate_limited" as const;
 
@@ -155,5 +162,5 @@ export class DataExportTooLargeError extends Error {
 }
 
 export interface DataExportStore {
-  create(userId: string, stableExportId?: string, onCompleted?: (result: DataExportResult) => Promise<void>): Promise<DataExportResult>;
+  create(userId: string, authorization: DataExportAuthorization, stableExportId?: string, onCompleted?: (result: DataExportResult) => Promise<void>): Promise<DataExportResult>;
 }
