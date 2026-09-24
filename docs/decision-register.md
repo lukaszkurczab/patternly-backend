@@ -53,6 +53,6 @@ BE-DEC-003 supersedes the BE-DEC-002 boundary that reserved transactional email 
 | Failure | Missing, invalid or unavailable attestation fails closed. Production has no bypass or optimistic success. The application exposes unavailable/retry, and backend operations monitor sanitized rejection counts and reasons. |
 | Web and admin | Hosted web is marketing-only and receives no mobile App Check. The legacy public privacy flow is removed under BE-DEC-003 rather than attested. The loopback-only administrator workspace uses Firebase Authentication and administrator authorization, not mobile App Check. |
 | Test boundary | Local/emulator tests use explicit debug configuration/tokens. Production artifacts reject debug configuration. |
-| Canonical plan | `../../docs/PATTERNLY-WORKING-PLAN.md` owns the channel policy, APPCHK-01–04 delivery order and ODK-E2E-084 provider gate. |
+| Canonical plan | The [current working plan](https://github.com/lukaszkurczab/gcp-ace-trainer/blob/main/docs/PATTERNLY-WORKING-PLAN.md) tracks the channel policy, APPCHK-01–04 delivery order and ODK-E2E-084 provider gate. |
 
 APPCHK-01/02 now enforce the accepted mobile route matrix in the client and backend, with OpenAPI and behavioral probes. They do not prove a real provider; native configuration and final-build attestation remain APPCHK-03/04 and ODK-E2E-084.
