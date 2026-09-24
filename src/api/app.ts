@@ -617,8 +617,14 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     const parsed = createAccountPrivacyRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     if (PRIVACY_RIGHT_POLICIES[parsed.data.right].accountVerification === "recent_reauthentication" && !requireRecentReauthentication(request, reply)) return;
-    const created = await requireStores(dependencies).privacyRequests.createAccount(request.userId!, parsed.data.right, parsed.data.narrative);
-    return reply.code(201).send({ request: created });
+    try {
+      const created = await requireStores(dependencies).privacyRequests.createAccount(request.userId!, request.expectedAuthorizationGeneration!, parsed.data.right, parsed.data.narrative);
+      return reply.code(201).send({ request: created });
+    } catch (error) {
+      if (error instanceof Error && error.message === "authorization_generation_conflict") return reply.code(409).send({ error: { code: error.message } });
+      if (error instanceof Error && ["account_deleted", "authorization_generation_required", "authorization_generation_invalid"].includes(error.message)) return reply.code(401).send({ error: { code: error.message } });
+      throw error;
+    }
   });
 
   app.get("/v1/privacy-requests", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request) => ({ requests: await requireStores(dependencies).privacyRequests.listAccount(request.userId!) }));
@@ -627,8 +633,14 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     if (!requireRecentReauthentication(request, reply)) return;
     const requestId = privacyRequestId((request.params as { requestId?: unknown }).requestId);
     if (!requestId) return reply.code(404).send({ error: { code: "not_found" } });
-    const result = await requireStores(dependencies).privacyRequests.readAccount(request.userId!, requestId);
-    return result ? reply.code(200).send(result) : reply.code(404).send({ error: { code: "not_found" } });
+    try {
+      const result = await requireStores(dependencies).privacyRequests.readAccount(request.userId!, request.expectedAuthorizationGeneration!, requestId);
+      return result ? reply.code(200).send(result) : reply.code(404).send({ error: { code: "not_found" } });
+    } catch (error) {
+      if (error instanceof Error && error.message === "authorization_generation_conflict") return reply.code(409).send({ error: { code: error.message } });
+      if (error instanceof Error && ["account_deleted", "authorization_generation_required", "authorization_generation_invalid"].includes(error.message)) return reply.code(401).send({ error: { code: error.message } });
+      throw error;
+    }
   });
 
   app.post("/v1/guest/privacy-requests", { preHandler: routeGuard("app_check_only", dependencies) }, async (request, reply) => {

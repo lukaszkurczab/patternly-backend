@@ -180,6 +180,92 @@ test("legal acceptance and purchase confirmation transactions reject a generatio
   assert.equal(confirmations.size, 1);
 });
 
+test("privacy request create and response audit reject authorization rotated after the route guard", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const userRef = firestore().collection(COLLECTIONS.users).doc(auth.userId);
+
+  async function appThatChangesBefore(method: "createAccount" | "readAccount", changes: Readonly<Record<string, unknown>> = { authorizationGeneration: 2 }) {
+    const original = context.stores.privacyRequests;
+    let rotated = false;
+    const privacyRequests = new Proxy(original, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property === method && typeof value === "function") return async (...args: unknown[]) => {
+          if (!rotated) {
+            rotated = true;
+            await userRef.update(changes);
+          }
+          return value.apply(target, args);
+        };
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    return buildApplication({
+      environment: testEnvironment,
+      firestore: null,
+      verifier: createFirebaseTokenVerifier(testEnvironment),
+      appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
+      stores: { ...context.stores, privacyRequests },
+    });
+  }
+
+  const createRaceApp = await appThatChangesBefore("createAccount");
+  const rejectedCreate = await createRaceApp.inject({ method: "POST", url: "/v1/privacy-requests", headers, payload: { right: "access" } });
+  await createRaceApp.close();
+  assert.equal(rejectedCreate.statusCode, 409);
+  assert.deepEqual(rejectedCreate.json(), { error: { code: "authorization_generation_conflict" } });
+  assert.equal((await firestore().collection(COLLECTIONS.privacyRequests).where("userId", "==", auth.userId).get()).size, 0);
+  assert.equal((await firestore().collection(COLLECTIONS.privacyRequestSecrets).get()).size, 0);
+
+  await userRef.update({ authorizationGeneration: 1, authorizationState: "active" });
+  const inactiveCreateApp = await appThatChangesBefore("createAccount", { authorizationState: "deleting" });
+  const inactiveCreate = await inactiveCreateApp.inject({ method: "POST", url: "/v1/privacy-requests", headers, payload: { right: "access" } });
+  await inactiveCreateApp.close();
+  assert.equal(inactiveCreate.statusCode, 401);
+  assert.deepEqual(inactiveCreate.json(), { error: { code: "account_deleted" } });
+  assert.equal((await firestore().collection(COLLECTIONS.privacyRequests).where("userId", "==", auth.userId).get()).size, 0);
+  await userRef.update({ authorizationState: "active" });
+  const created = await context.app.inject({ method: "POST", url: "/v1/privacy-requests", headers, payload: { right: "access" } });
+  assert.equal(created.statusCode, 201);
+  const requestId = created.json().request.requestId as string;
+  const unavailableRaceApp = await appThatChangesBefore("readAccount");
+  const rejectedUnavailableRead = await unavailableRaceApp.inject({ method: "GET", url: `/v1/privacy-requests/${requestId}`, headers });
+  await unavailableRaceApp.close();
+  assert.equal(rejectedUnavailableRead.statusCode, 409);
+  assert.deepEqual(rejectedUnavailableRead.json(), { error: { code: "authorization_generation_conflict" } });
+  assert.equal("response" in rejectedUnavailableRead.json(), false);
+  assert.equal((await firestore().collection(COLLECTIONS.privacyRequests).doc(requestId).collection(COLLECTIONS.privacyRequestAudit).where("event", "==", "response_read").get()).size, 0);
+  await userRef.update({ authorizationGeneration: 1, authorizationState: "active" });
+  const noResponseYet = await context.app.inject({ method: "GET", url: `/v1/privacy-requests/${requestId}`, headers });
+  assert.equal(noResponseYet.statusCode, 200);
+  assert.equal(noResponseYet.json().response, null);
+  assert.equal((await firestore().collection(COLLECTIONS.privacyRequests).doc(requestId).collection(COLLECTIONS.privacyRequestAudit).where("event", "==", "response_read").get()).size, 0);
+
+  const admin = await createVerifiedAuthUser("lukasz.kurczab@gmail.com");
+  const adminHeaders = { authorization: `Bearer ${admin.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const start = await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${requestId}`, headers: adminHeaders, payload: { action: "start_review", expectedRevision: 0 } });
+  assert.equal(start.statusCode, 200);
+  const prepare = await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${requestId}`, headers: adminHeaders, payload: { action: "prepare_response", expectedRevision: 1, outcome: "refused", response: "No qualifying data is available", reason: "No qualifying data is available", complaintInformationIncluded: true, executionEvidence: "operator_refusal_decision" } });
+  assert.equal(prepare.statusCode, 200, prepare.body);
+  const deliver = await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${requestId}`, headers: adminHeaders, payload: { action: "deliver", expectedRevision: 2 } });
+  assert.equal(deliver.statusCode, 200);
+
+  const readRaceApp = await appThatChangesBefore("readAccount");
+  const rejectedRead = await readRaceApp.inject({ method: "GET", url: `/v1/privacy-requests/${requestId}`, headers });
+  await readRaceApp.close();
+  assert.equal(rejectedRead.statusCode, 409);
+  assert.deepEqual(rejectedRead.json(), { error: { code: "authorization_generation_conflict" } });
+  assert.equal((await firestore().collection(COLLECTIONS.privacyRequests).doc(requestId).collection(COLLECTIONS.privacyRequestAudit).where("event", "==", "response_read").get()).size, 0);
+  assert.equal((await firestore().collection(COLLECTIONS.privacyRequests).doc(requestId).collection(COLLECTIONS.privacyRequestAudit).get()).docs.some((document) => document.data().event === "response_read"), false);
+
+  await userRef.update({ authorizationGeneration: 1, authorizationState: "active" });
+  const successfulRead = await context.app.inject({ method: "GET", url: `/v1/privacy-requests/${requestId}`, headers });
+  assert.equal(successfulRead.statusCode, 200);
+  assert.equal(successfulRead.json().response, "No qualifying data is available");
+  assert.equal((await firestore().collection(COLLECTIONS.privacyRequests).doc(requestId).collection(COLLECTIONS.privacyRequestAudit).where("event", "==", "response_read").get()).size, 1);
+});
+
 test("a new Firebase identity cannot create a Patternly account through bearer or optional-bearer routes", async () => {
   const auth = await createAuthUser();
   const bearer = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });

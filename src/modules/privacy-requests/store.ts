@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, 
 import { Timestamp, type Firestore, type Transaction } from "firebase-admin/firestore";
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
 import { asRecord, asTimestamp } from "../../infrastructure/firestore/values.js";
+import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
 import {
   initialPrivacyRequestDeadline,
   transitionPrivacyRequest,
@@ -60,12 +61,12 @@ export interface PrivacyRequestEmailSender {
 }
 
 export interface PrivacyRequestStore {
-  createAccount(userId: string, right: PrivacyRequestRight, narrative?: string): Promise<PrivacyRequestListItem>;
+  createAccount(userId: string, expectedAuthorizationGeneration: number, right: PrivacyRequestRight, narrative?: string): Promise<PrivacyRequestListItem>;
   createGuest(input: Readonly<{ clientRequestId: string; email: string; right: PrivacyRequestRight; narrative?: string; reportSubmissionIds: readonly string[]; rateLimitKey: string }>, sender: PrivacyRequestEmailSender): Promise<string>;
   resendGuestCode(requestId: string, email: string, rateLimitKey: string, sender: PrivacyRequestEmailSender): Promise<void>;
   exchangeGuestCode(code: string, rateLimitKey: string): Promise<Readonly<{ requestId: string; sessionToken: string }>>;
   listAccount(userId: string): Promise<readonly PrivacyRequestListItem[]>;
-  readAccount(userId: string, requestId: string): Promise<PrivacyRequestResponse | null>;
+  readAccount(userId: string, expectedAuthorizationGeneration: number, requestId: string): Promise<PrivacyRequestResponse | null>;
   readGuest(requestId: string, sessionToken: string): Promise<PrivacyRequestResponse | null>;
   listAdmin(): Promise<readonly PrivacyRequestListItem[]>;
   readAdmin(requestId: string, actorId: string): Promise<PrivacyRequestDetails | null>;
@@ -82,11 +83,14 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
     if (Buffer.byteLength(auditHmacSecret, "utf8") < 32) throw new Error("privacy_audit_hmac_secret_invalid");
   }
 
-  public async createAccount(userId: string, right: PrivacyRequestRight, narrative?: string): Promise<PrivacyRequestListItem> {
+  public async createAccount(userId: string, expectedAuthorizationGeneration: number, right: PrivacyRequestRight, narrative?: string): Promise<PrivacyRequestListItem> {
     const receivedAt = new Date();
     const requestId = `pr_${randomUUID()}`;
     const record = this.initialRecord(requestId, "account", right, receivedAt, this.subjectPseudonym(`account:${userId}`), userId);
     await this.db.runTransaction(async (transaction) => {
+      const user = await transaction.get(this.db.collection(COLLECTIONS.users).doc(userId));
+      if (!user.exists) throw new Error("account_deleted");
+      assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
       transaction.create(this.requestRef(requestId), record);
       transaction.create(this.secretRef(requestId), { payload: this.encrypt(JSON.stringify({ narrative: narrative ?? null, reportSubmissionIds: [] })), expiresAt: Timestamp.fromMillis(receivedAt.getTime() + AUDIT_TTL_MS) });
       this.audit(transaction, requestId, "subject", "received", "request_received", receivedAt);
@@ -215,13 +219,21 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
     return Object.freeze(snapshot.docs.map((document) => this.toListItem(document.id, asRecord(document.data(), "privacy_request"))));
   }
 
-  public async readAccount(userId: string, requestId: string): Promise<PrivacyRequestResponse | null> {
+  public async readAccount(userId: string, expectedAuthorizationGeneration: number, requestId: string): Promise<PrivacyRequestResponse | null> {
     const snapshot = await this.requestRef(requestId).get();
     if (!snapshot.exists) return null;
     const data = asRecord(snapshot.data(), "privacy_request");
     if (data.userId !== userId || data.channel !== "account") return null;
     const response = await this.responseFor(requestId, data);
-    if (response.response !== null) await this.recordReadAudit(requestId, this.subjectPseudonym(`account:${userId}`));
+    if (response.response !== null) {
+      await this.recordReadAudit(requestId, this.subjectPseudonym(`account:${userId}`), { userId, expectedAuthorizationGeneration });
+    } else {
+      await this.db.runTransaction(async (transaction) => {
+        const user = await transaction.get(this.db.collection(COLLECTIONS.users).doc(userId));
+        if (!user.exists) throw new Error("account_deleted");
+        assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
+      }, { readOnly: true });
+    }
     return response;
   }
 
@@ -531,9 +543,16 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
     });
   }
 
-  private async recordReadAudit(requestId: string, actor: string): Promise<void> {
+  private async recordReadAudit(requestId: string, actor: string, authorization?: Readonly<{ userId: string; expectedAuthorizationGeneration: number }>): Promise<void> {
     const at = new Date();
-    await this.db.runTransaction(async (transaction) => this.audit(transaction, requestId, actor, "response_read", "response_artifact_read", at));
+    await this.db.runTransaction(async (transaction) => {
+      if (authorization !== undefined) {
+        const user = await transaction.get(this.db.collection(COLLECTIONS.users).doc(authorization.userId));
+        if (!user.exists) throw new Error("account_deleted");
+        assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), authorization.expectedAuthorizationGeneration);
+      }
+      this.audit(transaction, requestId, actor, "response_read", "response_artifact_read", at);
+    });
   }
 
   private async alignAuditRetentionWithClosure(requestId: string): Promise<void> {

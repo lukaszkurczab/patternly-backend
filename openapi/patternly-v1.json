@@ -1600,7 +1600,13 @@
             }
           },
           "401": {
-            "description": "Authentication or recent reauthentication required",
+            "description": "Authentication, recent reauthentication, or active account required",
+            "x-patternly-error-codes": [
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
             "content": {
               "application/json": {
                 "schema": {
@@ -1613,6 +1619,19 @@
             "description": "account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
               "account_not_found"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Account authorization generation changed before the request was created",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict"
             ],
             "content": {
               "application/json": {
@@ -1705,7 +1724,13 @@
             }
           },
           "401": {
-            "description": "Recent reauthentication required",
+            "description": "Recent reauthentication or active account required",
+            "x-patternly-error-codes": [
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
             "content": {
               "application/json": {
                 "schema": {
@@ -1718,6 +1743,19 @@
             "description": "Request unavailable; account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
               "account_not_found"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Account authorization generation changed before privacy detail was returned",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict"
             ],
             "content": {
               "application/json": {
