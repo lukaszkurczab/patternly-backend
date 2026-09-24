@@ -1029,6 +1029,92 @@ test("destructive deletion rejects an old authenticated session before touching 
   assert.equal((await firestore().collection("accountDeletionOperations").get()).size, 0);
 });
 
+test("recovery-code issue rejects a generation rotated after the request guard without changing the issued set", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const initial = await context.app.inject({ method: "POST", url: "/v1/account/recovery-codes", headers, payload: {} });
+  assert.equal(initial.statusCode, 200);
+
+  const userRef = firestore().collection(COLLECTIONS.users).doc(auth.userId);
+  const metadataRef = userRef.collection("security").doc("recoveryCodes");
+  const index = firestore().collection(COLLECTIONS.recoveryCodeIndex);
+  const indexBefore = await index.where("userId", "==", auth.userId).get();
+  const metadataBefore = await metadataRef.get();
+  assert.equal(indexBefore.size, 10);
+  assert.equal(metadataBefore.exists, true);
+  const priorGenerationId = metadataBefore.data()?.generationId;
+
+  const originalLifecycle = context.stores.accountLifecycle;
+  let rotatedAfterGuard = false;
+  const accountLifecycle = new Proxy(originalLifecycle, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (property === "issueRecoveryCodes" && typeof value === "function") {
+        return async (...args: unknown[]) => {
+          if (!rotatedAfterGuard) {
+            rotatedAfterGuard = true;
+            await userRef.update({ authorizationGeneration: 2 });
+          }
+          return value.apply(target, args);
+        };
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const raceApp = buildApplication({
+    environment: testEnvironment,
+    firestore: null,
+    verifier: createFirebaseTokenVerifier(testEnvironment),
+    appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
+    stores: { ...context.stores, accountLifecycle },
+  });
+
+  const rejected = await raceApp.inject({ method: "POST", url: "/v1/account/recovery-codes", headers, payload: {} });
+  await raceApp.close();
+  assert.equal(rotatedAfterGuard, true);
+  assert.equal(rejected.statusCode, 409);
+  assert.deepEqual(rejected.json(), { error: { code: "authorization_generation_conflict" } });
+
+  const indexAfter = await index.where("userId", "==", auth.userId).get();
+  const metadataAfter = await metadataRef.get();
+  assert.equal(indexAfter.size, indexBefore.size);
+  assert.deepEqual(indexAfter.docs.map((document) => document.id).sort(), indexBefore.docs.map((document) => document.id).sort());
+  assert.ok(indexAfter.docs.every((document) => document.data().generationId === priorGenerationId));
+  assert.equal(metadataAfter.data()?.generationId, priorGenerationId);
+  assert.equal(metadataAfter.data()?.count, 10);
+
+  const inactiveAuth = await createRegisteredAuthUser(context);
+  const inactiveUserRef = firestore().collection(COLLECTIONS.users).doc(inactiveAuth.userId);
+  const inactiveLifecycle = new Proxy(originalLifecycle, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (property === "issueRecoveryCodes" && typeof value === "function") {
+        return async (...args: unknown[]) => {
+          await inactiveUserRef.update({ authorizationState: "deleting" });
+          return value.apply(target, args);
+        };
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const inactiveApp = buildApplication({
+    environment: testEnvironment,
+    firestore: null,
+    verifier: createFirebaseTokenVerifier(testEnvironment),
+    appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
+    stores: { ...context.stores, accountLifecycle: inactiveLifecycle },
+  });
+  const inactive = await inactiveApp.inject({
+    method: "POST", url: "/v1/account/recovery-codes",
+    headers: { authorization: `Bearer ${inactiveAuth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: {},
+  });
+  await inactiveApp.close();
+  assert.equal(inactive.statusCode, 401);
+  assert.deepEqual(inactive.json(), { error: { code: "account_deleted" } });
+  assert.equal((await index.where("userId", "==", inactiveAuth.userId).get()).size, 0);
+  assert.equal((await inactiveUserRef.collection("security").doc("recoveryCodes").get()).exists, false);
+});
+
 test("account deletion removes owned Firestore documents, preserves a tombstone, and redacts report account contact fields", async () => {
   const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });

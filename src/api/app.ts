@@ -907,10 +907,11 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     const parsed = accountRecoveryCodeIssueSchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     try {
-      return reply.code(200).send(await requireStores(dependencies).accountLifecycle.issueRecoveryCodes(request.userId!));
+      return reply.code(200).send(await requireStores(dependencies).accountLifecycle.issueRecoveryCodes(request.userId!, request.expectedAuthorizationGeneration!));
     } catch (error) {
       const message = error instanceof Error ? error.message : "account_deleted";
-      if (message === "account_deleted") return reply.code(409).send({ error: { code: "account_deleted" } });
+      if (message === "authorization_generation_conflict") return reply.code(409).send({ error: { code: message } });
+      if (message === "account_deleted" || message === "authorization_generation_required" || message === "authorization_generation_invalid") return reply.code(401).send({ error: { code: errorCode(error) } });
       throw error;
     }
   });

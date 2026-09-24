@@ -3091,7 +3091,13 @@
             }
           },
           "401": {
-            "description": "Recent reauthentication required",
+            "description": "Recent reauthentication required or account is inactive",
+            "x-patternly-error-codes": [
+              "recent_reauthentication_required",
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid"
+            ],
             "content": {
               "application/json": {
                 "schema": {
@@ -3104,6 +3110,19 @@
             "description": "account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
               "account_not_found"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Authorization generation changed before recovery codes were issued",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict"
             ],
             "content": {
               "application/json": {

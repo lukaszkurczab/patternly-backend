@@ -6,6 +6,7 @@ import type { FirebaseAdminAuth } from "../../infrastructure/firebase/adminAuth.
 import { asRecord, asTimestamp, now } from "../../infrastructure/firestore/values.js";
 import type { AccountDeletionResult, CompletedDeletion } from "./contracts.js";
 import type { PseudonymKeyRing } from "../../infrastructure/security/pseudonymKeyRing.js";
+import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
 
 const RECOVERY_CODE_COUNT = 10;
 const TOMBSTONE_RETENTION_MS = 45 * 24 * 60 * 60 * 1000;
@@ -37,7 +38,7 @@ const DELETION_PHASE_ORDER: Readonly<Record<DeletionPhase, number>> = Object.fre
 const DELETION_PHASES: readonly DeletionPhase[] = Object.freeze(Object.keys(DELETION_PHASE_ORDER) as DeletionPhase[]);
 
 export interface AccountLifecycleStore {
-  issueRecoveryCodes(userId: string): Promise<RecoveryCodesResult>;
+  issueRecoveryCodes(userId: string, expectedAuthorizationGeneration: number): Promise<RecoveryCodesResult>;
   consumeRecoveryCode(code: string): Promise<Readonly<{ customToken: string }>>;
   revokeSessions(userId: string, operationId: string): Promise<Readonly<{ status: "revoked"; operationId: string }>>;
   deleteAccount(userId: string, operationId: string, operationSecret: string): Promise<AccountDeletionResult>;
@@ -151,14 +152,15 @@ function isTransientDeletionError(error: unknown): boolean {
 export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
   public constructor(private readonly db: Firestore, private readonly auth: FirebaseAdminAuth, private readonly pseudonymKeyRing: PseudonymKeyRing) {}
 
-  public async issueRecoveryCodes(userId: string): Promise<RecoveryCodesResult> {
+  public async issueRecoveryCodes(userId: string, expectedAuthorizationGeneration: number): Promise<RecoveryCodesResult> {
     const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
     const generationId = randomUUID();
     const codes = Array.from({ length: RECOVERY_CODE_COUNT }, recoveryCode);
     const createdAt = now();
     await this.db.runTransaction(async (transaction) => {
       const user = await transaction.get(userRef);
-      if (!user.exists || asRecord(user.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
+      if (!user.exists) throw new Error("account_deleted");
+      assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
       const existing = await transaction.get(this.db.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", userId));
       for (const document of existing.docs) transaction.delete(document.ref);
       for (const code of codes) {
