@@ -9,7 +9,7 @@ export function activeAuthorizationGeneration(user: Readonly<Record<string, unkn
   return storedAuthorizationGeneration(user);
 }
 
-export function assertExpectedAuthorizationGeneration(user: Readonly<Record<string, unknown>>, expectedAuthorizationGeneration: number): void {
+export function assertExpectedAuthorizationGeneration(user: Readonly<Record<string, unknown>>, expectedAuthorizationGeneration: number | undefined): void {
   if (expectedAuthorizationGeneration === undefined) throw new Error("authorization_generation_required");
   if (typeof expectedAuthorizationGeneration !== "number" || !Number.isSafeInteger(expectedAuthorizationGeneration) || expectedAuthorizationGeneration <= 0) throw new Error("authorization_generation_invalid");
   const currentGeneration = storedAuthorizationGeneration(user);

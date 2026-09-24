@@ -1,6 +1,8 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { FieldValue, Timestamp, type Firestore } from "firebase-admin/firestore";
 import { asRecord, asTimestamp } from "../../infrastructure/firestore/values.js";
+import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
+import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
 import { complaintResponseDueAt, retentionUntilFromClosure, type LegalRequestAdminAction, type LegalRequestKind, type LegalRequestStatus } from "./contracts.js";
 
 export type LegalRequestItem = Readonly<{
@@ -21,8 +23,15 @@ export interface LegalRequestEmailSender {
   send(input: Readonly<{ recipient: string; purpose: "received" | "answered"; requestId: string; kind: LegalRequestKind; response?: string }>): Promise<void>;
 }
 
+type LegalRequestCreateInput = Readonly<{
+  email: string;
+  kind: LegalRequestKind;
+  narrative?: string;
+  transactionId?: string;
+}> & (Readonly<{ userId: string; expectedAuthorizationGeneration: number }> | Readonly<{ userId: null; expectedAuthorizationGeneration?: never }>);
+
 export interface LegalRequestStore {
-  create(input: Readonly<{ userId: string | null; email: string; kind: LegalRequestKind; narrative?: string; transactionId?: string }>, sender: LegalRequestEmailSender): Promise<LegalRequestItem>;
+  create(input: LegalRequestCreateInput, sender: LegalRequestEmailSender): Promise<LegalRequestItem>;
   listAccount(userId: string): Promise<readonly LegalRequestItem[]>;
   readAccount(userId: string, requestId: string): Promise<LegalRequestItem | null>;
   listAdmin(): Promise<readonly LegalRequestItem[]>;
@@ -35,7 +44,7 @@ export class FirestoreLegalRequestStore implements LegalRequestStore {
     if (Buffer.byteLength(auditHmacSecret, "utf8") < 32) throw new Error("legal_request_audit_hmac_secret_invalid");
   }
 
-  public async create(input: Readonly<{ userId: string | null; email: string; kind: LegalRequestKind; narrative?: string; transactionId?: string }>, sender: LegalRequestEmailSender): Promise<LegalRequestItem> {
+  public async create(input: LegalRequestCreateInput, sender: LegalRequestEmailSender): Promise<LegalRequestItem> {
     const receivedAt = new Date();
     const requestId = `lr_${randomUUID()}`;
     const email = input.email.trim().toLowerCase();
@@ -48,13 +57,23 @@ export class FirestoreLegalRequestStore implements LegalRequestStore {
       retentionUntil: null, expiresAt: null, legalHold: false, legalHoldReason: null,
       confirmationStatus: "pending", revision: 0, createdAt: Timestamp.fromDate(receivedAt), updatedAt: Timestamp.fromDate(receivedAt),
     };
-    if (input.userId === null) await this.claimPublicRateLimit(email, receivedAt);
-    await this.db.collection("legalRequests").doc(requestId).create(record);
+    const requestRef = this.db.collection("legalRequests").doc(requestId);
+    if (input.userId === null) {
+      await this.claimPublicRateLimit(email, receivedAt);
+      await requestRef.create(record);
+    } else {
+      await this.db.runTransaction(async (transaction) => {
+        const user = await transaction.get(this.db.collection(COLLECTIONS.users).doc(input.userId));
+        if (!user.exists) throw new Error("account_deleted");
+        assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), input.expectedAuthorizationGeneration);
+        transaction.create(requestRef, record);
+      });
+    }
     try {
       await sender.send({ recipient: email, purpose: "received", requestId, kind: input.kind });
-      await this.db.collection("legalRequests").doc(requestId).set({ confirmationStatus: "sent", confirmationSentAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+      await requestRef.set({ confirmationStatus: "sent", confirmationSentAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
     } catch {
-      await this.db.collection("legalRequests").doc(requestId).set({ confirmationStatus: "failed", updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+      await requestRef.set({ confirmationStatus: "failed", updatedAt: FieldValue.serverTimestamp() }, { merge: true });
       throw new Error("legal_request_email_unavailable");
     }
     return this.read(requestId, record);

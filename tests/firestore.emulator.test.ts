@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
-import { buildApplication } from "../src/api/app.js";
+import { buildApplication, type ApplicationDependencies } from "../src/api/app.js";
 import { loadEnvironment } from "../src/config/environment.js";
 import { createFirebaseTokenVerifier } from "../src/infrastructure/firebase/verifier.js";
 import { COLLECTIONS, identityDocumentId } from "../src/infrastructure/firestore/paths.js";
@@ -12,6 +12,7 @@ import { FirestoreAccountLifecycleStore } from "../src/modules/account-lifecycle
 import { parsePseudonymKeyRing } from "../src/infrastructure/security/pseudonymKeyRing.js";
 import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
 import { TEST_APP_CHECK_TOKEN, accountRegistrationPayload, clearFirestore, createAuthUser, createEmulatorContext, createRegisteredAuthUser, createVerifiedAuthUser, firestore, registerAuthUser, setAuthCustomClaimsAndSignIn, testEnvironment, type EmulatorContext, verifyAuthUser } from "./support.js";
+import type { BackendStores } from "../src/infrastructure/firestore/stores.js";
 
 const reportBody = (clientSubmissionId: string) => createContentReportSchema.parse({
   clientSubmissionId,
@@ -42,6 +43,17 @@ const canonicalSyncPayload = (expectedAccountRevision: number, mutations: readon
 });
 
 let context: EmulatorContext;
+
+function buildAppWithOverrides(overrides: Partial<BackendStores>, extras: Pick<ApplicationDependencies, "legalRequestEmailSender"> = {}) {
+  return buildApplication({
+    environment: testEnvironment,
+    firestore: null,
+    verifier: createFirebaseTokenVerifier(testEnvironment),
+    appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
+    stores: { ...context.stores, ...overrides },
+    ...extras,
+  });
+}
 
 test.before(async () => {
   context = createEmulatorContext();
@@ -110,6 +122,50 @@ test("account guards require a current signed authorization generation while opt
   });
   assert.equal(staleOptional.statusCode, 401);
   assert.deepEqual(staleOptional.json(), { error: { code: "authorization_generation_stale" } });
+});
+
+test("legal case creation fences authenticated and optional-bearer accounts before creating a case or sending email", async () => {
+  const sent: string[] = [];
+  const sender: import("../src/modules/legal-requests/store.js").LegalRequestEmailSender = { send: async (input) => { sent.push(input.requestId); } };
+  for (const route of ["/v1/legal-requests", "/v1/public/legal-requests"] as const) {
+    const auth = await registerAuthUser(context, await createVerifiedAuthUser());
+    const userRef = firestore().collection(COLLECTIONS.users).doc(auth.userId);
+    const original = context.stores.legalRequests;
+    const legalRequests = new Proxy(original, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property !== "create" || typeof value !== "function") return value;
+        return async (...args: Parameters<BackendStores["legalRequests"]["create"]>) => {
+          await userRef.update({ authorizationGeneration: 2 });
+          return value.apply(target, args);
+        };
+      },
+    });
+    const app = buildAppWithOverrides({ legalRequests }, { legalRequestEmailSender: sender });
+    const response = await app.inject({
+      method: "POST",
+      url: route,
+      headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
+      payload: route === "/v1/legal-requests"
+        ? { kind: "complaint", narrative: "The paid feature was not available." }
+        : { email: auth.email, kind: "complaint", narrative: "The paid feature was not available." },
+    });
+    await app.close();
+    assert.equal(response.statusCode, 409, route);
+    assert.deepEqual(response.json(), { error: { code: "authorization_generation_conflict" } });
+  }
+  assert.equal((await firestore().collection("legalRequests").get()).size, 0);
+  assert.equal((await firestore().collection("legalRequestRateLimits").get()).size, 0);
+  assert.deepEqual(sent, []);
+
+  const guestApp = buildAppWithOverrides({}, { legalRequestEmailSender: sender });
+  const guest = await guestApp.inject({
+    method: "POST", url: "/v1/public/legal-requests", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
+    payload: { email: "guest-legal@example.com", kind: "withdrawal" },
+  });
+  await guestApp.close();
+  assert.equal(guest.statusCode, 201);
+  assert.equal(sent.length, 1);
 });
 
 test("legal acceptance and purchase confirmation transactions reject a generation rotated after the request guard", async () => {
@@ -827,7 +883,7 @@ test("anonymous reports require Firebase App Check before persistence", async ()
 
 test("report persistence keeps default submissions unlinked and excludes response-shaped fields", async () => {
   const input = reportBody("8f61e3f3-f23e-467c-b92a-9b8fd0514f25");
-  const result = await context.stores.contentReports.create(undefined, input, { rateLimitKey: "anonymous-test-client" });
+  const result = await context.stores.contentReports.create(undefined, undefined, input, { rateLimitKey: "anonymous-test-client" });
   assert.equal(result.duplicate, false);
   assert.equal(result.report.linkage, "unlinked");
   const stored = (await firestore().collection("contentReports").doc(input.clientSubmissionId).get()).data();
@@ -843,13 +899,13 @@ test("report persistence keeps default submissions unlinked and excludes respons
 test("content report expiry is classified at creation and unlinking does not extend it", async () => {
   const anonymous = reportBody("3f61e3f3-f23e-467c-b92a-9b8fd0514f25");
   const contact = createContentReportSchema.parse({ ...reportBody("3f61e3f3-f23e-467c-b92a-9b8fd0514f26"), contactEmail: "contact@example.com" });
-  await context.stores.contentReports.create(undefined, anonymous, { rateLimitKey: "anonymous-expiry" });
-  await context.stores.contentReports.create(undefined, contact, { rateLimitKey: "contact-expiry" });
+  await context.stores.contentReports.create(undefined, undefined, anonymous, { rateLimitKey: "anonymous-expiry" });
+  await context.stores.contentReports.create(undefined, undefined, contact, { rateLimitKey: "contact-expiry" });
   const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
   const userId = me.json().user.id as string;
   const linked = createContentReportSchema.parse({ ...reportBody("3f61e3f3-f23e-467c-b92a-9b8fd0514f27"), linkAccount: true });
-  await context.stores.contentReports.create(userId, linked, { rateLimitKey: "account-expiry" });
+  await context.stores.contentReports.create(userId, 1, linked, { rateLimitKey: "account-expiry" });
   const anonymousStored = (await firestore().collection("contentReports").doc(anonymous.clientSubmissionId).get()).data();
   const contactStored = (await firestore().collection("contentReports").doc(contact.clientSubmissionId).get()).data();
   const linkedStored = (await firestore().collection("contentReports").doc(linked.clientSubmissionId).get()).data();
@@ -865,7 +921,7 @@ test("content report expiry is classified at creation and unlinking does not ext
 
 test("content reports canonicalize an empty description without persisting learner-provided text", async () => {
   const input = createContentReportSchema.parse({ ...reportBody("1f61e3f3-f23e-467c-b92a-9b8fd0514f25"), reason: "technical_issue", description: "   " });
-  const result = await context.stores.contentReports.create(undefined, input, { rateLimitKey: "empty-description-client" });
+  const result = await context.stores.contentReports.create(undefined, undefined, input, { rateLimitKey: "empty-description-client" });
   assert.equal(result.report.description, "No additional details provided.");
   const stored = (await firestore().collection("contentReports").doc(input.clientSubmissionId).get()).data();
   assert.equal(stored?.description, result.report.description);
@@ -922,9 +978,66 @@ test("content report retries are idempotent and do not consume the rate-limit bu
   assert.equal(buckets.docs[0]?.data().count, 1);
 });
 
+test("optional-bearer content report writes fence linked, unlinked and duplicate requests before rate limits", async () => {
+  for (const linkAccount of [false, true]) {
+    const auth = await createRegisteredAuthUser(context);
+    const input = createContentReportSchema.parse({ ...reportBody(linkAccount ? "a161e3f3-f23e-467c-b92a-9b8fd0514f25" : "a261e3f3-f23e-467c-b92a-9b8fd0514f25"), linkAccount });
+    const original = context.stores.contentReports;
+    const contentReports = new Proxy(original, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property !== "create" || typeof value !== "function") return value;
+        return async (...args: Parameters<BackendStores["contentReports"]["create"]>) => {
+          await firestore().collection(COLLECTIONS.users).doc(auth.userId).update({ authorizationGeneration: 2 });
+          return value.apply(target, args);
+        };
+      },
+    });
+    const app = buildAppWithOverrides({ contentReports });
+    const response = await app.inject({
+      method: "POST", url: "/v1/content/reports",
+      headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
+      payload: input,
+    });
+    await app.close();
+    assert.equal(response.statusCode, 409, `linkAccount=${linkAccount}`);
+    assert.deepEqual(response.json(), { error: { code: "authorization_generation_conflict" } });
+    assert.equal((await firestore().collection(COLLECTIONS.contentReports).doc(input.clientSubmissionId).get()).exists, false);
+  }
+  assert.equal((await firestore().collection(COLLECTIONS.rateLimitBuckets).get()).size, 0);
+
+  const auth = await createRegisteredAuthUser(context);
+  const duplicateInput = reportBody("a361e3f3-f23e-467c-b92a-9b8fd0514f25");
+  let createCount = 0;
+  const original = context.stores.contentReports;
+  const contentReports = new Proxy(original, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (property !== "create" || typeof value !== "function") return value;
+      return async (...args: Parameters<BackendStores["contentReports"]["create"]>) => {
+        createCount += 1;
+        if (createCount === 2) await firestore().collection(COLLECTIONS.users).doc(auth.userId).update({ authorizationGeneration: 2 });
+        return value.apply(target, args);
+      };
+    },
+  });
+  const app = buildAppWithOverrides({ contentReports });
+  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const first = await app.inject({ method: "POST", url: "/v1/content/reports", headers, payload: duplicateInput });
+  const replay = await app.inject({ method: "POST", url: "/v1/content/reports", headers, payload: duplicateInput });
+  await app.close();
+  assert.equal(first.statusCode, 201);
+  assert.equal(replay.statusCode, 409);
+  assert.deepEqual(replay.json(), { error: { code: "authorization_generation_conflict" } });
+  assert.equal((await firestore().collection(COLLECTIONS.contentReports).doc(duplicateInput.clientSubmissionId).get()).exists, true);
+  const buckets = await firestore().collection(COLLECTIONS.rateLimitBuckets).get();
+  assert.equal(buckets.size, 1);
+  assert.equal(buckets.docs[0]?.data().count, 1);
+});
+
 test("administrator report triage uses an idempotent monotonic state machine and records an audit event", async () => {
   const input = reportBody("4f61e3f3-f23e-467c-b92a-9b8fd0514f25");
-  await context.stores.contentReports.create(undefined, input, { rateLimitKey: "triage-test-client" });
+  await context.stores.contentReports.create(undefined, undefined, input, { rateLimitKey: "triage-test-client" });
   const first = await context.stores.contentReports.transitionStatus(input.clientSubmissionId, "admin-user-id", "in_review");
   const duplicate = await context.stores.contentReports.transitionStatus(input.clientSubmissionId, "admin-user-id", "in_review");
   assert.equal(first.report.status, "in_review");
@@ -944,7 +1057,7 @@ test("administrator report triage uses an idempotent monotonic state machine and
 
 test("administrator report routes require a current verified administrator token and allow only the full state machine", async () => {
   const input = reportBody("5f61e3f3-f23e-467c-b92a-9b8fd0514f25");
-  await context.stores.contentReports.create(undefined, input, { rateLimitKey: "admin-route-test-client" });
+  await context.stores.contentReports.create(undefined, undefined, input, { rateLimitKey: "admin-route-test-client" });
   const patch = { method: "PATCH" as const, url: `/v1/admin/content-reports/${input.clientSubmissionId}`, payload: { status: "in_review" } };
   const protectedRoutes = [{ method: "GET" as const, url: "/v1/admin/content-reports" }, patch];
   const nonAdmin = await createVerifiedAuthUser();
@@ -1019,10 +1132,10 @@ test("administrator report routes require a current verified administrator token
 });
 
 test("anonymous report rate limiting is transactionally enforced without storing the client key", async () => {
-  await context.stores.contentReports.create(undefined, reportBody("af61e3f3-f23e-467c-b92a-9b8fd0514f25"), { rateLimitKey: "rate-limited-client" });
-  await context.stores.contentReports.create(undefined, reportBody("bf61e3f3-f23e-467c-b92a-9b8fd0514f25"), { rateLimitKey: "rate-limited-client" });
+  await context.stores.contentReports.create(undefined, undefined, reportBody("af61e3f3-f23e-467c-b92a-9b8fd0514f25"), { rateLimitKey: "rate-limited-client" });
+  await context.stores.contentReports.create(undefined, undefined, reportBody("bf61e3f3-f23e-467c-b92a-9b8fd0514f25"), { rateLimitKey: "rate-limited-client" });
   await assert.rejects(
-    context.stores.contentReports.create(undefined, reportBody("cf61e3f3-f23e-467c-b92a-9b8fd0514f25"), { rateLimitKey: "rate-limited-client" }),
+    context.stores.contentReports.create(undefined, undefined, reportBody("cf61e3f3-f23e-467c-b92a-9b8fd0514f25"), { rateLimitKey: "rate-limited-client" }),
     { message: "report_rate_limited" },
   );
   const buckets = await firestore().collection("rateLimitBuckets").get();
@@ -1209,7 +1322,7 @@ test("account deletion removes owned Firestore documents, preserves a tombstone,
   const mutation = { mutationId: `mutation-${Date.now()}-delete`, kind: "item" as const, recordType: "training_attempt" as const, trackId: "coding-interview-dsa-problem-solving", targetId: "delete-item", expectedVersion: null, state, fingerprint: createMergeRecordFingerprint({ recordId: "delete-item", recordType: "training_attempt", state, trackId: "coding-interview-dsa-problem-solving" }) };
   await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: canonicalSyncPayload(0, [mutation], "deletion-batch") });
   const linked = createContentReportSchema.parse({ ...reportBody("9f61e3f3-f23e-467c-b92a-9b8fd0514f25"), linkAccount: true, contactEmail: "learner@example.com" });
-  await context.stores.contentReports.create(userId, linked, { rateLimitKey: "account-test-client" });
+  await context.stores.contentReports.create(userId, 1, linked, { rateLimitKey: "account-test-client" });
   const exportAuditTimestamp = Timestamp.now();
   await firestore().collection(COLLECTIONS.accountDataExportAudits).doc("deletion-export-audit").set({ exportId: "deletion-export-audit", userId, createdAt: exportAuditTimestamp, status: "completed", schemaVersion: "account-data-export-v1", scope: [], expiresAt: Timestamp.fromMillis(exportAuditTimestamp.toMillis() + 30 * 86_400_000) });
   await firestore().collection(COLLECTIONS.accountDataExportRateLimits).doc(userId).set({ windowStartedAt: exportAuditTimestamp, count: 1, updatedAt: exportAuditTimestamp, expiresAt: Timestamp.fromMillis(exportAuditTimestamp.toMillis() + 3_600_000) });
@@ -1252,7 +1365,7 @@ test("account deletion persists subjects and phases, resumes through the bound s
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
   const userId = me.json().user.id as string;
   const linked = createContentReportSchema.parse({ ...reportBody("af61e3f3-f23e-467c-b92a-9b8fd0514f25"), linkAccount: true, contactEmail: "resume@example.com" });
-  await context.stores.contentReports.create(userId, linked, { rateLimitKey: "resume-deletion-client" });
+  await context.stores.contentReports.create(userId, 1, linked, { rateLimitKey: "resume-deletion-client" });
   await firestore().collection("recoveryCodeIndex").doc("resume-recovery-code").set({ userId, usedAt: null });
   await firestore().collection("sessionRevocationOperations").doc("resume-session-revocation").set({ userId, status: "revoked" });
   await firestore().collection("users").doc(userId).collection("drafts").doc("resume-draft").set({ value: "private" });
@@ -1452,7 +1565,7 @@ test("account-owned writers reject a tombstoned or missing user after authentica
     await assert.rejects(context.stores.progress.applyBatch(userId, 1, "fixture-device", 0, [], { sessionId: "fixture-session", batchId: `fixture-${state}`, highWatermark: 0 }), { message: "account_deleted" });
     await assert.rejects(context.stores.progress.confirmAdoption(userId, 1, "fixture-device", snapshot, confirmation), { message: "account_deleted" });
     await assert.rejects(context.stores.devices.touch(userId, { deviceKey: "fixture-device", platform: "ios", appVersion: "test" }), { message: "account_deleted" });
-    await assert.rejects(context.stores.contentReports.create(userId, { ...reportBody("88888888-8888-4888-8888-888888888888"), linkAccount: true, contactEmail: "fixture@example.invalid" }, { rateLimitKey: "late-write" }), { message: "account_deleted" });
+    await assert.rejects(context.stores.contentReports.create(userId, 1, { ...reportBody("88888888-8888-4888-8888-888888888888"), linkAccount: true, contactEmail: "fixture@example.invalid" }, { rateLimitKey: "late-write" }), { message: "account_deleted" });
     await assert.rejects(context.stores.accountLifecycle.revokeSessions(userId, `late-revoke-${state}`), { message: "account_deleted" });
   }
   assert.deepEqual((await userRef.listCollections()).map((collection) => collection.id), ["legalAcceptances"]);

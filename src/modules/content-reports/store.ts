@@ -3,6 +3,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
 import { asIsoString, asRecord, asTimestamp, now } from "../../infrastructure/firestore/values.js";
+import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
 import { projectContentReportContext, type ContentReportStatus, type ContentReportStore, type ContentReportView, type CreateContentReport } from "./contracts.js";
 
 const REPORT_RETENTION_DAYS = 30;
@@ -34,7 +35,7 @@ function toView(row: Record<string, unknown>): ContentReportView {
 export class FirestoreContentReportStore implements ContentReportStore {
   public constructor(private readonly db: Firestore, private readonly options: Readonly<{ rateLimitHashSecret: string; rateLimitMax: number; rateLimitWindowSeconds: number }>) {}
 
-  public async create(userId: string | undefined, input: CreateContentReport, context: Readonly<{ rateLimitKey: string }>): Promise<Readonly<{ report: ContentReportView; duplicate: boolean }>> {
+  public async create(userId: string | undefined, expectedAuthorizationGeneration: number | undefined, input: CreateContentReport, context: Readonly<{ rateLimitKey: string }>): Promise<Readonly<{ report: ContentReportView; duplicate: boolean }>> {
     if (input.linkAccount && !userId) throw new Error("account_link_requires_authentication");
     const reportRef = this.db.collection(COLLECTIONS.contentReports).doc(input.clientSubmissionId);
     const rateLimitRef = this.db.collection(COLLECTIONS.rateLimitBuckets).doc(this.rateLimitDocumentId(context.rateLimitKey));
@@ -43,7 +44,8 @@ export class FirestoreContentReportStore implements ContentReportStore {
     const report = await this.db.runTransaction(async (transaction) => {
       if (userId !== undefined) {
         const user = await transaction.get(this.db.collection(COLLECTIONS.users).doc(userId));
-        if (!user.exists || asRecord(user.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
+        if (!user.exists) throw new Error("account_deleted");
+        assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
       }
       const [existingSnapshot, bucketSnapshot] = await transaction.getAll(reportRef, rateLimitRef);
       if (existingSnapshot?.exists) return { report: toView(asRecord(existingSnapshot.data(), "content_report")), duplicate: true };

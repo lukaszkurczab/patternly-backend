@@ -2071,7 +2071,14 @@
             }
           },
           "401": {
-            "description": "Authentication required",
+            "description": "Authentication required or account unavailable",
+            "x-patternly-error-codes": [
+              "authentication_required",
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
             "content": {
               "application/json": {
                 "schema": {
@@ -2084,6 +2091,19 @@
             "description": "account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
               "account_not_found"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Account authorization changed during case creation",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict"
             ],
             "content": {
               "application/json": {
@@ -2265,7 +2285,16 @@
             }
           },
           "401": {
-            "description": "Valid App Check required",
+            "description": "Valid App Check required or authenticated account unavailable",
+            "x-patternly-error-codes": [
+              "app_check_required",
+              "app_check_invalid",
+              "authentication_required",
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
             "content": {
               "application/json": {
                 "schema": {
@@ -2278,6 +2307,19 @@
             "description": "account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
               "account_not_found"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Account authorization changed during case creation",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict"
             ],
             "content": {
               "application/json": {
@@ -3746,7 +3788,16 @@
             }
           },
           "401": {
-            "description": "Valid App Check required or account linkage authentication required",
+            "description": "Valid App Check required, account unavailable, or account linkage authentication required",
+            "x-patternly-error-codes": [
+              "app_check_required",
+              "app_check_invalid",
+              "authentication_required",
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
             "content": {
               "application/json": {
                 "schema": {
@@ -3759,6 +3810,19 @@
             "description": "account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
               "account_not_found"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Account authorization changed during report creation",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict"
             ],
             "content": {
               "application/json": {

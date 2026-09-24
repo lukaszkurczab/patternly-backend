@@ -699,9 +699,11 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     if (!dependencies.legalRequestEmailSender || !request.authenticatedEmail || request.authenticatedEmailVerified !== true) return reply.code(503).send({ error: { code: "legal_request_email_unavailable" } });
     try {
-      const created = await requireStores(dependencies).legalRequests.create({ userId: request.userId!, email: request.authenticatedEmail, kind: parsed.data.kind, ...(parsed.data.narrative === undefined ? {} : { narrative: parsed.data.narrative }), ...(parsed.data.transactionId === undefined ? {} : { transactionId: parsed.data.transactionId }) }, dependencies.legalRequestEmailSender);
+      const created = await requireStores(dependencies).legalRequests.create({ userId: request.userId!, expectedAuthorizationGeneration: request.expectedAuthorizationGeneration!, email: request.authenticatedEmail, kind: parsed.data.kind, ...(parsed.data.narrative === undefined ? {} : { narrative: parsed.data.narrative }), ...(parsed.data.transactionId === undefined ? {} : { transactionId: parsed.data.transactionId }) }, dependencies.legalRequestEmailSender);
       return reply.code(201).send({ request: created });
     } catch (error) {
+      if (error instanceof Error && error.message === "authorization_generation_conflict") return reply.code(409).send({ error: { code: error.message } });
+      if (error instanceof Error && (error.message === "account_deleted" || error.message === "authorization_generation_required" || error.message === "authorization_generation_invalid")) return reply.code(401).send({ error: { code: error.message } });
       if (error instanceof Error && error.message === "legal_request_email_unavailable") return reply.code(503).send({ error: { code: "legal_request_email_unavailable" } });
       if (error instanceof Error && error.message === "legal_request_rate_limited") return reply.code(429).send({ error: { code: "legal_request_rate_limited" } });
       throw error;
@@ -722,9 +724,16 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     if (!dependencies.legalRequestEmailSender) return reply.code(503).send({ error: { code: "legal_request_email_unavailable" } });
     try {
-      const created = await requireStores(dependencies).legalRequests.create({ userId: request.userId ?? null, email: parsed.data.email, kind: parsed.data.kind, ...(parsed.data.narrative === undefined ? {} : { narrative: parsed.data.narrative }), ...(parsed.data.transactionId === undefined ? {} : { transactionId: parsed.data.transactionId }) }, dependencies.legalRequestEmailSender);
+      const userId = request.userId ?? null;
+      const requestDetails = { email: parsed.data.email, kind: parsed.data.kind, ...(parsed.data.narrative === undefined ? {} : { narrative: parsed.data.narrative }), ...(parsed.data.transactionId === undefined ? {} : { transactionId: parsed.data.transactionId }) };
+      const createInput = userId === null
+        ? { ...requestDetails, userId: null }
+        : { ...requestDetails, userId, expectedAuthorizationGeneration: request.expectedAuthorizationGeneration! };
+      const created = await requireStores(dependencies).legalRequests.create(createInput, dependencies.legalRequestEmailSender);
       return reply.code(201).send({ request: created });
     } catch (error) {
+      if (error instanceof Error && error.message === "authorization_generation_conflict") return reply.code(409).send({ error: { code: error.message } });
+      if (error instanceof Error && (error.message === "account_deleted" || error.message === "authorization_generation_required" || error.message === "authorization_generation_invalid")) return reply.code(401).send({ error: { code: error.message } });
       if (error instanceof Error && error.message === "legal_request_email_unavailable") return reply.code(503).send({ error: { code: "legal_request_email_unavailable" } });
       if (error instanceof Error && error.message === "legal_request_rate_limited") return reply.code(429).send({ error: { code: "legal_request_rate_limited" } });
       throw error;
@@ -995,10 +1004,12 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     const parsed = createContentReportSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });
     try {
-      const result = await requireStores(dependencies).contentReports.create(request.userId, parsed.data, { rateLimitKey: request.ip });
+      const result = await requireStores(dependencies).contentReports.create(request.userId, request.expectedAuthorizationGeneration, parsed.data, { rateLimitKey: request.ip });
       return reply.code(result.duplicate ? 200 : 201).send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : "internal_error";
+      if (message === "authorization_generation_conflict") return reply.code(409).send({ error: { code: message } });
+      if (message === "account_deleted" || message === "authorization_generation_required" || message === "authorization_generation_invalid") return reply.code(401).send({ error: { code: message } });
       if (message === "report_rate_limited") return reply.code(429).send({ error: { code: "report_rate_limited" } });
       if (message === "account_link_requires_authentication") return reply.code(401).send({ error: { code: "authentication_required" } });
       throw error;
