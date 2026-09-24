@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type { Firestore, DocumentReference } from "firebase-admin/firestore";
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import type { Firestore, DocumentReference, Query } from "firebase-admin/firestore";
+import { FieldPath, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
 import type { FirebaseAdminAuth } from "../../infrastructure/firebase/adminAuth.js";
 import { asRecord, asTimestamp, now } from "../../infrastructure/firestore/values.js";
@@ -11,7 +11,7 @@ import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGene
 const RECOVERY_CODE_COUNT = 10;
 const TOMBSTONE_RETENTION_MS = 45 * 24 * 60 * 60 * 1000;
 const PROOF_RETENTION_MS = 3 * 365 * 24 * 60 * 60 * 1000;
-const SESSION_REVOCATION_LEASE_MS = 2 * 60 * 1000;
+const SECURITY_OPERATION_LEASE_MS = 2 * 60 * 1000;
 
 type RecoveryCodesResult = Readonly<{ generationId: string; codes: readonly string[] }>;
 type DeletionProof = Readonly<{ status: "deleted"; operationId: string; proofId: string }>;
@@ -26,23 +26,18 @@ type StoredDeletionOperation = Readonly<{
   phase: DeletionPhase;
   operationSecretHash: string;
   identityRefs: readonly StoredDeletionIdentity[];
+  expectedAuthorizationGeneration: number;
+  fence: string;
+  leaseUntil: Timestamp | Date;
 }>;
 
-const DELETION_PHASE_ORDER: Readonly<Record<DeletionPhase, number>> = Object.freeze({
-  prepared: 0,
-  sessions_revoking: 1,
-  auth_deleting: 2,
-  firestore_deleting: 3,
-  remote_deleted: 4,
-  complete: 5,
-});
-const DELETION_PHASES: readonly DeletionPhase[] = Object.freeze(Object.keys(DELETION_PHASE_ORDER) as DeletionPhase[]);
+const DELETION_PHASES: readonly DeletionPhase[] = Object.freeze(["prepared", "sessions_revoking", "auth_deleting", "firestore_deleting", "remote_deleted", "complete"]);
 
 export interface AccountLifecycleStore {
   issueRecoveryCodes(userId: string, expectedAuthorizationGeneration: number): Promise<RecoveryCodesResult>;
   consumeRecoveryCode(code: string): Promise<Readonly<{ customToken: string }>>;
   revokeSessions(userId: string, expectedAuthorizationGeneration: number, operationId: string): Promise<Readonly<{ status: "revoked"; operationId: string }>>;
-  deleteAccount(userId: string, operationId: string, operationSecret: string): Promise<AccountDeletionResult>;
+  deleteAccount(userId: string, expectedAuthorizationGeneration: number, operationId: string, operationSecret: string): Promise<AccountDeletionResult>;
   completeDeletion(operationId: string, proofId: string): Promise<CompletedDeletion>;
   resumeDeletion(operationId: string, operationSecret: string): Promise<DeletionOperationStatus | null>;
   readDeletionProof(proofId: string): Promise<DeletionProof | null>;
@@ -147,7 +142,7 @@ function sameIdentityReferences(left: readonly StoredDeletionIdentity[], right: 
 }
 
 function isTransientDeletionError(error: unknown): boolean {
-  return error instanceof Error && ["remote_deletion_pending", "session_revocation_failed"].includes(error.message);
+  return error instanceof Error && ["remote_deletion_pending", "session_revocation_failed", "account_deletion_in_progress", "account_deletion_conflict"].includes(error.message);
 }
 
 export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
@@ -218,7 +213,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
     const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
     const operationRef = this.db.collection(COLLECTIONS.sessionRevocationOperations).doc(operationId);
     const claimedAt = now();
-    const leaseUntil = Timestamp.fromMillis(claimedAt.toMillis() + SESSION_REVOCATION_LEASE_MS);
+    const leaseUntil = Timestamp.fromMillis(claimedAt.toMillis() + SECURITY_OPERATION_LEASE_MS);
     const fence = randomUUID();
     const claim = await this.db.runTransaction(async (transaction) => {
       const user = await transaction.get(userRef);
@@ -226,6 +221,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       if (!user.exists) throw new Error("account_deleted");
       const userData = asRecord(user.data(), "user");
       assertExpectedAuthorizationGeneration(userData, expectedAuthorizationGeneration);
+      if (expectedAuthorizationGeneration >= Number.MAX_SAFE_INTEGER) throw new Error("authorization_generation_invalid");
 
       let operationData: Record<string, unknown> | null = null;
       if (operation.exists) {
@@ -298,9 +294,9 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
     return Object.freeze({ status: "revoked", operationId });
   }
 
-  public async deleteAccount(userId: string, operationId: string, operationSecret: string): Promise<AccountDeletionResult> {
+  public async deleteAccount(userId: string, expectedAuthorizationGeneration: number, operationId: string, operationSecret: string): Promise<AccountDeletionResult> {
     const ref = operationRef(this.db, operationId);
-    let operation = await this.prepareDeletionOperation(userId, operationId, operationSecret);
+    const operation = await this.prepareDeletionOperation(userId, expectedAuthorizationGeneration, operationId, operationSecret);
     if (operation.phase === "complete" || operation.phase === "remote_deleted") {
       if (operation.phase === "complete") {
         const proof = await this.readDeletionProof(operation.proofId);
@@ -309,51 +305,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       return Object.freeze({ operationId, proofId: operation.proofId, status: "already_deleted" });
     }
     if (!operation.userId) throw new Error("remote_deletion_pending");
-
-    if (DELETION_PHASE_ORDER[operation.phase] < DELETION_PHASE_ORDER.firestore_deleting) {
-      const phase = await this.advanceDeletionPhase(ref, "sessions_revoking");
-      if (DELETION_PHASE_ORDER[phase] <= DELETION_PHASE_ORDER.sessions_revoking) {
-        try {
-          await this.revokeDeletionSubjects(await this.firebaseSubjectsForUser(operation.userId, operation.identityRefs));
-        } catch {
-          await ref.set({ failureCode: "session_revocation_failed", updatedAt: now() }, { merge: true });
-          throw new Error("session_revocation_failed");
-        }
-        await this.advanceDeletionPhase(ref, "auth_deleting");
-      }
-    }
-
-    operation = await this.readStoredDeletionOperation(ref);
-    if (!operation.userId) throw new Error("remote_deletion_pending");
-    if (DELETION_PHASE_ORDER[operation.phase] < DELETION_PHASE_ORDER.firestore_deleting) {
-      const phase = await this.advanceDeletionPhase(ref, "auth_deleting");
-      if (phase === "auth_deleting") {
-        try {
-          await this.deleteAuthSubjects(await this.firebaseSubjectsForUser(operation.userId, operation.identityRefs));
-        } catch {
-          await ref.set({ failureCode: "auth_deletion_failed", updatedAt: now() }, { merge: true });
-          throw new Error("remote_deletion_pending");
-        }
-        await this.advanceDeletionPhase(ref, "firestore_deleting");
-      }
-    }
-
-    operation = await this.readStoredDeletionOperation(ref);
-    if (!operation.userId) throw new Error("remote_deletion_pending");
-    if (DELETION_PHASE_ORDER[operation.phase] < DELETION_PHASE_ORDER.remote_deleted) {
-      const phase = await this.advanceDeletionPhase(ref, "firestore_deleting");
-      if (phase === "firestore_deleting") {
-        try {
-          await this.deleteFirestoreOwnedData(userId, operation.identityRefs);
-        } catch {
-          throw new Error("remote_deletion_pending");
-        }
-        await this.advanceDeletionPhase(ref, "remote_deleted");
-      }
-    }
-
-    operation = await this.readStoredDeletionOperation(ref);
-    return Object.freeze({ operationId, proofId: operation.proofId, status: operation.phase === "remote_deleted" ? "remote_deleted" : "already_deleted" });
+    return this.continueDeletion(operation);
   }
 
   public async completeDeletion(operationId: string, proofId: string): Promise<CompletedDeletion> {
@@ -379,6 +331,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       const currentPhase = phaseFromData(currentData);
       if (currentPhase === null || currentData.userId !== operation.userId || currentData.proofId !== proofId || !["remote_deleted", "complete"].includes(currentPhase)) throw new Error("remote_deletion_pending");
       if (currentPhase === "complete") return;
+      if (currentData.fence !== operation.fence) throw new Error("account_deletion_conflict");
       const currentIdentityRefs = deletionIdentityReferences(currentData.identityRefs);
       if (!sameIdentityReferences(operation.identityRefs, currentIdentityRefs)) throw new Error("remote_deletion_pending");
       const tombstoneSnapshots = await transaction.getAll(...operation.identityRefs.map((identity) => this.db.collection(COLLECTIONS.deletedIdentities).doc(identity.identityId)));
@@ -391,16 +344,25 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
   }
 
   public async resumeDeletion(operationId: string, operationSecret: string): Promise<DeletionOperationStatus | null> {
-    const operation = await this.readBoundDeletionOperation(operationId, operationSecret);
+    let operation = await this.readBoundDeletionOperation(operationId, operationSecret);
     if (!operation) return null;
     if (operation.phase === "complete") {
       const proof = await this.readDeletionProof(operation.proofId);
       if (!proof || proof.operationId !== operationId) return null;
       return Object.freeze({ status: "complete", operationId, proofId: operation.proofId });
     }
+    if (operation.phase === "remote_deleted") {
+      try {
+        await this.completeDeletion(operationId, operation.proofId);
+      } catch (error) {
+        if (!isTransientDeletionError(error)) throw error;
+      }
+      return this.readDeletionOperationStatus(operationId, operationSecret);
+    }
     try {
       if (!operation.userId) return null;
-      const result = await this.deleteAccount(operation.userId, operationId, operationSecret);
+      operation = await this.claimDeletionResume(operation);
+      const result = await this.continueDeletion(operation);
       await this.completeDeletion(result.operationId, result.proofId);
     } catch (error) {
       if (!isTransientDeletionError(error)) throw error;
@@ -446,55 +408,163 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
     return Object.freeze({ status: externalStatus(data, phase), operationId, proofId: typeof data.proofId === "string" ? data.proofId : null });
   }
 
-  private async prepareDeletionOperation(userId: string, operationId: string, operationSecret: string): Promise<StoredDeletionOperation> {
-    const ref = operationRef(this.db, operationId);
+  private userOwnsDeletion(userData: Record<string, unknown>, operation: StoredDeletionOperation, fence: string): boolean {
+    const slotValue = userData.securityOperation;
+    if (typeof slotValue !== "object" || slotValue === null || Array.isArray(slotValue)) return false;
+    const slot = slotValue as Record<string, unknown>;
+    return userData.authorizationState === "deleting"
+      && userData.authorizationGeneration === operation.expectedAuthorizationGeneration + 1
+      && slot.kind === "account_delete"
+      && slot.operationId === operation.operationId
+      && slot.expectedAuthorizationGeneration === operation.expectedAuthorizationGeneration
+      && slot.phase === operation.phase
+      && slot.fence === fence;
+  }
+
+  private async claimDeletionResume(operation: StoredDeletionOperation): Promise<StoredDeletionOperation> {
+    const ref = operationRef(this.db, operation.operationId);
+    const userRef = this.db.collection(COLLECTIONS.users).doc(operation.userId ?? "");
+    const fence = randomUUID();
+    const claimedAt = now();
+    const leaseUntil = Timestamp.fromMillis(claimedAt.toMillis() + SECURITY_OPERATION_LEASE_MS);
     await this.db.runTransaction(async (transaction) => {
       const current = await transaction.get(ref);
-      if (!current.exists) {
-        const identities = await transaction.get(this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId));
-        let identityRefs = this.deletionIdentityReferences(identities.docs);
-        if (identityRefs.length === 0) {
-          const activeOperations = await transaction.get(this.db.collection(COLLECTIONS.accountDeletionOperations).where("userId", "==", userId).limit(20));
-          for (const document of activeOperations.docs) {
-            const existing = this.persistedDeletionSet(asRecord(document.data(), "account_deletion_operation"));
-            if (!existing) continue;
-            identityRefs = existing.identityRefs;
-            break;
-          }
-        }
-        if (identityRefs.length === 0) throw new Error("remote_deletion_pending");
-        const createdAt = now();
-        const proofId = `proof_${randomBytes(18).toString("base64url")}`;
-        transaction.create(ref, {
-          operationId,
-          userId,
-          status: "pending",
-          phase: "prepared",
-          proofId,
-          operationSecretHash: sha256(operationSecret),
-          identityRefs,
-          createdAt,
-          updatedAt: createdAt,
-        });
-        return;
-      }
-
+      const user = await transaction.get(userRef);
+      if (!current.exists) throw new Error("remote_deletion_pending");
       const data = asRecord(current.data(), "account_deletion_operation");
-      if (data.operationSecretHash !== sha256(operationSecret)) throw new Error("remote_deletion_pending");
       const phase = phaseFromData(data);
-      if (phase === null) throw new Error("remote_deletion_pending");
-      if (phase === "complete") return;
-      const persisted = this.persistedDeletionSet(data);
-      if (!persisted) throw new Error("remote_deletion_pending");
-      const { operationSecretHash, identityRefs } = persisted;
-      if (typeof data.proofId !== "string" || data.proofId.length === 0) throw new Error("remote_deletion_pending");
-      const updatedAt = now();
-      transaction.set(ref, {
-        status: statusForPhase(phase),
-        phase,
-        operationSecretHash,
+      if (phase !== operation.phase || data.userId !== operation.userId || data.operationSecretHash !== operation.operationSecretHash) throw new Error("account_deletion_conflict");
+      if (data.fence !== operation.fence) throw new Error("account_deletion_in_progress");
+      const currentLease = data.leaseUntil;
+      const currentLeaseMs = currentLease instanceof Timestamp ? currentLease.toMillis() : currentLease instanceof Date ? currentLease.getTime() : Number.POSITIVE_INFINITY;
+      if (currentLeaseMs > claimedAt.toMillis()) throw new Error("account_deletion_in_progress");
+      if (user.exists && !this.userOwnsDeletion(asRecord(user.data(), "user"), operation, operation.fence)) throw new Error("account_deletion_conflict");
+      if (!user.exists && operation.phase !== "firestore_deleting") throw new Error("account_deletion_conflict");
+      transaction.set(ref, { fence, leaseUntil, updatedAt: claimedAt, failureCode: FieldValue.delete(), status: statusForPhase(phase) }, { merge: true });
+      if (user.exists) transaction.set(userRef, {
+        securityOperation: Object.freeze({ kind: "account_delete", operationId: operation.operationId, expectedAuthorizationGeneration: operation.expectedAuthorizationGeneration, phase, fence, leaseUntil }),
+        updatedAt: claimedAt,
+      }, { merge: true });
+    });
+    return this.readStoredDeletionOperation(ref);
+  }
+
+  private async releaseDeletionLease(ref: DocumentReference, operation: StoredDeletionOperation, fence: string, failureCode: string): Promise<void> {
+    const userRef = this.db.collection(COLLECTIONS.users).doc(operation.userId ?? "");
+    const releasedAt = now();
+    const leaseUntil = Timestamp.fromMillis(releasedAt.toMillis() - 1);
+    await this.db.runTransaction(async (transaction) => {
+      const current = await transaction.get(ref);
+      const user = await transaction.get(userRef);
+      if (!current.exists) return;
+      const data = asRecord(current.data(), "account_deletion_operation");
+      if (data.phase !== operation.phase || data.fence !== fence) return;
+      transaction.set(ref, { status: "failed", failureCode, leaseUntil, updatedAt: releasedAt }, { merge: true });
+      if (user.exists && this.userOwnsDeletion(asRecord(user.data(), "user"), operation, fence)) transaction.set(userRef, {
+        "securityOperation.leaseUntil": leaseUntil,
+        updatedAt: releasedAt,
+      }, { merge: true });
+    });
+  }
+
+  private async continueDeletion(initial: StoredDeletionOperation): Promise<AccountDeletionResult> {
+    const ref = operationRef(this.db, initial.operationId);
+    let operation = initial;
+    const userId = operation.userId;
+    if (!userId) throw new Error("remote_deletion_pending");
+    try {
+      while (operation.phase !== "remote_deleted" && operation.phase !== "complete") {
+        const fence = operation.fence;
+        if (operation.phase === "sessions_revoking") {
+          try {
+            await this.revokeDeletionSubjects(await this.firebaseSubjectsForUser(userId, operation.identityRefs));
+          } catch {
+            await this.releaseDeletionLease(ref, operation, fence, "session_revocation_failed");
+            throw new Error("session_revocation_failed");
+          }
+          operation = await this.advanceDeletionPhase(ref, operation, fence, "auth_deleting");
+          continue;
+        }
+        if (operation.phase === "auth_deleting") {
+          try {
+            await this.deleteAuthSubjects(await this.firebaseSubjectsForUser(userId, operation.identityRefs));
+          } catch {
+            await this.releaseDeletionLease(ref, operation, fence, "auth_deletion_failed");
+            throw new Error("remote_deletion_pending");
+          }
+          operation = await this.advanceDeletionPhase(ref, operation, fence, "firestore_deleting");
+          continue;
+        }
+        if (operation.phase === "firestore_deleting") {
+          try {
+            await this.deleteFirestoreOwnedData(userId, operation.identityRefs, operation, fence);
+          } catch {
+            await this.releaseDeletionLease(ref, operation, fence, "firestore_deletion_failed").catch(() => undefined);
+            throw new Error("remote_deletion_pending");
+          }
+          operation = await this.advanceDeletionPhase(ref, operation, fence, "remote_deleted");
+          continue;
+        }
+        throw new Error("remote_deletion_pending");
+      }
+    } catch (error) {
+      if (error instanceof Error && ["session_revocation_failed", "remote_deletion_pending", "account_deletion_in_progress", "account_deletion_conflict"].includes(error.message)) throw error;
+      throw new Error("remote_deletion_pending");
+    }
+    operation = await this.readStoredDeletionOperation(ref);
+    return Object.freeze({ operationId: operation.operationId, proofId: operation.proofId, status: operation.phase === "remote_deleted" ? "remote_deleted" : "already_deleted" });
+  }
+
+  private async prepareDeletionOperation(userId: string, expectedAuthorizationGeneration: number, operationId: string, operationSecret: string): Promise<StoredDeletionOperation> {
+    const ref = operationRef(this.db, operationId);
+    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+    await this.db.runTransaction(async (transaction) => {
+      const user = await transaction.get(userRef);
+      const current = await transaction.get(ref);
+      if (!user.exists) throw new Error("account_deleted");
+      if (current.exists) throw new Error("account_deletion_conflict");
+      const userData = asRecord(user.data(), "user");
+      assertExpectedAuthorizationGeneration(userData, expectedAuthorizationGeneration);
+      if (userData.deletedAt !== undefined || (userData.authorizationState !== undefined && userData.authorizationState !== "active")) throw new Error("account_deleted");
+      const currentSlot = userData.securityOperation;
+      if (currentSlot !== undefined) {
+        if (typeof currentSlot !== "object" || currentSlot === null || Array.isArray(currentSlot)) throw new Error("security_operation_conflict");
+        const slot = currentSlot as Record<string, unknown>;
+        const slotLease = slot.leaseUntil instanceof Timestamp || slot.leaseUntil instanceof Date;
+        if (slot.kind === "session_revoke" && slot.expectedAuthorizationGeneration === expectedAuthorizationGeneration && typeof slot.operationId === "string" && typeof slot.fence === "string" && slotLease) {
+          // Account deletion advances the generation and atomically replaces a session-revoke owner.
+        } else if (slot.kind === "account_delete") {
+          throw new Error("account_deletion_conflict");
+        } else {
+          throw new Error("security_operation_conflict");
+        }
+      }
+      const identities = await transaction.get(this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId));
+      const identityRefs = this.deletionIdentityReferences(identities.docs);
+      if (identityRefs.length === 0) throw new Error("remote_deletion_pending");
+      const createdAt = now();
+      const proofId = `proof_${randomBytes(18).toString("base64url")}`;
+      const fence = randomUUID();
+      const leaseUntil = Timestamp.fromMillis(createdAt.toMillis() + SECURITY_OPERATION_LEASE_MS);
+      transaction.create(ref, {
+        operationId,
+        userId,
+        status: "pending",
+        phase: "sessions_revoking",
+        proofId,
+        operationSecretHash: sha256(operationSecret),
         identityRefs,
-        updatedAt,
+        expectedAuthorizationGeneration,
+        fence,
+        leaseUntil,
+        createdAt,
+        updatedAt: createdAt,
+      });
+      transaction.set(userRef, {
+        authorizationState: "deleting",
+        authorizationGeneration: expectedAuthorizationGeneration + 1,
+        securityOperation: Object.freeze({ kind: "account_delete", operationId, expectedAuthorizationGeneration, phase: "sessions_revoking", fence, leaseUntil }),
+        updatedAt: createdAt,
       }, { merge: true });
     });
     return this.readStoredDeletionOperation(ref);
@@ -510,6 +580,10 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
     const persisted = phase === "complete" ? null : this.persistedDeletionSet(data);
     if (phase !== "complete" && !persisted) throw new Error("remote_deletion_pending");
     const identityRefs = persisted?.identityRefs ?? deletionIdentityReferences(data.identityRefs);
+    const expectedAuthorizationGeneration = data.expectedAuthorizationGeneration;
+    const fence = data.fence;
+    const leaseUntil = data.leaseUntil;
+    if (typeof expectedAuthorizationGeneration !== "number" || !Number.isSafeInteger(expectedAuthorizationGeneration) || expectedAuthorizationGeneration <= 0 || typeof fence !== "string" || fence.length === 0 || !(leaseUntil instanceof Timestamp || leaseUntil instanceof Date)) throw new Error("remote_deletion_pending");
     return Object.freeze({
       operationId: ref.id,
       userId: typeof data.userId === "string" ? data.userId : null,
@@ -518,6 +592,9 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       phase,
       operationSecretHash: persisted?.operationSecretHash ?? String(data.operationSecretHash ?? ""),
       identityRefs,
+      expectedAuthorizationGeneration,
+      fence,
+      leaseUntil,
     });
   }
 
@@ -533,6 +610,10 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
     const persisted = phase === "complete" ? null : this.persistedDeletionSet(data);
     if (phase !== "complete" && !persisted) return null;
     const identityRefs = persisted?.identityRefs ?? deletionIdentityReferences(data.identityRefs);
+    const expectedAuthorizationGeneration = data.expectedAuthorizationGeneration;
+    const fence = data.fence;
+    const leaseUntil = data.leaseUntil;
+    if (typeof expectedAuthorizationGeneration !== "number" || !Number.isSafeInteger(expectedAuthorizationGeneration) || expectedAuthorizationGeneration <= 0 || typeof fence !== "string" || fence.length === 0 || !(leaseUntil instanceof Timestamp || leaseUntil instanceof Date)) return null;
     return Object.freeze({
       operationId,
       userId: typeof data.userId === "string" ? data.userId : null,
@@ -541,32 +622,44 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       phase,
       operationSecretHash: persisted?.operationSecretHash ?? String(data.operationSecretHash ?? ""),
       identityRefs,
+      expectedAuthorizationGeneration,
+      fence,
+      leaseUntil,
     });
   }
 
-  private async advanceDeletionPhase(ref: DocumentReference, target: DeletionPhase): Promise<DeletionPhase> {
-    let result: DeletionPhase = target;
+  private async advanceDeletionPhase(ref: DocumentReference, operation: StoredDeletionOperation, fence: string, target: DeletionPhase): Promise<StoredDeletionOperation> {
+    const userRef = this.db.collection(COLLECTIONS.users).doc(operation.userId ?? "");
+    const nextFence = randomUUID();
+    let advancedAt = now();
     await this.db.runTransaction(async (transaction) => {
       const snapshot = await transaction.get(ref);
       if (!snapshot.exists) throw new Error("remote_deletion_pending");
       const data = asRecord(snapshot.data(), "account_deletion_operation");
       const current = phaseFromData(data);
-      if (current === null) throw new Error("remote_deletion_pending");
-      if (DELETION_PHASE_ORDER[current] > DELETION_PHASE_ORDER[target]) {
-        result = current;
-        return;
-      }
-      result = target;
-      const updatedAt = now();
+      if (current !== operation.phase || data.fence !== fence || data.userId !== operation.userId) throw new Error("account_deletion_conflict");
+      const leaseUntil = data.leaseUntil;
+      const leaseMs = leaseUntil instanceof Timestamp ? leaseUntil.toMillis() : leaseUntil instanceof Date ? leaseUntil.getTime() : 0;
+      if (leaseMs <= Date.now()) throw new Error("account_deletion_conflict");
+      const user = operation.phase === "firestore_deleting" ? null : await transaction.get(userRef);
+      if (user && (!user.exists || !this.userOwnsDeletion(asRecord(user.data(), "user"), operation, fence))) throw new Error("account_deletion_conflict");
+      advancedAt = now();
+      const nextLease = Timestamp.fromMillis(advancedAt.toMillis() + SECURITY_OPERATION_LEASE_MS);
       transaction.set(ref, {
         phase: target,
         status: statusForPhase(target),
-        updatedAt,
-        ...(target === "firestore_deleting" ? { authDeletedAt: updatedAt } : {}),
-        ...(target === "remote_deleted" ? { remoteDeletedAt: updatedAt } : {}),
+        fence: nextFence,
+        leaseUntil: nextLease,
+        updatedAt: advancedAt,
+        ...(target === "firestore_deleting" ? { authDeletedAt: advancedAt } : {}),
+        ...(target === "remote_deleted" ? { authDeletedAt: data.authDeletedAt ?? advancedAt, remoteDeletedAt: advancedAt } : {}),
+      }, { merge: true });
+      if (target !== "remote_deleted" && user) transaction.set(userRef, {
+        securityOperation: Object.freeze({ kind: "account_delete", operationId: operation.operationId, expectedAuthorizationGeneration: operation.expectedAuthorizationGeneration, phase: target, fence: nextFence, leaseUntil: nextLease }),
+        updatedAt: advancedAt,
       }, { merge: true });
     });
-    return result;
+    return this.readStoredDeletionOperation(ref);
   }
 
   private firebaseSubjects(documents: readonly { data: () => unknown }[]): readonly string[] {
@@ -622,12 +715,17 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
     }
   }
 
-  private async deleteFirestoreOwnedData(userId: string, identityRefs: readonly StoredDeletionIdentity[]): Promise<void> {
+  private async deleteFirestoreOwnedData(userId: string, identityRefs: readonly StoredDeletionIdentity[], operation: StoredDeletionOperation, fence: string): Promise<void> {
     const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+    const operationDocument = operationRef(this.db, operation.operationId);
     await this.db.runTransaction(async (transaction) => {
+      const storedOperation = await transaction.get(operationDocument);
       const user = await transaction.get(userRef);
       const mappings = await transaction.get(this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId));
-      const expectedById = new Map(identityRefs.map((identity) => [identity.identityId, identity]));
+      const operationData = storedOperation.exists ? asRecord(storedOperation.data(), "account_deletion_operation") : null;
+      const leaseUntil = operationData?.leaseUntil;
+      const leaseMs = leaseUntil instanceof Timestamp ? leaseUntil.toMillis() : leaseUntil instanceof Date ? leaseUntil.getTime() : 0;
+      if (!storedOperation.exists || operationData?.phase !== "firestore_deleting" || operationData.fence !== fence || operationData.userId !== userId || leaseMs <= Date.now()) throw new Error("account_deletion_conflict");
       if (mappings.docs.some((mapping) => {
         const identity = asRecord(mapping.data(), "identity_mapping");
         if (typeof identity.provider !== "string" || typeof identity.subject !== "string") return true;
@@ -637,6 +735,12 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       })) throw new Error("remote_deletion_pending");
       const tombstoneRefs = identityRefs.map((identity) => this.db.collection(COLLECTIONS.deletedIdentities).doc(identity.identityId));
       const tombstones = await transaction.getAll(...tombstoneRefs);
+      if (!user.exists) {
+        if (mappings.docs.length > 0) throw new Error("remote_deletion_pending");
+        this.assertTombstoneSnapshots(identityRefs, tombstones);
+        return;
+      }
+      if (!this.userOwnsDeletion(asRecord(user.data(), "user"), operation, fence)) throw new Error("account_deletion_conflict");
       const deletedAt = now();
       for (let index = 0; index < identityRefs.length; index += 1) {
         const identity = identityRefs[index];
@@ -652,16 +756,23 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       if (user.exists) transaction.set(userRef, { deletedAt, updatedAt: deletedAt }, { merge: true });
     });
 
-    const recoveryCodes = await this.db.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", userId).get();
-    await this.deleteDocuments(recoveryCodes.docs.map((document) => document.ref));
-    const sessionRevocations = await this.db.collection(COLLECTIONS.sessionRevocationOperations).where("userId", "==", userId).get();
-    await this.deleteDocuments(sessionRevocations.docs.map((document) => document.ref));
-    const exportAudits = await this.db.collection(COLLECTIONS.accountDataExportAudits).where("userId", "==", userId).get();
-    await this.deleteDocuments(exportAudits.docs.map((document) => document.ref));
-    await this.db.collection(COLLECTIONS.accountDataExportRateLimits).doc(userId).delete();
-    await this.unlinkOwnedReports(userId);
-    await this.db.recursiveDelete(userRef);
+    await this.deleteOwnedQuery(this.db.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", userId), operation, fence);
+    await this.deleteOwnedQuery(this.db.collection(COLLECTIONS.sessionRevocationOperations).where("userId", "==", userId), operation, fence);
+    await this.deleteOwnedQuery(this.db.collection(COLLECTIONS.accountDataExportAudits).where("userId", "==", userId), operation, fence);
+    await this.deleteDocumentsOwned([this.db.collection(COLLECTIONS.accountDataExportRateLimits).doc(userId)], operation, fence);
+    await this.unlinkOwnedReports(userId, operation, fence);
+    await this.deleteSubtreeOwned(userRef, operation, fence);
+    await this.deleteRootUserOwned(userRef, operation, fence);
     await this.assertFirestoreDeletionComplete(userId, identityRefs);
+  }
+
+  private async assertDeletionOwnerInTransaction(transaction: FirebaseFirestore.Transaction, operation: StoredDeletionOperation, fence: string, phase: DeletionPhase): Promise<void> {
+    const snapshot = await transaction.get(operationRef(this.db, operation.operationId));
+    if (!snapshot.exists) throw new Error("account_deletion_conflict");
+    const data = asRecord(snapshot.data(), "account_deletion_operation");
+    const leaseUntil = data.leaseUntil;
+    const leaseMs = leaseUntil instanceof Timestamp ? leaseUntil.toMillis() : leaseUntil instanceof Date ? leaseUntil.getTime() : 0;
+    if (data.phase !== phase || data.fence !== fence || data.userId !== operation.userId || leaseMs <= Date.now()) throw new Error("account_deletion_conflict");
   }
 
   private tombstoneWrite(identity: StoredDeletionIdentity, snapshot: { exists: boolean; data: () => unknown }, deletedAt: Timestamp): Record<string, unknown> {
@@ -691,24 +802,66 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
     }
   }
 
-  private async deleteDocuments(refs: readonly DocumentReference[]): Promise<void> {
-    const batchSize = 450;
+  private async deleteDocumentsOwned(refs: readonly DocumentReference[], operation: StoredDeletionOperation, fence: string): Promise<void> {
+    const batchSize = 400;
     for (let offset = 0; offset < refs.length; offset += batchSize) {
-      const batch = this.db.batch();
-      for (const ref of refs.slice(offset, offset + batchSize)) batch.delete(ref);
-      await batch.commit();
+      const batchRefs = refs.slice(offset, offset + batchSize);
+      await this.db.runTransaction(async (transaction) => {
+        await this.assertDeletionOwnerInTransaction(transaction, operation, fence, "firestore_deleting");
+        for (const ref of batchRefs) transaction.delete(ref);
+      });
     }
   }
 
-  private async unlinkOwnedReports(userId: string): Promise<void> {
-    const reports = await this.db.collection(COLLECTIONS.contentReports).where("accountId", "==", userId).get();
-    const batchSize = 450;
-    for (let offset = 0; offset < reports.docs.length; offset += batchSize) {
-      const batch = this.db.batch();
-      const updatedAt = now();
-      for (const report of reports.docs.slice(offset, offset + batchSize)) batch.update(report.ref, { accountId: FieldValue.delete(), contactEmail: FieldValue.delete(), updatedAt });
-      await batch.commit();
+  private async deleteOwnedQuery(query: Query, operation: StoredDeletionOperation, fence: string): Promise<void> {
+    for (;;) {
+      const page = await query.orderBy(FieldPath.documentId()).limit(400).get();
+      if (page.empty) return;
+      await this.deleteDocumentsOwned(page.docs.map((document) => document.ref), operation, fence);
     }
+  }
+
+  private async unlinkOwnedReports(userId: string, operation: StoredDeletionOperation, fence: string): Promise<void> {
+    const query = this.db.collection(COLLECTIONS.contentReports).where("accountId", "==", userId).orderBy(FieldPath.documentId()).limit(400);
+    for (;;) {
+      const page = await query.get();
+      if (page.empty) return;
+      const refs = page.docs.map((report) => report.ref);
+      await this.db.runTransaction(async (transaction) => {
+        await this.assertDeletionOwnerInTransaction(transaction, operation, fence, "firestore_deleting");
+        const reports = await transaction.getAll(...refs);
+        const updatedAt = now();
+        for (const report of reports) {
+          if (report.exists && asRecord(report.data(), "content_report").accountId === userId) transaction.update(report.ref, {
+            accountId: FieldValue.delete(),
+            contactEmail: FieldValue.delete(),
+            updatedAt,
+          });
+        }
+      });
+    }
+  }
+
+  private async deleteSubtreeOwned(ref: DocumentReference, operation: StoredDeletionOperation, fence: string): Promise<void> {
+    const collections = await ref.listCollections();
+    for (const collection of collections) {
+      for (;;) {
+        const page = await collection.orderBy(FieldPath.documentId()).limit(200).get();
+        if (page.empty) break;
+        for (const document of page.docs) await this.deleteSubtreeOwned(document.ref, operation, fence);
+        await this.deleteDocumentsOwned(page.docs.map((document) => document.ref), operation, fence);
+      }
+    }
+  }
+
+  private async deleteRootUserOwned(userRef: DocumentReference, operation: StoredDeletionOperation, fence: string): Promise<void> {
+    await this.db.runTransaction(async (transaction) => {
+      await this.assertDeletionOwnerInTransaction(transaction, operation, fence, "firestore_deleting");
+      const user = await transaction.get(userRef);
+      if (!user.exists) return;
+      if (!this.userOwnsDeletion(asRecord(user.data(), "user"), operation, fence)) throw new Error("account_deletion_conflict");
+      transaction.delete(userRef);
+    });
   }
 
   private async deleteAuthSubjects(subjects: readonly string[]): Promise<void> {

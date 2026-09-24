@@ -3587,7 +3587,17 @@
             }
           },
           "401": {
-            "description": "Recent reauthentication required",
+            "description": "Account is inactive or authorization generation is missing, invalid, or stale",
+            "x-patternly-error-codes": [
+              "app_check_required",
+              "app_check_invalid",
+              "authentication_required",
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale",
+              "recent_reauthentication_required"
+            ],
             "content": {
               "application/json": {
                 "schema": {
@@ -3609,8 +3619,27 @@
               }
             }
           },
+          "409": {
+            "description": "Authorization generation changed or another account security operation owns deletion",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict",
+              "security_operation_conflict",
+              "account_deletion_conflict",
+              "account_deletion_in_progress"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
-            "description": "Remote deletion pending",
+            "description": "Remote deletion pending; retry through the bound public operation status",
+            "x-patternly-error-codes": [
+              "remote_deletion_pending"
+            ],
             "content": {
               "application/json": {
                 "schema": {

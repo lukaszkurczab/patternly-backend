@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Firestore } from "firebase-admin/firestore";
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import { Timestamp } from "firebase-admin/firestore";
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
 import { asIsoString, asRecord, asTimestamp, now } from "../../infrastructure/firestore/values.js";
 import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
@@ -103,18 +103,6 @@ export class FirestoreContentReportStore implements ContentReportStore {
       transaction.create(auditRef, { id: auditRef.id, fromStatus: current.status, toStatus: nextStatus, actorId, changedAt, expiresAt });
       return { report: toView({ ...row, status: nextStatus, updatedAt: changedAt }), duplicate: false };
     }));
-  }
-
-  public async unlinkAccount(userId: string): Promise<void> {
-    const reports = await this.db.collection(COLLECTIONS.contentReports).where("accountId", "==", userId).get();
-    if (reports.empty) return;
-    const batchSize = 450;
-    for (let offset = 0; offset < reports.docs.length; offset += batchSize) {
-      const batch = this.db.batch();
-      const updatedAt = now();
-      for (const report of reports.docs.slice(offset, offset + batchSize)) batch.update(report.ref, { accountId: FieldValue.delete(), contactEmail: FieldValue.delete(), updatedAt });
-      await batch.commit();
-    }
   }
 
   private rateLimitDocumentId(rateLimitKey: string): string {

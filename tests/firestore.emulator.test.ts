@@ -1076,7 +1076,8 @@ test("content report expiry is classified at creation and unlinking does not ext
   assert.equal(contactStored?.expiresAt.toMillis() - contactStored?.createdAt.toMillis(), 180 * 24 * 60 * 60 * 1_000);
   assert.equal(linkedStored?.expiresAt.toMillis() - linkedStored?.createdAt.toMillis(), 180 * 24 * 60 * 60 * 1_000);
   const linkedExpiry = linkedStored?.expiresAt.toMillis();
-  await context.stores.contentReports.unlinkAccount(userId);
+  const deletion = await context.stores.accountLifecycle.deleteAccount(userId, 1, "cccccccc-cccc-4ccc-8ccc-ccccccccccd0", "f".repeat(64));
+  await context.stores.accountLifecycle.completeDeletion(deletion.operationId, deletion.proofId);
   const unlinked = (await firestore().collection("contentReports").doc(linked.clientSubmissionId).get()).data();
   assert.equal("accountId" in (unlinked ?? {}), false);
   assert.equal(unlinked?.expiresAt.toMillis(), linkedExpiry);
@@ -1391,6 +1392,94 @@ test("destructive deletion rejects an old authenticated session before touching 
   assert.equal((await firestore().collection("accountDeletionOperations").get()).size, 0);
 });
 
+test("deletion route reports a typed conflict when authorization rotates after the request guard", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const userRef = firestore().collection(COLLECTIONS.users).doc(auth.userId);
+  const operationId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbf";
+  const accountLifecycle = {
+    ...context.stores.accountLifecycle,
+    deleteAccount: async (userId: string, expectedGeneration: number, id: string, secret: string) => {
+      await userRef.update({ authorizationGeneration: 2 });
+      return context.stores.accountLifecycle.deleteAccount(userId, expectedGeneration, id, secret);
+    },
+  };
+  const app = buildAppWithOverrides({ accountLifecycle });
+  try {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/account/deletion",
+      headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
+      payload: { operationId, operationSecret: "a".repeat(64) },
+    });
+    assert.equal(response.statusCode, 409);
+    assert.deepEqual(response.json(), { error: { code: "authorization_generation_conflict" } });
+    const user = (await userRef.get()).data();
+    assert.equal(user?.authorizationGeneration, 2);
+    assert.equal(user?.authorizationState, "active");
+    assert.equal(user?.securityOperation, undefined);
+    assert.equal((await firestore().collection("accountDeletionOperations").doc(operationId).get()).exists, false);
+  } finally {
+    await app.close();
+  }
+});
+
+test("deletion requires the current generation and advances it before any provider call", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  let providerCalls = 0;
+  const lifecycle = new FirestoreAccountLifecycleStore(firestore(), {
+    createCustomToken: async () => "unused",
+    revokeRefreshTokens: async () => { providerCalls += 1; throw new Error("fixture_provider_failure"); },
+    deleteUser: async () => { providerCalls += 1; },
+  }, parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson));
+  const operationId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc";
+  await assert.rejects(lifecycle.deleteAccount(auth.userId, undefined as unknown as number, operationId, "a".repeat(64)), { message: "authorization_generation_required" });
+  await assert.rejects(lifecycle.deleteAccount(auth.userId, 2, operationId, "a".repeat(64)), { message: "authorization_generation_conflict" });
+  assert.equal(providerCalls, 0);
+  assert.equal((await firestore().collection("accountDeletionOperations").doc(operationId).get()).exists, false);
+
+  await assert.rejects(lifecycle.deleteAccount(auth.userId, 1, operationId, "a".repeat(64)), { message: "session_revocation_failed" });
+  assert.equal(providerCalls, 1);
+  const user = (await firestore().collection(COLLECTIONS.users).doc(auth.userId).get()).data();
+  const operation = (await firestore().collection("accountDeletionOperations").doc(operationId).get()).data();
+  assert.equal(user?.authorizationState, "deleting");
+  assert.equal(user?.authorizationGeneration, 2);
+  assert.equal((user?.securityOperation as Record<string, unknown>).kind, "account_delete");
+  assert.equal((user?.securityOperation as Record<string, unknown>).operationId, operationId);
+  assert.equal(operation?.phase, "sessions_revoking");
+  assert.equal(operation?.fence, (user?.securityOperation as Record<string, unknown>).fence);
+});
+
+test("deletion supersedes an in-flight session revoke and the stale revoker cannot clear its slot", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  let releaseRevocation!: () => void;
+  let markRevocationStarted!: () => void;
+  const holdRevocation = new Promise<void>((resolve) => { releaseRevocation = resolve; });
+  const revocationStarted = new Promise<void>((resolve) => { markRevocationStarted = resolve; });
+  const oldRevoker = new FirestoreAccountLifecycleStore(firestore(), {
+    createCustomToken: async () => "unused",
+    revokeRefreshTokens: async () => { markRevocationStarted(); await holdRevocation; },
+    deleteUser: async () => undefined,
+  }, parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson));
+  const operationId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbd";
+  const pendingRevoke = oldRevoker.revokeSessions(auth.userId, 1, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbe");
+  await revocationStarted;
+
+  const deleting = new FirestoreAccountLifecycleStore(firestore(), {
+    createCustomToken: async () => "unused",
+    revokeRefreshTokens: async () => { throw new Error("fixture_delete_revoke_failure"); },
+    deleteUser: async () => undefined,
+  }, parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson));
+  await assert.rejects(deleting.deleteAccount(auth.userId, 1, operationId, "b".repeat(64)), { message: "session_revocation_failed" });
+  const userRef = firestore().collection(COLLECTIONS.users).doc(auth.userId);
+  const slotBefore = (await userRef.get()).get("securityOperation") as Record<string, unknown>;
+  assert.equal(slotBefore.kind, "account_delete");
+  assert.equal(slotBefore.operationId, operationId);
+  releaseRevocation();
+  await assert.rejects(pendingRevoke, { message: "authorization_generation_conflict" });
+  const slotAfter = (await userRef.get()).get("securityOperation") as Record<string, unknown>;
+  assert.deepEqual(slotAfter, slotBefore);
+});
+
 test("recovery-code issue rejects a generation rotated after the request guard without changing the issued set", async () => {
   const auth = await createRegisteredAuthUser(context);
   const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
@@ -1486,6 +1575,12 @@ test("account deletion removes owned Firestore documents, preserves a tombstone,
   await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: canonicalSyncPayload(0, [mutation], "deletion-batch") });
   const linked = createContentReportSchema.parse({ ...reportBody("9f61e3f3-f23e-467c-b92a-9b8fd0514f25"), linkAccount: true, contactEmail: "learner@example.com" });
   await context.stores.contentReports.create(userId, 1, linked, { rateLimitKey: "account-test-client" });
+  const batchReportRefs = Array.from({ length: 401 }, (_, index) => firestore().collection(COLLECTIONS.contentReports).doc(`deletion-batch-${String(index).padStart(3, "0")}`));
+  const reportBatch = firestore().batch();
+  for (let index = 0; index < batchReportRefs.length; index += 1) {
+    reportBatch.set(batchReportRefs[index]!, { accountId: userId, contactEmail: `learner-${index}@example.com`, retainedField: index });
+  }
+  await reportBatch.commit();
   const exportAuditTimestamp = Timestamp.now();
   await firestore().collection(COLLECTIONS.accountDataExportAudits).doc("deletion-export-audit").set({ exportId: "deletion-export-audit", userId, createdAt: exportAuditTimestamp, status: "completed", schemaVersion: "account-data-export-v1", scope: [], expiresAt: Timestamp.fromMillis(exportAuditTimestamp.toMillis() + 30 * 86_400_000) });
   await firestore().collection(COLLECTIONS.accountDataExportRateLimits).doc(userId).set({ windowStartedAt: exportAuditTimestamp, count: 1, updatedAt: exportAuditTimestamp, expiresAt: Timestamp.fromMillis(exportAuditTimestamp.toMillis() + 3_600_000) });
@@ -1513,6 +1608,9 @@ test("account deletion removes owned Firestore documents, preserves a tombstone,
   assert.equal("contactEmail" in report, false);
   assert.equal(report.description, linked.description);
   assert.deepEqual(report.context, linked.context);
+  const batchReports = await firestore().getAll(...batchReportRefs);
+  assert.equal(batchReports.length, 401);
+  assert.ok(batchReports.every((document, index) => document.exists && document.get("accountId") === undefined && document.get("contactEmail") === undefined && document.get("retainedField") === index));
   const operation = (await firestore().collection("accountDeletionOperations").doc(deleted.json().operationId).get()).data();
   const deletionProof = (await firestore().collection("deletionProofs").doc(deleted.json().proofId).get()).data();
   assert.ok(operation?.completedAt instanceof Timestamp);
@@ -1545,10 +1643,12 @@ test("account deletion persists subjects and phases, resumes through the bound s
     },
   }, parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson));
   const operationId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
-  await assert.rejects(lifecycle.deleteAccount(userId, operationId, "a".repeat(64)), { message: "remote_deletion_pending" });
+  await assert.rejects(lifecycle.deleteAccount(userId, 1, operationId, "a".repeat(64)), { message: "remote_deletion_pending" });
   assert.equal(deleteAttempts, 1);
   const pendingOperation = await firestore().collection("accountDeletionOperations").doc(operationId).get();
   assert.equal(pendingOperation.data()?.phase, "auth_deleting");
+  assert.equal((await firestore().collection(COLLECTIONS.users).doc(userId).get()).get("authorizationState"), "deleting");
+  assert.equal((await firestore().collection(COLLECTIONS.users).doc(userId).get()).get("authorizationGeneration"), 2);
   assert.equal("authSubjects" in (pendingOperation.data() ?? {}), false);
   assert.equal("subjectHashes" in (pendingOperation.data() ?? {}), false);
   assert.equal((await firestore().collection("recoveryCodeIndex").where("userId", "==", userId).get()).size, 1);
@@ -1598,30 +1698,153 @@ test("account deletion persists subjects and phases, resumes through the bound s
   }
 });
 
-test("simultaneous deletion operation IDs each complete with their own proof", async () => {
+test("expired deletion phase lease rotates its fence and the stale provider worker cannot advance", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
+  const userId = me.json().user.id as string;
+  const operationId = "cccccccc-cccc-4ccc-8ccc-cccccccccccd";
+  let releaseRevocation!: () => void;
+  let markRevocationStarted!: () => void;
+  const holdRevocation = new Promise<void>((resolve) => { releaseRevocation = resolve; });
+  const revocationStarted = new Promise<void>((resolve) => { markRevocationStarted = resolve; });
+  const staleWorker = new FirestoreAccountLifecycleStore(firestore(), {
+    createCustomToken: async () => "unused",
+    revokeRefreshTokens: async () => { markRevocationStarted(); await holdRevocation; },
+    deleteUser: async () => undefined,
+  }, parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson));
+  const staleAttempt = staleWorker.deleteAccount(userId, 1, operationId, "c".repeat(64));
+  await revocationStarted;
+  const userRef = firestore().collection(COLLECTIONS.users).doc(userId);
+  const operationRef = firestore().collection("accountDeletionOperations").doc(operationId);
+  const expired = Timestamp.fromMillis(Date.now() - 1);
+  await userRef.update({ "securityOperation.leaseUntil": expired });
+  await operationRef.update({ leaseUntil: expired });
+  const resumed = await context.stores.accountLifecycle.resumeDeletion(operationId, "c".repeat(64));
+  assert.equal(resumed?.status, "complete");
+  const completedFence = (await operationRef.get()).get("fence");
+  releaseRevocation();
+  await assert.rejects(staleAttempt, { message: "account_deletion_conflict" });
+  const completed = (await operationRef.get()).data();
+  assert.equal(completed?.phase, "complete");
+  assert.equal(completed?.fence, completedFence);
+  assert.equal((await context.stores.accountLifecycle.readDeletionProof(completed?.proofId as string))?.status, "deleted");
+});
+
+test("a stale deletion worker cannot mutate a user subtree after cleanup fence takeover", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const operationId = "cccccccc-cccc-4ccc-8ccc-cccccccccccf";
+  const staleFence = "stale-cleanup-fence";
+  const currentFence = "current-cleanup-fence";
+  const operationSecret = "e".repeat(64);
+  const userRef = firestore().collection(COLLECTIONS.users).doc(auth.userId);
+  const childRef = userRef.collection("privateCleanupFixture").doc("nested");
+  const nowTimestamp = Timestamp.now();
+  const leaseUntil = Timestamp.fromMillis(Date.now() + 60_000);
+  const pseudonym = parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson).active("firebase", auth.localId);
+  await childRef.set({ retainedForAssertion: true });
+  await userRef.update({
+    authorizationState: "deleting",
+    authorizationGeneration: 2,
+    securityOperation: { kind: "account_delete", operationId, expectedAuthorizationGeneration: 1, phase: "firestore_deleting", fence: currentFence, leaseUntil },
+  });
+  await firestore().collection("accountDeletionOperations").doc(operationId).set({
+    operationId,
+    userId: auth.userId,
+    status: "remote_deleting",
+    phase: "firestore_deleting",
+    proofId: "proof_cleanup_fence_takeover_fixture_12345",
+    operationSecretHash: createHash("sha256").update(operationSecret, "utf8").digest("hex"),
+    identityRefs: [{ identityId: pseudonym.documentId, provider: "firebase", keyVersion: pseudonym.keyVersion, subjectHmac: pseudonym.subjectHmac }],
+    expectedAuthorizationGeneration: 1,
+    fence: currentFence,
+    leaseUntil,
+    createdAt: nowTimestamp,
+    updatedAt: nowTimestamp,
+  });
+
+  const staleOperation = {
+    operationId,
+    userId: auth.userId,
+    proofId: "proof_cleanup_fence_takeover_fixture_12345",
+    status: "remote_deleting",
+    phase: "firestore_deleting" as const,
+    operationSecretHash: createHash("sha256").update(operationSecret, "utf8").digest("hex"),
+    identityRefs: [{ identityId: pseudonym.documentId, provider: "firebase", keyVersion: pseudonym.keyVersion, subjectHmac: pseudonym.subjectHmac }],
+    expectedAuthorizationGeneration: 1,
+    fence: staleFence,
+    leaseUntil,
+  };
+  const privateCleanup = context.stores.accountLifecycle as unknown as {
+    deleteSubtreeOwned(ref: typeof userRef, operation: typeof staleOperation, fence: string): Promise<void>;
+  };
+  await assert.rejects(privateCleanup.deleteSubtreeOwned(userRef, staleOperation, staleFence), { message: "account_deletion_conflict" });
+  assert.deepEqual((await childRef.get()).data(), { retainedForAssertion: true });
+  assert.equal((await userRef.get()).get("securityOperation.fence"), currentFence);
+});
+
+test("deletion resumes to proof when a crash follows recursive user deletion", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
+  const userId = me.json().user.id as string;
+  const operationId = "cccccccc-cccc-4ccc-8ccc-ccccccccccce";
+  const operationSecret = "d".repeat(64);
+  const proofId = "proof_post_recursive_delete_fixture_12345";
+  const fence = "post-recursive-delete-fence";
+  const timestamp = Timestamp.now();
+  const pseudonym = parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson).active("firebase", auth.localId);
+  const identityId = pseudonym.documentId;
+  const mappings = await firestore().collection("identityMappings").where("userId", "==", userId).get();
+  for (const mapping of mappings.docs) await mapping.ref.delete();
+  await firestore().collection("deletedIdentities").doc(identityId).set({ provider: "firebase", keyVersion: pseudonym.keyVersion, subjectHmac: pseudonym.subjectHmac, deletedAt: timestamp, expiresAt: Timestamp.fromMillis(timestamp.toMillis() + 45 * 24 * 60 * 60 * 1000) });
+  await firestore().collection("accountDeletionOperations").doc(operationId).set({
+    operationId,
+    userId,
+    status: "remote_deleting",
+    phase: "firestore_deleting",
+    proofId,
+    operationSecretHash: createHash("sha256").update(operationSecret, "utf8").digest("hex"),
+    identityRefs: [{ identityId, provider: "firebase", keyVersion: pseudonym.keyVersion, subjectHmac: pseudonym.subjectHmac }],
+    expectedAuthorizationGeneration: 1,
+    fence,
+    leaseUntil: Timestamp.fromMillis(Date.now() - 1),
+    authDeletedAt: timestamp,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  await firestore().recursiveDelete(firestore().collection(COLLECTIONS.users).doc(userId));
+
+  const resumed = await context.stores.accountLifecycle.resumeDeletion(operationId, operationSecret);
+  assert.deepEqual(resumed, { status: "complete", operationId, proofId });
+  const operation = (await firestore().collection("accountDeletionOperations").doc(operationId).get()).data();
+  assert.equal(operation?.phase, "complete");
+  assert.equal("userId" in (operation ?? {}), false);
+  assert.deepEqual(await context.stores.accountLifecycle.readDeletionProof(proofId), { status: "deleted", operationId, proofId });
+});
+
+test("simultaneous deletion operation IDs conflict so only one can own account deletion", async () => {
   const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
   const userId = me.json().user.id as string;
   const firstOperationId = "11111111-1111-4111-8111-111111111111";
   const secondOperationId = "22222222-2222-4222-8222-222222222222";
   const lifecycle = context.stores.accountLifecycle;
-  const [first, second] = await Promise.all([
-    lifecycle.deleteAccount(userId, firstOperationId, "a".repeat(64)),
-    lifecycle.deleteAccount(userId, secondOperationId, "b".repeat(64)),
+  const outcomes = await Promise.allSettled([
+    lifecycle.deleteAccount(userId, 1, firstOperationId, "a".repeat(64)),
+    lifecycle.deleteAccount(userId, 1, secondOperationId, "b".repeat(64)),
   ]);
-  assert.equal(first.status, "remote_deleted");
-  assert.equal(second.status, "remote_deleted");
-  assert.notEqual(first.proofId, second.proofId);
-  const firstCompleted = await lifecycle.completeDeletion(first.operationId, first.proofId);
-  const secondCompleted = await lifecycle.completeDeletion(second.operationId, second.proofId);
-  assert.deepEqual(firstCompleted, { status: "deleted", operationId: firstOperationId, proofId: first.proofId });
-  assert.deepEqual(secondCompleted, { status: "deleted", operationId: secondOperationId, proofId: second.proofId });
-  for (const operation of [first, second]) {
-    const stored = (await firestore().collection("accountDeletionOperations").doc(operation.operationId).get()).data();
-    assert.equal(stored?.phase, "complete");
-    assert.equal("authSubjects" in (stored ?? {}), false);
-    assert.equal((await firestore().collection("deletionProofs").doc(operation.proofId).get()).data()?.operationId, operation.operationId);
-  }
+  const winners = outcomes.filter((outcome): outcome is PromiseFulfilledResult<Awaited<ReturnType<typeof lifecycle.deleteAccount>>> => outcome.status === "fulfilled");
+  const losers = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
+  assert.equal(winners.length, 1);
+  assert.equal(losers.length, 1);
+  assert.ok(["account_deleted", "authorization_generation_conflict", "security_operation_conflict"].includes((losers[0]?.reason as Error).message));
+  const winner = winners[0]!.value;
+  assert.equal(winner.status, "remote_deleted");
+  await lifecycle.completeDeletion(winner.operationId, winner.proofId);
+  const winnerOperation = (await firestore().collection("accountDeletionOperations").doc(winner.operationId).get()).data();
+  assert.equal(winnerOperation?.phase, "complete");
+  const otherOperationId = winner.operationId === firstOperationId ? secondOperationId : firstOperationId;
+  assert.equal((await firestore().collection("accountDeletionOperations").doc(otherOperationId).get()).exists, false);
+  assert.equal((await firestore().collection("deletionProofs").get()).size, 1);
   const pseudonym = parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson).active("firebase", auth.localId);
   const tombstone = (await firestore().collection("deletedIdentities").doc(pseudonym.documentId).get()).data();
   assert.ok(tombstone);
@@ -1651,13 +1874,20 @@ test("a redacted tombstone is never repopulated by a later operation", async () 
     proofId,
     operationSecretHash: createHash("sha256").update("a".repeat(64), "utf8").digest("hex"),
     identityRefs: [{ identityId, provider: "firebase", keyVersion: pseudonym.keyVersion, subjectHmac: pseudonym.subjectHmac }],
+    expectedAuthorizationGeneration: 1,
+    fence: "redacted-tombstone-owner",
+    leaseUntil: Timestamp.fromMillis(Date.now() - 1),
     createdAt: timestamp,
     updatedAt: timestamp,
   });
+  await firestore().collection(COLLECTIONS.users).doc(userId).update({
+    authorizationState: "deleting",
+    authorizationGeneration: 2,
+    securityOperation: { kind: "account_delete", operationId, expectedAuthorizationGeneration: 1, phase: "firestore_deleting", fence: "redacted-tombstone-owner", leaseUntil: Timestamp.fromMillis(Date.now() - 1) },
+  });
   await firestore().collection("deletedIdentities").doc(identityId).set({ provider: "firebase", keyVersion: pseudonym.keyVersion, subjectHmac: pseudonym.subjectHmac, deletedAt: timestamp, expiresAt: Timestamp.fromMillis(timestamp.toMillis() + 45 * 24 * 60 * 60 * 1000) });
-  const result = await context.stores.accountLifecycle.deleteAccount(userId, operationId, "a".repeat(64));
-  assert.equal(result.status, "remote_deleted");
-  await context.stores.accountLifecycle.completeDeletion(result.operationId, result.proofId);
+  const result = await context.stores.accountLifecycle.resumeDeletion(operationId, "a".repeat(64));
+  assert.equal(result?.status, "complete");
   const tombstone = (await firestore().collection("deletedIdentities").doc(identityId).get()).data();
   assert.ok(tombstone);
   assert.equal("subject" in tombstone, false);
@@ -1677,7 +1907,7 @@ test("legacy terminal records without phase and auth deletion marker never repor
   assert.equal(await context.stores.accountLifecycle.readDeletionProof(proofId), null);
   assert.equal(await context.stores.accountLifecycle.readDeletionOperationStatus(operationId, subjectHash), null);
   assert.equal(await context.stores.accountLifecycle.resumeDeletion(operationId, subjectHash), null);
-  await assert.rejects(context.stores.accountLifecycle.deleteAccount(userId, operationId, "a".repeat(64)), { message: "remote_deletion_pending" });
+  await assert.rejects(context.stores.accountLifecycle.deleteAccount(userId, 1, operationId, "a".repeat(64)), { message: "account_deletion_conflict" });
   await firestore().collection("accountDeletionOperations").doc(operationId).update({ phase: "complete", authDeletedAt: Timestamp.now() });
   assert.equal(await context.stores.accountLifecycle.readDeletionProof(proofId), null);
   assert.equal(await context.stores.accountLifecycle.readDeletionOperationStatus(operationId, subjectHash), null);
@@ -1704,12 +1934,12 @@ test("a verify-only predecessor key completes an Auth-deleted operation after ro
   const v2 = Buffer.alloc(32, 12).toString("base64");
   const ringV1 = parsePseudonymKeyRing(JSON.stringify([{ version: "v1", status: "active", keyBase64: v1 }]));
   const first = new FirestoreAccountLifecycleStore(firestore(), { createCustomToken: async () => "unused", revokeRefreshTokens: async () => undefined, deleteUser: async () => { throw new Error("fixture_auth_delete_failed"); } }, ringV1);
-  await assert.rejects(first.deleteAccount(userId, operationId, secret), { message: "remote_deletion_pending" });
+  await assert.rejects(first.deleteAccount(userId, 1, operationId, secret), { message: "remote_deletion_pending" });
   await getAuth().deleteUser(auth.localId);
   const ringV2 = parsePseudonymKeyRing(JSON.stringify([{ version: "v2", status: "active", keyBase64: v2 }, { version: "v1", status: "verify_only", keyBase64: v1 }]));
   const rotated = new FirestoreAccountLifecycleStore(firestore(), { createCustomToken: async () => "unused", revokeRefreshTokens: async () => undefined, deleteUser: async () => undefined }, ringV2);
-  const result = await rotated.deleteAccount(userId, operationId, secret);
-  await rotated.completeDeletion(result.operationId, result.proofId);
+  const result = await rotated.resumeDeletion(operationId, secret);
+  assert.equal(result?.status, "complete");
   const original = ringV1.active("firebase", auth.localId);
   assert.equal((await firestore().collection("deletedIdentities").doc(original.documentId).get()).exists, true);
 });

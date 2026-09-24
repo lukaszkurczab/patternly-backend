@@ -110,5 +110,4 @@ export interface ContentReportStore {
   create(userId: string | undefined, expectedAuthorizationGeneration: number | undefined, input: CreateContentReport, context: Readonly<{ rateLimitKey: string }>): Promise<Readonly<{ report: ContentReportView; duplicate: boolean }>>;
   listQueue(): Promise<readonly ContentReportView[]>;
   transitionStatus(clientSubmissionId: string, actorId: string, nextStatus: ContentReportStatus): Promise<Readonly<{ report: ContentReportView; duplicate: boolean }>>;
-  unlinkAccount(userId: string): Promise<void>;
 }

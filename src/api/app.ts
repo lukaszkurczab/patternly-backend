@@ -986,15 +986,12 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     try {
       const lifecycle = requireStores(dependencies).accountLifecycle;
-      const result = await lifecycle.deleteAccount(request.userId!, parsed.data.operationId, parsed.data.operationSecret);
-      try {
-        await requireStores(dependencies).contentReports.unlinkAccount(request.userId!);
-      } catch {
-        throw new Error("remote_deletion_pending");
-      }
+      const result = await lifecycle.deleteAccount(request.userId!, request.expectedAuthorizationGeneration!, parsed.data.operationId, parsed.data.operationSecret);
       return reply.code(200).send(await lifecycle.completeDeletion(result.operationId, result.proofId));
     } catch (error) {
       if (error instanceof Error && ["remote_deletion_pending", "session_revocation_failed"].includes(error.message)) return reply.code(503).send({ error: { code: "remote_deletion_pending" } });
+      if (error instanceof Error && ["authorization_generation_conflict", "security_operation_conflict", "account_deletion_conflict", "account_deletion_in_progress"].includes(error.message)) return reply.code(409).send({ error: { code: error.message } });
+      if (error instanceof Error && ["account_deleted", "authorization_generation_required", "authorization_generation_invalid"].includes(error.message)) return reply.code(401).send({ error: { code: errorCode(error) } });
       throw error;
     }
   });
