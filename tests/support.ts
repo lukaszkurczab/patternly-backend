@@ -44,6 +44,7 @@ export type EmulatorContext = Readonly<{
   privacyLinks: readonly Readonly<{ recipient: string; purpose: "verify" | "response" | "extension"; requestId: string; token: string; code: string; extensionReason?: string }>[];
   purchaseReceipts: readonly import("../src/modules/billing/revenuecatWebhookStore.js").PurchaseReceiptDelivery[];
   customTokenSubjects: readonly string[];
+  customTokenClaims: readonly Readonly<Record<string, unknown>>[];
   revokedSubjects: readonly string[];
   deletedSubjects: readonly string[];
 }>;
@@ -54,10 +55,11 @@ export function createEmulatorContext(options: Readonly<{ projectId?: string; re
   const privacyLinks: Array<Readonly<{ recipient: string; purpose: "verify" | "response" | "extension"; requestId: string; token: string; code: string; extensionReason?: string }>> = [];
   const purchaseReceipts: import("../src/modules/billing/revenuecatWebhookStore.js").PurchaseReceiptDelivery[] = [];
   const customTokenSubjects: string[] = [];
+  const customTokenClaims: Array<Readonly<Record<string, unknown>>> = [];
   const revokedSubjects: string[] = [];
   const deletedSubjects: string[] = [];
   const stores = createFirestoreStores(runtime, environment, {
-    createCustomToken: async (subject) => { customTokenSubjects.push(subject); return "fixture-custom-token"; },
+    createCustomToken: async (subject, claims = {}) => { customTokenSubjects.push(subject); customTokenClaims.push(claims); return "fixture-custom-token"; },
     revokeRefreshTokens: async (subject) => { revokedSubjects.push(subject); },
     deleteUser: async (subject) => {
       deletedSubjects.push(subject);
@@ -83,7 +85,7 @@ export function createEmulatorContext(options: Readonly<{ projectId?: string; re
     } },
     purchaseReceiptEmailSender: { send: async (input) => { purchaseReceipts.push(input); } },
   });
-  return Object.freeze({ app, stores, privacyLinks, purchaseReceipts, customTokenSubjects, revokedSubjects, deletedSubjects, close: async () => { await app.close(); await runtime.close(); } });
+  return Object.freeze({ app, stores, privacyLinks, purchaseReceipts, customTokenSubjects, customTokenClaims, revokedSubjects, deletedSubjects, close: async () => { await app.close(); await runtime.close(); } });
 }
 
 export async function clearFirestore(): Promise<void> {
@@ -170,6 +172,11 @@ export async function createVerifiedRegisteredAuthUser(
 
 export async function verifyAuthUser(user: Readonly<{ email: string; idToken: string; localId: string }>): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
   await getAuth().updateUser(user.localId, { emailVerified: true });
+  return signInAuthUser(user.email);
+}
+
+export async function setAuthCustomClaimsAndSignIn(user: Readonly<{ email: string; localId: string }>, claims: Readonly<Record<string, unknown>>): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
+  await getAuth().setCustomUserClaims(user.localId, claims);
   return signInAuthUser(user.email);
 }
 

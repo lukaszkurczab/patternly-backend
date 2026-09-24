@@ -6,6 +6,7 @@ export const authenticatedIdentitySchema = z.object({
   email: z.string().email().optional(),
   emailVerified: z.boolean(),
   authTime: z.number().int().nonnegative(),
+  authorizationGeneration: z.number().int().positive().safe().optional(),
 });
 
 export type AuthenticatedIdentity = z.infer<typeof authenticatedIdentitySchema>;

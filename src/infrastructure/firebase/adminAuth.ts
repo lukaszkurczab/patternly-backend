@@ -2,7 +2,7 @@ import { getAuth } from "firebase-admin/auth";
 import type { App } from "firebase-admin/app";
 
 export interface FirebaseAdminAuth {
-  createCustomToken(userId: string): Promise<string>;
+  createCustomToken(userId: string, claims?: Readonly<Record<string, unknown>>): Promise<string>;
   revokeRefreshTokens(userId: string): Promise<void>;
   deleteUser(userId: string): Promise<void>;
 }
@@ -16,7 +16,7 @@ function isAuthUserNotFound(error: unknown): boolean {
 export function createFirebaseAdminAuth(app: App): FirebaseAdminAuth {
   const auth = getAuth(app);
   return Object.freeze({
-    createCustomToken: (userId: string) => auth.createCustomToken(userId),
+    createCustomToken: (userId: string, claims?: Readonly<Record<string, unknown>>) => auth.createCustomToken(userId, claims),
     revokeRefreshTokens: async (userId: string) => { await auth.revokeRefreshTokens(userId); },
     deleteUser: async (userId: string) => {
       try {

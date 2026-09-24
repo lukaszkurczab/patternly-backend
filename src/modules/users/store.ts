@@ -32,6 +32,7 @@ export type AccountRegistrationResult = Readonly<{
 
 export interface UserStore {
   resolveExistingUser(identity: AuthenticatedIdentity): Promise<Readonly<{ userId: string }>>;
+  pinSessionAuthorization(identity: AuthenticatedIdentity): Promise<Readonly<{ firebaseSubject: string; authorizationGeneration: number }>>;
   registerUser(identity: AuthenticatedIdentity, input: AccountRegistrationInput): Promise<AccountRegistrationResult>;
   readProfile(userId: string): Promise<UserProfile | null>;
   recordLegalAcceptance(userId: string, termsVersion: string): Promise<Readonly<{ termsVersion: string; acceptedAt: string }>>;
@@ -95,6 +96,30 @@ export class FirestoreUserStore implements UserStore {
     return Object.freeze({ userId: result });
   }
 
+  public async pinSessionAuthorization(identity: AuthenticatedIdentity): Promise<Readonly<{ firebaseSubject: string; authorizationGeneration: number }>> {
+    const identityId = identityDocumentId(identity.provider, identity.subject);
+    const identityRef = this.db.collection(COLLECTIONS.identityMappings).doc(identityId);
+    const deletedIdentityRefs = this.pseudonymKeyRing.candidates(identity.provider, identity.subject).map(({ documentId }) => this.db.collection(COLLECTIONS.deletedIdentities).doc(documentId));
+    return this.db.runTransaction(async (transaction) => {
+      const [identitySnapshot, ...deletedSnapshots] = await transaction.getAll(identityRef, ...deletedIdentityRefs);
+      if (deletedSnapshots.some((snapshot) => snapshot.exists && !isExpiredTombstone(snapshot.data()))) throw new Error("account_deleted");
+      if (!identitySnapshot?.exists) throw new Error("account_not_found");
+      const identityData = asRecord(identitySnapshot.data(), "identity_mapping");
+      if (identityData.provider !== identity.provider || identityData.subject !== identity.subject || typeof identityData.userId !== "string") throw new Error("identity_mapping_invalid");
+      const userId = identityData.userId;
+      const userSnapshot = await transaction.get(this.db.collection(COLLECTIONS.users).doc(userId));
+      if (!userSnapshot.exists) throw new Error("account_deleted");
+      const user = asRecord(userSnapshot.data(), "user");
+      if (user.deletedAt !== undefined || (user.authorizationState !== undefined && user.authorizationState !== "active")) throw new Error("account_deleted");
+      const authorizationGeneration = user.authorizationGeneration === undefined ? 1 : user.authorizationGeneration;
+      const authorizationRotatedAtSeconds = user.authorizationRotatedAtSeconds === undefined ? 0 : user.authorizationRotatedAtSeconds;
+      if (!Number.isSafeInteger(authorizationGeneration) || typeof authorizationGeneration !== "number" || authorizationGeneration <= 0) throw new Error("account_deleted");
+      if (!Number.isSafeInteger(authorizationRotatedAtSeconds) || typeof authorizationRotatedAtSeconds !== "number" || authorizationRotatedAtSeconds < 0) throw new Error("account_deleted");
+      if (identity.authTime <= authorizationRotatedAtSeconds) throw new Error("recent_reauthentication_required");
+      return Object.freeze({ firebaseSubject: identity.subject, authorizationGeneration });
+    }, { readOnly: true });
+  }
+
   public async registerUser(identity: AuthenticatedIdentity, input: AccountRegistrationInput): Promise<AccountRegistrationResult> {
     const identityId = identityDocumentId(identity.provider, identity.subject);
     const identityRef = this.db.collection(COLLECTIONS.identityMappings).doc(identityId);
@@ -119,7 +144,7 @@ export class FirestoreUserStore implements UserStore {
         };
       }
       for (const snapshot of deletedSnapshots) if (snapshot.exists) transaction.delete(snapshot.ref);
-      transaction.create(userRef, { createdAt, updatedAt: createdAt, acceptedTermsVersion: input.termsVersion, ...(identity.email === undefined ? {} : { contactEmail: identity.email }), contactEmailVerified: identity.emailVerified });
+      transaction.create(userRef, { createdAt, updatedAt: createdAt, acceptedTermsVersion: input.termsVersion, authorizationGeneration: 1, authorizationState: "active", authorizationRotatedAtSeconds: 0, ...(identity.email === undefined ? {} : { contactEmail: identity.email }), contactEmailVerified: identity.emailVerified });
       // `identityRef` was read as missing above. A transactional set keeps
       // that CAS while allowing a concurrent registration winner to trigger
       // a transaction retry instead of an ALREADY_EXISTS write failure.

@@ -659,6 +659,84 @@
         }
       }
     },
+    "/v1/account/session/exchange": {
+      "x-patternly-security-profile": "app_check_verify_only_bearer",
+      "x-patternly-consumer-scope": "mobile",
+      "post": {
+        "description": "Exchange a recently authenticated Firebase identity for a custom token pinned to the active account's authorization generation.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Generation-pinned Firebase custom token issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "customToken"
+                  ],
+                  "properties": {
+                    "customToken": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Account is deleted or Firebase authentication is not newer than its rotation barrier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Verified identity has no Patternly account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_v1_account_session_exchange",
+        "security": [
+          {
+            "appCheckAuth": [],
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "app_check_verify_only_bearer",
+        "x-patternly-consumer-scope": "mobile"
+      }
+    },
     "/v1/me": {
       "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",

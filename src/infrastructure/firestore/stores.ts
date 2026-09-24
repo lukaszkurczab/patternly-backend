@@ -22,6 +22,7 @@ import { FirestoreRevenueCatWebhookStore } from "../../modules/billing/revenueca
 import { FirestoreLegalRequestStore, type LegalRequestStore } from "../../modules/legal-requests/store.js";
 
 export type BackendStores = Readonly<{
+  firebaseAuth: FirebaseAdminAuth;
   users: UserStore;
   devices: DeviceStore;
   progress: ProgressStore;
@@ -40,12 +41,14 @@ export type BackendStores = Readonly<{
 
 export function createFirestoreStores(runtime: FirestoreRuntime, environment: Environment, authOverride?: FirebaseAdminAuth): BackendStores {
   const pseudonymKeyRing = parsePseudonymKeyRing(environment.deletionPseudonymKeysJson);
+  const firebaseAuth = authOverride ?? createFirebaseAdminAuth(runtime.app);
   const contentReports = new FirestoreContentReportStore(runtime.db, {
     rateLimitHashSecret: environment.reportRateLimitHashSecret,
     rateLimitMax: environment.reportRateLimitMax,
     rateLimitWindowSeconds: environment.reportRateLimitWindowSeconds,
   });
   return Object.freeze({
+    firebaseAuth,
     users: new FirestoreUserStore(runtime.db, pseudonymKeyRing),
     devices: new FirestoreDeviceStore(runtime.db),
     progress: new FirestoreProgressStore(runtime.db),
@@ -53,7 +56,7 @@ export function createFirestoreStores(runtime: FirestoreRuntime, environment: En
     tracks: new FirestoreTrackStore(runtime.db),
     content: new FirestoreContentVersionStore(runtime.db),
     contentReports,
-    accountLifecycle: new FirestoreAccountLifecycleStore(runtime.db, authOverride ?? createFirebaseAdminAuth(runtime.app), pseudonymKeyRing),
+    accountLifecycle: new FirestoreAccountLifecycleStore(runtime.db, firebaseAuth, pseudonymKeyRing),
     admin: new FirestoreAdminStore(runtime.db, environment.adminContentRoot, environment.adminContentReleaseId),
     dataExport: new FirestoreDataExportStore(runtime.db, {
       rateLimitMax: environment.accountDataExportRateLimitMax,

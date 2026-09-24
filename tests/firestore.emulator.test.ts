@@ -2,15 +2,16 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { getAuth } from "firebase-admin/auth";
-import { Timestamp } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { buildApplication } from "../src/api/app.js";
 import { loadEnvironment } from "../src/config/environment.js";
+import { createFirebaseTokenVerifier } from "../src/infrastructure/firebase/verifier.js";
 import { COLLECTIONS, identityDocumentId } from "../src/infrastructure/firestore/paths.js";
 import { createContentReportSchema } from "../src/modules/content-reports/contracts.js";
 import { FirestoreAccountLifecycleStore } from "../src/modules/account-lifecycle/store.js";
 import { parsePseudonymKeyRing } from "../src/infrastructure/security/pseudonymKeyRing.js";
 import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
-import { TEST_APP_CHECK_TOKEN, accountRegistrationPayload, clearFirestore, createAuthUser, createEmulatorContext, createRegisteredAuthUser, createVerifiedAuthUser, firestore, registerAuthUser, testEnvironment, type EmulatorContext, verifyAuthUser } from "./support.js";
+import { TEST_APP_CHECK_TOKEN, accountRegistrationPayload, clearFirestore, createAuthUser, createEmulatorContext, createRegisteredAuthUser, createVerifiedAuthUser, firestore, registerAuthUser, setAuthCustomClaimsAndSignIn, testEnvironment, type EmulatorContext, verifyAuthUser } from "./support.js";
 
 const reportBody = (clientSubmissionId: string) => createContentReportSchema.parse({
   clientSubmissionId,
@@ -53,6 +54,20 @@ test.afterEach(async () => {
 
 test.after(async () => {
   await context.close();
+});
+
+test("Firebase verifier preserves an optional positive authorization generation and rejects malformed claims", async () => {
+  const verifier = createFirebaseTokenVerifier(testEnvironment);
+  assert.ok(verifier);
+  const user = await createAuthUser();
+  const withoutClaim = await verifier.verify(user.idToken);
+  assert.equal("authorizationGeneration" in withoutClaim, false);
+
+  const claimed = await setAuthCustomClaimsAndSignIn(user, { authorizationGeneration: 9 });
+  assert.equal((await verifier.verify(claimed.idToken)).authorizationGeneration, 9);
+
+  const malformed = await setAuthCustomClaimsAndSignIn(user, { authorizationGeneration: "9" });
+  await assert.rejects(verifier.verify(malformed.idToken), { message: "firebase_authorization_generation_invalid" });
 });
 
 test("a new Firebase identity cannot create a Patternly account through bearer or optional-bearer routes", async () => {
@@ -117,6 +132,10 @@ test("explicit registration is atomic under concurrency and replay never changes
   assert.equal(identities.docs[0]?.data().userId, created.json().registration.user.id);
   assert.equal(identities.docs[0]?.data().provider, "firebase");
   assert.equal(identities.docs[0]?.data().subject, auth.localId);
+  const registeredUser = (await firestore().collection(COLLECTIONS.users).doc(created.json().registration.user.id).get()).data();
+  assert.equal(registeredUser?.authorizationGeneration, 1);
+  assert.equal(registeredUser?.authorizationState, "active");
+  assert.equal(registeredUser?.authorizationRotatedAtSeconds, 0);
   const evidence = await firestore().collection("users").doc(created.json().registration.user.id).collection("legalAcceptances").get();
   assert.equal(evidence.size, 1);
   assert.deepEqual({
@@ -138,6 +157,55 @@ test("explicit registration is atomic under concurrency and replay never changes
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers });
   assert.equal(me.statusCode, 200);
   assert.equal(me.json().user.id, created.json().registration.user.id);
+});
+
+test("session exchange pins the active generation, supports legacy generation one, and rejects barriers or non-active accounts", async () => {
+  const auth = await createAuthUser();
+  const tokensBeforeExchange = context.customTokenSubjects.length;
+  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const { userId } = await registerAuthUser(context, auth);
+  const userRef = firestore().collection(COLLECTIONS.users).doc(userId);
+
+  await userRef.update({ authorizationGeneration: FieldValue.delete(), authorizationState: FieldValue.delete(), authorizationRotatedAtSeconds: FieldValue.delete() });
+  const noBody = await context.app.inject({ method: "POST", url: "/v1/account/session/exchange", headers });
+  assert.equal(noBody.statusCode, 200);
+  assert.deepEqual(context.customTokenClaims.at(-1), { authorizationGeneration: 1 });
+  const legacy = await context.app.inject({ method: "POST", url: "/v1/account/session/exchange", headers, payload: {} });
+  assert.equal(legacy.statusCode, 200);
+  assert.deepEqual(legacy.json(), { customToken: "fixture-custom-token" });
+  assert.equal(legacy.headers["cache-control"], "private, no-store");
+  assert.equal(context.customTokenSubjects.at(-1), auth.localId);
+  assert.equal(context.customTokenSubjects.length, tokensBeforeExchange + 2);
+  assert.deepEqual(context.customTokenClaims.at(-1), { authorizationGeneration: 1 });
+  const invalidBody = await context.app.inject({ method: "POST", url: "/v1/account/session/exchange", headers, payload: { unexpected: true } });
+  assert.equal(invalidBody.statusCode, 400);
+
+  await userRef.update({ authorizationGeneration: 7, authorizationState: "active", authorizationRotatedAtSeconds: 0 });
+  const current = await context.app.inject({ method: "POST", url: "/v1/account/session/exchange", headers, payload: {} });
+  assert.equal(current.statusCode, 200);
+  assert.equal(context.customTokenSubjects.at(-1), auth.localId);
+  assert.deepEqual(context.customTokenClaims.at(-1), { authorizationGeneration: 7 });
+
+  const verified = await createFirebaseTokenVerifier(testEnvironment)!.verify(auth.idToken);
+  await userRef.update({ authorizationRotatedAtSeconds: verified.authTime });
+  const stale = await context.app.inject({ method: "POST", url: "/v1/account/session/exchange", headers, payload: {} });
+  assert.equal(stale.statusCode, 401);
+  assert.deepEqual(stale.json(), { error: { code: "recent_reauthentication_required" } });
+
+  await userRef.update({ authorizationRotatedAtSeconds: 0, authorizationState: "rotating" });
+  const rotating = await context.app.inject({ method: "POST", url: "/v1/account/session/exchange", headers, payload: {} });
+  assert.equal(rotating.statusCode, 401);
+  assert.deepEqual(rotating.json(), { error: { code: "account_deleted" } });
+  await userRef.update({ authorizationState: "deleting" });
+  const deleting = await context.app.inject({ method: "POST", url: "/v1/account/session/exchange", headers, payload: {} });
+  assert.equal(deleting.statusCode, 401);
+  assert.deepEqual(deleting.json(), { error: { code: "account_deleted" } });
+  await userRef.update({ authorizationState: "active" });
+  const identity = parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson).active("firebase", auth.localId);
+  await firestore().collection(COLLECTIONS.deletedIdentities).doc(identity.documentId).set({ deletedAt: Timestamp.now(), expiresAt: Timestamp.fromMillis(Date.now() + 60_000) });
+  const tombstoned = await context.app.inject({ method: "POST", url: "/v1/account/session/exchange", headers, payload: {} });
+  assert.equal(tombstoned.statusCode, 401);
+  assert.deepEqual(tombstoned.json(), { error: { code: "account_deleted" } });
 });
 
 test("registration rejects an active deletion tombstone and replaces only an expired tombstone", async () => {
@@ -629,10 +697,12 @@ test("anonymous report rate limiting is transactionally enforced without storing
 
 test("recovery codes are ten one-time server-hashed credentials, reissue invalidates the previous set, and replay is rejected", async () => {
   const auth = await createRegisteredAuthUser(context);
+  const tokensBeforeRecovery = context.customTokenSubjects.length;
   const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
   const firstIssued = await context.app.inject({ method: "POST", url: "/v1/account/recovery-codes", headers, payload: {} });
   assert.equal(firstIssued.statusCode, 200);
   const firstCodes = firstIssued.json().codes as string[];
+  const firstRecoveryCode = firstCodes[0]!;
   assert.equal(firstCodes.length, 10);
   assert.equal(new Set(firstCodes).size, 10);
   for (const code of firstCodes) assert.match(code, /^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){3}$/u);
@@ -647,6 +717,7 @@ test("recovery codes are ten one-time server-hashed credentials, reissue invalid
   const secondIssued = await context.app.inject({ method: "POST", url: "/v1/account/recovery-codes", headers, payload: {} });
   assert.equal(secondIssued.statusCode, 200);
   const secondCodes = secondIssued.json().codes as string[];
+  const secondRecoveryCode = secondCodes[0]!;
   assert.equal(secondCodes.length, 10);
   assert.equal(new Set(secondCodes).size, 10);
   assert.notDeepEqual(secondCodes, firstCodes);
@@ -658,16 +729,37 @@ test("recovery codes are ten one-time server-hashed credentials, reissue invalid
     assert.equal("rawCode" in document.data(), false);
   }
 
-  const previousSet = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { code: firstCodes[0] } });
+  const userRef = firestore().collection(COLLECTIONS.users).doc(auth.userId);
+  await userRef.update({ authorizationState: "unknown" });
+  const inactive = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { code: secondRecoveryCode } });
+  assert.equal(inactive.statusCode, 401);
+  assert.deepEqual(inactive.json(), { error: { code: "recovery_code_invalid" } });
+  await userRef.update({ authorizationState: "active", authorizationGeneration: 0 });
+  const malformedGeneration = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { code: secondRecoveryCode } });
+  assert.equal(malformedGeneration.statusCode, 401);
+  assert.deepEqual(malformedGeneration.json(), { error: { code: "recovery_code_invalid" } });
+  await userRef.update({ authorizationGeneration: 1 });
+  const pseudonym = parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson).active("firebase", auth.localId);
+  const tombstoneRef = firestore().collection(COLLECTIONS.deletedIdentities).doc(pseudonym.documentId);
+  await tombstoneRef.set({ deletedAt: Timestamp.now(), expiresAt: Timestamp.fromMillis(Date.now() + 60_000) });
+  const tombstoned = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { code: secondRecoveryCode } });
+  assert.equal(tombstoned.statusCode, 401);
+  assert.deepEqual(tombstoned.json(), { error: { code: "recovery_code_invalid" } });
+  await tombstoneRef.delete();
+  assert.equal((await firestore().collection(COLLECTIONS.recoveryCodeIndex).doc(createHash("sha256").update(secondRecoveryCode, "utf8").digest("hex")).get()).data()?.usedAt, null);
+
+  const previousSet = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { code: firstRecoveryCode } });
   assert.equal(previousSet.statusCode, 401);
   assert.deepEqual(previousSet.json(), { error: { code: "recovery_code_invalid" } });
 
-  const consumed = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { code: secondCodes[0] } });
+  const consumed = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { code: secondRecoveryCode } });
   assert.equal(consumed.statusCode, 200);
   assert.equal(consumed.json().customToken, "fixture-custom-token");
-  assert.deepEqual(context.customTokenSubjects, [auth.localId]);
+  assert.equal(context.customTokenSubjects.length, tokensBeforeRecovery + 1);
+  assert.equal(context.customTokenSubjects.at(-1), auth.localId);
+  assert.deepEqual(context.customTokenClaims.at(-1), { authorizationGeneration: 1 });
   assert.equal(context.revokedSubjects.includes(auth.localId), true);
-  const replay = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { code: secondCodes[0] } });
+  const replay = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { code: secondRecoveryCode } });
   assert.equal(replay.statusCode, 409);
   assert.deepEqual(replay.json(), { error: { code: "recovery_code_used" } });
 });

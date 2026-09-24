@@ -485,6 +485,24 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
+  app.post("/v1/account/session/exchange", { preHandler: routeGuard("app_check_verify_only_bearer", dependencies) }, async (request, reply) => {
+    reply.header("cache-control", "private, no-store");
+    const parsed = z.object({}).strict().safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      const stores = requireStores(dependencies);
+      const pinned = await stores.users.pinSessionAuthorization(request.authenticatedIdentity!);
+      const customToken = await stores.firebaseAuth.createCustomToken(pinned.firebaseSubject, { authorizationGeneration: pinned.authorizationGeneration });
+      return reply.code(200).send({ customToken });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "authentication_required";
+      if (message === "account_deleted") return reply.code(401).send({ error: { code: "account_deleted" } });
+      if (message === "account_not_found") return reply.code(404).send({ error: { code: "account_not_found" } });
+      if (message === "recent_reauthentication_required") return reply.code(401).send({ error: { code: "recent_reauthentication_required" } });
+      throw error;
+    }
+  });
+
   app.get("/v1/me", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const profile = await requireStores(dependencies).users.readProfile(request.userId!);
     if (!profile) return reply.code(404).send({ error: { code: "user_not_found" } });

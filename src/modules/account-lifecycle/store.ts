@@ -51,6 +51,12 @@ function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+function isExpiredIdentityTombstone(value: unknown): boolean {
+  const expiresAt = asRecord(value, "deleted_identity").expiresAt;
+  const expiresAtMs = expiresAt instanceof Timestamp ? expiresAt.toMillis() : expiresAt instanceof Date ? expiresAt.getTime() : Number.POSITIVE_INFINITY;
+  return expiresAtMs <= Date.now();
+}
+
 function recoveryCode(): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const bytes = randomBytes(16);
@@ -170,7 +176,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
 
   public async consumeRecoveryCode(code: string): Promise<Readonly<{ customToken: string }>> {
     const indexRef = this.db.collection(COLLECTIONS.recoveryCodeIndex).doc(sha256(code));
-    const firebaseSubject = await this.db.runTransaction(async (transaction) => {
+    const recovered = await this.db.runTransaction(async (transaction) => {
       const current = await transaction.get(indexRef);
       if (!current.exists) throw new Error("recovery_code_invalid");
       const data = asRecord(current.data(), "recovery_code");
@@ -178,24 +184,31 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       if (typeof data.userId !== "string") throw new Error("recovery_code_invalid");
       const userId = data.userId;
       const user = await transaction.get(this.db.collection(COLLECTIONS.users).doc(userId));
-      if (!user.exists || asRecord(user.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
+      if (!user.exists) throw new Error("account_deleted");
+      const userData = asRecord(user.data(), "user");
+      if (userData.deletedAt !== undefined || (userData.authorizationState !== undefined && userData.authorizationState !== "active")) throw new Error("account_deleted");
+      const authorizationGeneration = userData.authorizationGeneration === undefined ? 1 : userData.authorizationGeneration;
+      if (typeof authorizationGeneration !== "number" || !Number.isSafeInteger(authorizationGeneration) || authorizationGeneration <= 0) throw new Error("account_deleted");
       const identities = await transaction.get(this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId));
       const subjects = identities.docs
         .map((document) => asRecord(document.data(), "identity_mapping"))
         .filter((identity) => identity.provider === "firebase" && typeof identity.subject === "string")
         .map((identity) => identity.subject as string);
       if (subjects.length !== 1) throw new Error("recovery_code_invalid");
-      transaction.update(indexRef, { usedAt: now() });
       const subject = subjects[0];
       if (!subject) throw new Error("recovery_code_invalid");
-      return subject;
+      const tombstoneRefs = this.pseudonymKeyRing.candidates("firebase", subject).map(({ documentId }) => this.db.collection(COLLECTIONS.deletedIdentities).doc(documentId));
+      const tombstones = await transaction.getAll(...tombstoneRefs);
+      if (tombstones.some((tombstone) => tombstone.exists && !isExpiredIdentityTombstone(tombstone.data()))) throw new Error("account_deleted");
+      transaction.update(indexRef, { usedAt: now() });
+      return Object.freeze({ subject, authorizationGeneration });
     });
     try {
-      await this.auth.revokeRefreshTokens(firebaseSubject);
+      await this.auth.revokeRefreshTokens(recovered.subject);
     } catch {
       throw new Error("recovery_session_revocation_failed");
     }
-    return Object.freeze({ customToken: await this.auth.createCustomToken(firebaseSubject) });
+    return Object.freeze({ customToken: await this.auth.createCustomToken(recovered.subject, { authorizationGeneration: recovered.authorizationGeneration }) });
   }
 
   public async revokeSessions(userId: string, operationId: string): Promise<Readonly<{ status: "revoked"; operationId: string }>> {
