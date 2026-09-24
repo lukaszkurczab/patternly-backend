@@ -783,6 +783,10 @@ export function buildApplication(dependencies: ApplicationDependencies) {
         logAccountSyncRejection(request, "sync", message);
         return reply.code(409).send({ error: { code: errorCode(error) } });
       }
+      if (message === "progress_generation_conflict") {
+        logAccountSyncRejection(request, "sync", message);
+        return reply.code(409).send({ error: { code: errorCode(error) } });
+      }
       if (message === "authorization_generation_conflict") {
         logAccountSyncRejection(request, "sync", message);
         return reply.code(409).send({ error: { code: errorCode(error) } });

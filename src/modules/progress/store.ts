@@ -839,13 +839,14 @@ export class FirestoreProgressStore implements ProgressStore {
       if (!user.exists) throw new Error("account_deleted");
       assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
       const metaRef = accountMetadataRef(this.db, userId);
-      const batchRef = syncBatchRef(this.db, userId, metadata);
       const metaSnapshot = await transaction.get(metaRef);
       const metadataSnapshot = metaSnapshot.data() as Record<string, unknown> | undefined;
+      if (hasActiveAdoptionPromotionLease(metadataSnapshot)) throw new Error("progress_generation_conflict");
       const activeGeneration = readAccountGeneration(metadataSnapshot);
       const progressCollection = progressCollectionRef(this.db, userId, activeGeneration);
       const currentRefs = mutations.map((mutation) => progressCollection.doc(progressDocumentId(mutation)));
       const mutationRefs = mutations.map((mutation) => userRef.collection("syncMutations").doc(mutation.mutationId));
+      const batchRef = syncBatchRef(this.db, userId, metadata);
       const batchSnapshot = await transaction.get(batchRef);
       const snapshots = await transaction.getAll(...currentRefs, ...mutationRefs);
       const accountRevision = readAccountRevision(metadataSnapshot);

@@ -3,8 +3,8 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { deleteApp, initializeApp, type App } from "firebase-admin/app";
 import { getAuth, type Auth } from "firebase-admin/auth";
-import { getFirestore, type Firestore } from "firebase-admin/firestore";
-import { createEmulatorContext, type EmulatorContext } from "./support.js";
+import { FieldValue, getFirestore, Timestamp, type Firestore } from "firebase-admin/firestore";
+import { createAuthUser, createEmulatorContext, firestore, registerAuthUser, TEST_APP_CHECK_TOKEN, type EmulatorContext } from "./support.js";
 import { FirestoreProgressStore } from "../src/modules/progress/store.js";
 import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
 import { syncRequestSchema, type ProgressMutation } from "../src/modules/progress/contracts.js";
@@ -70,6 +70,100 @@ test("fixture cleanup attempts remaining steps after a cleanup failure", async (
 test("fixture guard rejects a non-loopback Auth emulator host", () => {
   assert.equal(isLoopbackEmulatorHost("firebase.example:9099"), false);
   assert.equal(isLoopbackEmulatorHost("127.0.0.1:19099"), true);
+});
+
+test("ordinary progress sync is rejected during a live adoption promotion lease", async () => {
+  const context = createEmulatorContext();
+  const authUser = await createAuthUser();
+  let registered: Awaited<ReturnType<typeof registerAuthUser>> | undefined;
+  try {
+    registered = await registerAuthUser(context, authUser);
+    const userRef = firestore().collection("users").doc(registered.userId);
+    const metadataRef = userRef.collection("syncMetadata").doc("account");
+    const leaseExpiry = Timestamp.fromMillis(Date.now() + 60_000);
+    const headers = { authorization: `Bearer ${registered.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+    const makePayload = (sessionId: string, batchId: string, ordinal: number) => ({
+      canonicalVersion: "canonical-json-v1",
+      expectedAccountRevision: 0,
+      deviceId,
+      sessionId,
+      batchId,
+      highWatermark: ordinal,
+      mutations: [fixtureMutation("training_attempt", `lease-attempt-${ordinal}`, { result: "correct" }, ordinal)],
+    });
+
+    await metadataRef.set({ accountRevision: 0, adoptionPromotionSessionId: "different-session", adoptionPromotionLeaseExpiresAt: leaseExpiry });
+    const otherSession = makePayload(`sync-session-${randomUUID()}`, `lease-batch-other-${randomUUID()}`, 1);
+    const blocked = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: otherSession });
+    assert.equal(blocked.statusCode, 409, blocked.body);
+    assert.deepEqual(blocked.json(), { error: { code: "progress_generation_conflict" } });
+    assert.deepEqual((await context.stores.progress.readSnapshot(registered.userId)).records, []);
+    assert.equal((await userRef.collection("syncMutations").get()).size, 0);
+    assert.equal((await userRef.collection("syncBatches").get()).size, 0);
+    assert.equal((await metadataRef.get()).data()?.accountRevision, 0);
+
+    const sameSession = makePayload("promoting-session", `lease-batch-same-${randomUUID()}`, 2);
+    await metadataRef.set({ adoptionPromotionSessionId: sameSession.sessionId, adoptionPromotionLeaseExpiresAt: leaseExpiry }, { merge: true });
+    const sameSessionBlocked = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: sameSession });
+    assert.equal(sameSessionBlocked.statusCode, 409, sameSessionBlocked.body);
+    assert.deepEqual(sameSessionBlocked.json(), { error: { code: "progress_generation_conflict" } });
+    assert.deepEqual((await context.stores.progress.readSnapshot(registered.userId)).records, []);
+    assert.equal((await userRef.collection("syncMutations").get()).size, 0);
+    assert.equal((await userRef.collection("syncBatches").get()).size, 0);
+    assert.equal((await metadataRef.get()).data()?.accountRevision, 0);
+
+    await metadataRef.update({ adoptionPromotionSessionId: FieldValue.delete(), adoptionPromotionLeaseExpiresAt: FieldValue.delete() });
+    const unleased = makePayload(`sync-session-${randomUUID()}`, `lease-batch-clear-${randomUUID()}`, 3);
+    const accepted = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: unleased });
+    assert.equal(accepted.statusCode, 200, accepted.body);
+    assert.equal(accepted.json().accountRevision, 1);
+    assert.equal((await context.stores.progress.readSnapshot(registered.userId)).records.length, 1);
+    assert.equal((await userRef.collection("syncMutations").get()).size, 1);
+    assert.equal((await userRef.collection("syncBatches").get()).size, 1);
+    assert.equal((await metadataRef.get()).data()?.accountRevision, 1);
+
+    const beforeReplay = {
+      progress: (await userRef.collection("progress").get()).docs.map((document) => [document.id, document.data()]),
+      mutations: (await userRef.collection("syncMutations").get()).docs.map((document) => [document.id, document.data()]),
+      batches: (await userRef.collection("syncBatches").get()).docs.map((document) => [document.id, document.data()]),
+    };
+    await metadataRef.set({ adoptionPromotionSessionId: "replay-promotion-session", adoptionPromotionLeaseExpiresAt: leaseExpiry }, { merge: true });
+    const leaseMetadata = (await metadataRef.get()).data();
+    const replayBlocked = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: unleased });
+    assert.equal(replayBlocked.statusCode, 409, replayBlocked.body);
+    assert.deepEqual(replayBlocked.json(), { error: { code: "progress_generation_conflict" } });
+    assert.equal((await metadataRef.get()).data()?.accountRevision, 1);
+    assert.deepEqual((await metadataRef.get()).data(), leaseMetadata);
+    assert.equal((await context.stores.progress.readSnapshot(registered.userId)).records.length, 1);
+    assert.deepEqual({
+      progress: (await userRef.collection("progress").get()).docs.map((document) => [document.id, document.data()]),
+      mutations: (await userRef.collection("syncMutations").get()).docs.map((document) => [document.id, document.data()]),
+      batches: (await userRef.collection("syncBatches").get()).docs.map((document) => [document.id, document.data()]),
+    }, { progress: beforeReplay.progress, mutations: beforeReplay.mutations, batches: beforeReplay.batches });
+
+    await metadataRef.update({ adoptionPromotionSessionId: FieldValue.delete(), adoptionPromotionLeaseExpiresAt: FieldValue.delete() });
+    const replayAccepted = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: unleased });
+    assert.equal(replayAccepted.statusCode, 200, replayAccepted.body);
+    assert.equal(replayAccepted.json().accountRevision, 1);
+    assert.deepEqual((await context.stores.progress.readSnapshot(registered.userId)).records.length, 1);
+    assert.equal((await userRef.collection("syncMutations").get()).size, 1);
+    assert.equal((await userRef.collection("syncBatches").get()).size, 1);
+    assert.equal((await metadataRef.get()).data()?.accountRevision, 1);
+  } finally {
+    const cleanup: Array<() => Promise<void>> = [];
+    if (registered) {
+      cleanup.push(() => firestore().recursiveDelete(firestore().collection("users").doc(registered!.userId)));
+    }
+    cleanup.push(async () => {
+      try { await getAuth().deleteUser(authUser.localId); } catch (error: unknown) {
+        const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: unknown }).code : undefined;
+        if (code !== "auth/user-not-found" && code !== "user-not-found") throw error;
+      }
+    });
+    cleanup.push(() => context.close());
+    const failures = await attemptAllCleanupSteps(cleanup);
+    if (failures.length > 0) throw new AggregateError(failures, "adoption_promotion_sync_fixture_cleanup_failed");
+  }
 });
 
 test("isolated emulator fixture preserves canonical progress across service reinitialization", async () => {

@@ -2446,9 +2446,10 @@
             }
           },
           "409": {
-            "description": "Progress, account revision, or authorization generation conflict",
+            "description": "Progress, account revision, authorization generation, or adoption promotion conflict",
             "x-patternly-error-codes": [
-              "authorization_generation_conflict"
+              "authorization_generation_conflict",
+              "progress_generation_conflict"
             ],
             "content": {
               "application/json": {
