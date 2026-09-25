@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseOperatorAllowlist, type OperatorAllowlistEntry } from "../modules/operator-access/contracts.js";
 
 export const ADMIN_CONTENT_RELEASE_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 
@@ -13,6 +14,10 @@ const environmentSchema = z.object({
   FIRESTORE_EMULATOR_HOST: z.string().optional(),
   ADMINISTRATOR_EMAIL: z.string().email().optional(),
   ADMIN_WEB_ORIGIN: z.string().optional(),
+  OPERATOR_OIDC_ISSUER: z.string().url().optional(),
+  OPERATOR_OIDC_AUDIENCE: z.string().trim().min(1).max(512).optional(),
+  OPERATOR_OIDC_JWKS_URL: z.string().url().optional(),
+  OPERATOR_ALLOWLIST_JSON: z.string().min(1).optional(),
   SMTP_HOST: z.string().min(1).optional(),
   SMTP_PORT: z.coerce.number().int().refine((value) => value === 465 || value === 587).optional(),
   SMTP_USERNAME: z.string().min(1).optional(),
@@ -51,6 +56,12 @@ export type Environment = Readonly<{
   firebaseAuthIssuer: string | undefined;
   administratorEmail: string | undefined;
   adminWebOrigin: string | undefined;
+  operatorAccess: Readonly<{
+    issuer: string;
+    audience: string;
+    jwksUrl: string;
+    operators: readonly OperatorAllowlistEntry[];
+  }> | null;
   smtp: Readonly<{ host: string; port: 465 | 587; username: string; password: string; fromEmail: string; fromName: string; replyTo: string | undefined }> | null;
   reportRateLimitHashSecret: string;
   deletionPseudonymKeysJson: string;
@@ -88,6 +99,7 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     if (value.CONTENT_PACKAGE_LOCAL_ROOT !== undefined) throw new Error("production_local_content_package_storage_forbidden");
   }
   const adminWebOrigin = parseAdminWebOrigin(value);
+  const operatorAccess = parseOperatorAccess(value);
   return Object.freeze({
     nodeEnv: value.NODE_ENV,
     port: value.PORT,
@@ -97,6 +109,7 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     firebaseAuthIssuer: value.FIREBASE_AUTH_ISSUER,
     administratorEmail: value.ADMINISTRATOR_EMAIL?.toLowerCase(),
     adminWebOrigin,
+    operatorAccess,
     smtp: smtpConfiguration(value),
     reportRateLimitHashSecret: value.REPORT_RATE_LIMIT_HASH_SECRET,
     deletionPseudonymKeysJson: value.DELETION_PSEUDONYM_KEYS_JSON,
@@ -119,6 +132,30 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     adminContentReleaseId: value.ADMIN_CONTENT_RELEASE_ID,
     contentPackageLocalRoot: value.CONTENT_PACKAGE_LOCAL_ROOT,
   });
+}
+
+function parseOperatorAccess(value: z.infer<typeof environmentSchema>): Environment["operatorAccess"] {
+  const fields = [value.OPERATOR_OIDC_ISSUER, value.OPERATOR_OIDC_AUDIENCE, value.OPERATOR_OIDC_JWKS_URL, value.OPERATOR_ALLOWLIST_JSON];
+  if (fields.every((field) => field === undefined)) return null;
+  if (fields.some((field) => field === undefined)) throw new Error("invalid_operator_oidc_config");
+  const issuer = parsePinnedHttpsUrl(value.OPERATOR_OIDC_ISSUER!, "invalid_operator_oidc_issuer", true);
+  const jwksUrl = parsePinnedHttpsUrl(value.OPERATOR_OIDC_JWKS_URL!, "invalid_operator_oidc_jwks_url", false);
+  return Object.freeze({
+    issuer,
+    audience: value.OPERATOR_OIDC_AUDIENCE!,
+    jwksUrl,
+    operators: parseOperatorAllowlist(value.OPERATOR_ALLOWLIST_JSON!),
+  });
+}
+
+function parsePinnedHttpsUrl(value: string, errorCode: string, allowPath: boolean): string {
+  let parsed: URL;
+  try { parsed = new URL(value); } catch { throw new Error(errorCode); }
+  const hostname = parsed.hostname.toLowerCase();
+  const isIpLiteral = /^(?:\d{1,3}\.){3}\d{1,3}$/u.test(hostname) || hostname.includes(":");
+  const unsafeHost = !hostname.includes(".") || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || hostname.endsWith(".internal") || hostname.endsWith(".lan") || hostname.endsWith(".home") || hostname.endsWith(".arpa") || isIpLiteral;
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash || unsafeHost || (!allowPath && parsed.pathname === "/")) throw new Error(errorCode);
+  return parsed.toString().replace(/\/$/u, "");
 }
 
 function smtpConfiguration(value: z.infer<typeof environmentSchema>): Environment["smtp"] {
