@@ -3427,7 +3427,7 @@
       "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
-        "description": "Revoke current and stale Firebase sessions through the active account security-operation slot. The operation ID is idempotent and bound to the presented authorization generation.",
+        "description": "Revoke current and stale Firebase sessions through the active account security-operation slot, then issue a replacement custom token for the same Firebase subject and authorization generation. The operation ID is idempotent and bound to the presented authorization generation.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3440,7 +3440,7 @@
         },
         "responses": {
           "200": {
-            "description": "Sessions revoked",
+            "description": "Sessions revoked and replacement session issued",
             "content": {
               "application/json": {
                 "schema": {
@@ -3448,7 +3448,8 @@
                   "additionalProperties": false,
                   "required": [
                     "status",
-                    "operationId"
+                    "operationId",
+                    "customToken"
                   ],
                   "properties": {
                     "status": {
@@ -3458,6 +3459,10 @@
                     "operationId": {
                       "type": "string",
                       "format": "uuid"
+                    },
+                    "customToken": {
+                      "type": "string",
+                      "minLength": 1
                     }
                   }
                 }
@@ -3513,12 +3518,14 @@
             }
           },
           "503": {
-            "description": "Revocation pending; account remains bound",
+            "description": "Revocation or replacement-session issuance pending; account remains bound",
             "x-patternly-error-codes": [
               "app_check_not_configured",
               "firestore_not_ready",
               "authentication_not_configured",
-              "session_revocation_pending"
+              "session_revocation_pending",
+              "session_reissue_failed",
+              "session_revocation_identity_unavailable"
             ],
             "content": {
               "application/json": {

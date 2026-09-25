@@ -14,6 +14,7 @@ const PROOF_RETENTION_MS = 3 * 365 * 24 * 60 * 60 * 1000;
 const SECURITY_OPERATION_LEASE_MS = 2 * 60 * 1000;
 
 type RecoveryCodesResult = Readonly<{ generationId: string; codes: readonly string[] }>;
+type SessionRevocationResult = Readonly<{ status: "revoked"; operationId: string; customToken: string }>;
 type DeletionProof = Readonly<{ status: "deleted"; operationId: string; proofId: string }>;
 type DeletionOperationStatus = Readonly<{ status: "pending" | "remote_deleted" | "complete"; operationId: string; proofId: string | null }>;
 type DeletionPhase = "prepared" | "sessions_revoking" | "firestore_deleting" | "auth_deleting" | "remote_deleted" | "complete";
@@ -36,7 +37,7 @@ const DELETION_PHASES: readonly DeletionPhase[] = Object.freeze(["prepared", "se
 export interface AccountLifecycleStore {
   issueRecoveryCodes(userId: string, expectedAuthorizationGeneration: number): Promise<RecoveryCodesResult>;
   consumeRecoveryCode(code: string): Promise<Readonly<{ customToken: string }>>;
-  revokeSessions(userId: string, expectedAuthorizationGeneration: number, operationId: string): Promise<Readonly<{ status: "revoked"; operationId: string }>>;
+  revokeSessions(userId: string, expectedAuthorizationGeneration: number, operationId: string): Promise<SessionRevocationResult>;
   deleteAccount(userId: string, expectedAuthorizationGeneration: number, operationId: string, operationSecret: string): Promise<AccountDeletionResult>;
   completeDeletion(operationId: string, proofId: string): Promise<CompletedDeletion>;
   resumeDeletion(operationId: string, operationSecret: string): Promise<DeletionOperationStatus | null>;
@@ -209,7 +210,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
     return Object.freeze({ customToken: await this.auth.createCustomToken(recovered.subject, { authorizationGeneration: recovered.authorizationGeneration }) });
   }
 
-  public async revokeSessions(userId: string, expectedAuthorizationGeneration: number, operationId: string): Promise<Readonly<{ status: "revoked"; operationId: string }>> {
+  public async revokeSessions(userId: string, expectedAuthorizationGeneration: number, operationId: string): Promise<SessionRevocationResult> {
     const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
     const operationRef = this.db.collection(COLLECTIONS.sessionRevocationOperations).doc(operationId);
     const claimedAt = now();
@@ -247,10 +248,11 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       }
 
       const identities = await transaction.get(this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId));
-      const subjects = identities.docs
+      const subjects = [...new Set(identities.docs
         .map((document) => asRecord(document.data(), "identity_mapping"))
         .filter((identity) => identity.provider === "firebase" && typeof identity.subject === "string")
-        .map((identity) => identity.subject as string);
+        .map((identity) => identity.subject as string))];
+      if (subjects.length !== 1) throw new Error("session_revocation_identity_unavailable");
       const securityOperation = Object.freeze({ kind: "session_revoke", operationId, expectedAuthorizationGeneration, fence, leaseUntil });
       transaction.set(userRef, { securityOperation }, { merge: true });
       transaction.set(operationRef, {
@@ -263,7 +265,27 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       }, { merge: true });
       return Object.freeze({ kind: "claimed" as const, subjects: Object.freeze(subjects), fence });
     });
-    if (claim.kind === "complete") return Object.freeze({ status: "revoked", operationId });
+    const mintReplacementSession = async (knownSubject?: string): Promise<SessionRevocationResult> => {
+      let subject = knownSubject;
+      if (!subject) {
+        const identities = await this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId).get();
+        const subjects = [...new Set(identities.docs
+          .map((document) => asRecord(document.data(), "identity_mapping"))
+          .filter((identity) => identity.provider === "firebase" && typeof identity.subject === "string")
+          .map((identity) => identity.subject as string))];
+        if (subjects.length !== 1) throw new Error("session_revocation_identity_unavailable");
+        [subject] = subjects;
+      }
+      if (!subject) throw new Error("session_revocation_identity_unavailable");
+      try {
+        const customToken = await this.auth.createCustomToken(subject, { authorizationGeneration: expectedAuthorizationGeneration });
+        return Object.freeze({ status: "revoked", operationId, customToken });
+      } catch {
+        throw new Error("session_reissue_failed");
+      }
+    };
+
+    if (claim.kind === "complete") return mintReplacementSession();
     if (claim.kind === "in_progress") throw new Error("session_revocation_in_progress");
 
     const finalize = async (status: "failed" | "revoked"): Promise<void> => this.db.runTransaction(async (transaction) => {
@@ -291,7 +313,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       throw new Error("session_revocation_failed");
     }
     await finalize("revoked");
-    return Object.freeze({ status: "revoked", operationId });
+    return mintReplacementSession(claim.subjects[0]);
   }
 
   public async deleteAccount(userId: string, expectedAuthorizationGeneration: number, operationId: string, operationSecret: string): Promise<AccountDeletionResult> {
