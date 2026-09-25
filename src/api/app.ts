@@ -1042,6 +1042,9 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     reply.header("x-content-package-sha256", packageData.manifest.packageSha256);
     reply.header("x-content-artifact-sha256", packageData.manifest.artifactSha256);
     reply.header("x-content-version", packageData.manifest.contentVersion);
+    reply.header("x-content-release-id", packageData.manifest.contentReleaseId);
+    reply.header("x-content-minimum-app-version", packageData.manifest.minimumAppVersion);
+    reply.header("x-content-artifact-size-bytes", String(packageData.manifest.artifactSizeBytes));
     return reply.code(200).send(packageData.bytes);
   });
   app.post("/v1/content/reports", { preHandler: routeGuard("app_check_optional_bearer", dependencies) }, async (request, reply) => {

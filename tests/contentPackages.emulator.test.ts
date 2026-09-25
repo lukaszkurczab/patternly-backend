@@ -50,6 +50,10 @@ test("emulator package route enforces App Check and fresh entitlement and stream
     assert.deepEqual(active.rawPayload, compressed);
     assert.equal(active.headers["content-length"], String(compressed.length));
     assert.equal(active.headers["x-content-package-sha256"], manifest.packageSha256);
+    assert.equal(active.headers["x-content-release-id"], manifest.contentReleaseId);
+    assert.equal(active.headers["x-content-minimum-app-version"], manifest.minimumAppVersion);
+    assert.equal(active.headers["x-content-artifact-size-bytes"], String(manifest.artifactSizeBytes));
+    for (const header of ["x-content-release-id", "x-content-minimum-app-version", "x-content-artifact-size-bytes"]) assert.ok(active.headers[header]);
     assert.equal(requestedUsers.at(-1), user.userId);
     result = "grace";
     assert.equal((await context.app.inject({ method: "GET", url: "/v1/content/packages/sample-track/premium-node", headers })).statusCode, 200);

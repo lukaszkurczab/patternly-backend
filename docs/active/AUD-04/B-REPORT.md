@@ -38,3 +38,7 @@ This is backend infrastructure with test fixtures only; it does not publish or a
 - Risk: **0.83** — bytes/hash and activation ordering are enforced; production serving is intentionally unavailable until cloud storage is separately specified and implemented.
 - Maintainability: **0.89** — explicit errors, bounded decompression, strict manifest and immutable paths; no hidden URI fallback.
 - Minimum score: **0.83**.
+
+## AUD-04-C contract correction
+
+The successful package response also exposes verified manifest metadata through required `X-Content-Release-Id`, `X-Content-Minimum-App-Version`, and `X-Content-Artifact-Size-Bytes` headers. Values are read from the same verified current manifest used to validate and return the gzip bytes. OpenAPI source/generated output and the emulator route test cover these required headers.

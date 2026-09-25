@@ -3963,32 +3963,58 @@
             "description": "Exact verified gzip package bytes",
             "headers": {
               "Content-Length": {
+                "required": true,
                 "schema": {
                   "type": "integer",
                   "minimum": 1
                 }
               },
               "Cache-Control": {
+                "required": true,
                 "schema": {
                   "type": "string",
                   "const": "private, no-store"
                 }
               },
               "X-Content-Package-Sha256": {
+                "required": true,
                 "schema": {
                   "type": "string",
                   "pattern": "^[a-f0-9]{64}$"
                 }
               },
               "X-Content-Artifact-Sha256": {
+                "required": true,
                 "schema": {
                   "type": "string",
                   "pattern": "^[a-f0-9]{64}$"
                 }
               },
               "X-Content-Version": {
+                "required": true,
                 "schema": {
                   "type": "string"
+                }
+              },
+              "X-Content-Release-Id": {
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "X-Content-Minimum-App-Version": {
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][A-Za-z0-9.-]+)?$"
+                }
+              },
+              "X-Content-Artifact-Size-Bytes": {
+                "required": true,
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
                 }
               }
             },
