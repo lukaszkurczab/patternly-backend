@@ -978,6 +978,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     } catch (error) {
       const message = error instanceof Error ? error.message : "session_revocation_failed";
       if (message === "session_revocation_failed") return reply.code(503).send({ error: { code: "session_revocation_pending" } });
+      if (["session_reissue_failed", "session_revocation_identity_unavailable"].includes(message)) return reply.code(503).send({ error: { code: message } });
       if (["session_revocation_operation_conflict", "session_revocation_in_progress", "security_operation_conflict"].includes(message)) return reply.code(409).send({ error: { code: message } });
       if (message === "authorization_generation_conflict") return reply.code(409).send({ error: { code: message } });
       if (["account_deleted", "authorization_generation_required", "authorization_generation_invalid"].includes(message)) return reply.code(401).send({ error: { code: errorCode(error) } });

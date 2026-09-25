@@ -185,12 +185,13 @@ test("session revocation binds a single live operation, reports same-operation p
   await assert.rejects(store.revokeSessions(auth.userId, 1, randomUUID()), { message: "session_revocation_operation_conflict" });
   assert.equal(calls, 1);
   releaseProvider();
-  assert.deepEqual(await first, { status: "revoked", operationId });
-  assert.deepEqual(await store.revokeSessions(auth.userId, 1, operationId), { status: "revoked", operationId });
+  assert.deepEqual(await first, { status: "revoked", operationId, customToken: "unused" });
+  assert.deepEqual(await store.revokeSessions(auth.userId, 1, operationId), { status: "revoked", operationId, customToken: "unused" });
   assert.equal(calls, 1);
   const operation = (await firestore().collection(COLLECTIONS.sessionRevocationOperations).doc(operationId).get()).data();
   assert.equal(operation?.status, "revoked");
   assert.equal("subject" in (operation ?? {}), false);
+  assert.equal("customToken" in (operation ?? {}), false);
   assert.equal((await firestore().collection(COLLECTIONS.users).doc(auth.userId).get()).get("securityOperation"), undefined);
 });
 
@@ -231,7 +232,7 @@ test("session revocation failure can retry and expired owners cannot finalize ov
   }, parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson));
   await assert.rejects(store.revokeSessions(auth.userId, 1, operationId), { message: "session_revocation_failed" });
   assert.equal((await firestore().collection(COLLECTIONS.sessionRevocationOperations).doc(operationId).get()).get("status"), "failed");
-  assert.deepEqual(await store.revokeSessions(auth.userId, 1, operationId), { status: "revoked", operationId });
+  assert.deepEqual(await store.revokeSessions(auth.userId, 1, operationId), { status: "revoked", operationId, customToken: "unused" });
   assert.equal(calls, 2);
 
   const racedOperationId = randomUUID();
@@ -250,13 +251,46 @@ test("session revocation failure can retry and expired owners cannot finalize ov
   const userRef = firestore().collection(COLLECTIONS.users).doc(auth.userId);
   const occupied = (await userRef.get()).get("securityOperation") as Record<string, unknown>;
   await userRef.update({ "securityOperation.leaseUntil": Timestamp.fromMillis(Date.now() - 1) });
-  assert.deepEqual(await racedStore.revokeSessions(auth.userId, 1, racedOperationId), { status: "revoked", operationId: racedOperationId });
+  assert.deepEqual(await racedStore.revokeSessions(auth.userId, 1, racedOperationId), { status: "revoked", operationId: racedOperationId, customToken: "unused" });
   releaseFirst();
   await assert.rejects(oldOwner, { message: "session_revocation_operation_conflict" });
   assert.equal(raceCalls, 2);
   assert.equal((await firestore().collection(COLLECTIONS.sessionRevocationOperations).doc(racedOperationId).get()).get("status"), "revoked");
   assert.equal((await userRef.get()).get("securityOperation"), undefined);
   assert.equal(typeof occupied.fence, "string");
+});
+
+test("completed session revocation retries replacement-token issuance without revoking twice", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const operationId = randomUUID();
+  let revokeCalls = 0;
+  let mintCalls = 0;
+  const store = new FirestoreAccountLifecycleStore(firestore(), {
+    createCustomToken: async (_subject, claims) => {
+      mintCalls += 1;
+      assert.deepEqual(claims, { authorizationGeneration: 1 });
+      if (mintCalls === 1) throw new Error("temporary_token_failure");
+      return "replacement-token";
+    },
+    revokeRefreshTokens: async () => { revokeCalls += 1; },
+    deleteUser: async () => undefined,
+  }, parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson));
+
+  await assert.rejects(store.revokeSessions(auth.userId, 1, operationId), { message: "session_reissue_failed" });
+  assert.equal(revokeCalls, 1);
+  const operationRef = firestore().collection(COLLECTIONS.sessionRevocationOperations).doc(operationId);
+  const completed = (await operationRef.get()).data();
+  assert.equal(completed?.status, "revoked");
+  assert.equal("subject" in (completed ?? {}), false);
+  assert.equal("customToken" in (completed ?? {}), false);
+
+  assert.deepEqual(await store.revokeSessions(auth.userId, 1, operationId), {
+    status: "revoked",
+    operationId,
+    customToken: "replacement-token",
+  });
+  assert.equal(revokeCalls, 1);
+  assert.equal(mintCalls, 2);
 });
 
 test("session revocation finalization preserves its slot when account generation or state changes during Firebase work", async () => {
