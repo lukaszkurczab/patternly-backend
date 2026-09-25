@@ -56,3 +56,33 @@ test("explicit local emulator configuration remains accepted outside production"
   assert.equal(local.nodeEnv, "test");
   assert.equal(local.firebaseProjectId, "patternly-app-sandbox");
 });
+
+test("operator OIDC configuration is optional, all-or-none, pinned to safe HTTPS, and strict", () => {
+  assert.equal(loadEnvironment(production).operatorAccess, null);
+  const configured = {
+    ...production,
+    OPERATOR_OIDC_ISSUER: "https://accounts.example.test",
+    OPERATOR_OIDC_AUDIENCE: "patternly-operators",
+    OPERATOR_OIDC_JWKS_URL: "https://keys.example.test/.well-known/jwks.json",
+    OPERATOR_ALLOWLIST_JSON: JSON.stringify([{ subject: "operator-1", role: "content_operator", actions: ["content_reports:read", "content_reports:transition"] }]),
+  };
+  const access = loadEnvironment(configured).operatorAccess;
+  assert.equal(access?.issuer, configured.OPERATOR_OIDC_ISSUER);
+  assert.equal(access?.operators[0]?.subject, "operator-1");
+  for (const key of ["OPERATOR_OIDC_ISSUER", "OPERATOR_OIDC_AUDIENCE", "OPERATOR_OIDC_JWKS_URL", "OPERATOR_ALLOWLIST_JSON"] as const) {
+    const partial = { ...configured } as Record<string, string>;
+    delete partial[key];
+    assert.throws(() => loadEnvironment(partial), { message: "invalid_operator_oidc_config" });
+  }
+  for (const unsafe of ["http://keys.example.test/jwks", "https://localhost/jwks", "https://127.0.0.1/jwks", "https://[::1]/jwks", "https://user:password@keys.example.test/jwks", "https://keys.example.test/"]) {
+    assert.throws(() => loadEnvironment({ ...configured, OPERATOR_OIDC_JWKS_URL: unsafe }), { message: "invalid_operator_oidc_jwks_url" });
+  }
+  for (const allowlist of [
+    [{ subject: "operator-1", role: "operator", actions: ["*"] }],
+    [{ subject: "operator-1", role: "operator", actions: ["content_reports:read", "content_reports:read"] }],
+    [{ subject: "operator-1", role: "operator", actions: ["content_reports:read"] }, { subject: "operator-1", role: "other", actions: ["legal_requests:read"] }],
+    [{ subject: "operator-1", role: "operator", actions: ["content_reports:read"], extra: true }],
+  ]) {
+    assert.throws(() => loadEnvironment({ ...configured, OPERATOR_ALLOWLIST_JSON: JSON.stringify(allowlist) }), { message: "invalid_operator_allowlist" });
+  }
+});

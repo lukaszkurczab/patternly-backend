@@ -5,6 +5,7 @@ import type { Environment } from "../config/environment.js";
 import type { FirestoreRuntime } from "../infrastructure/firestore/client.js";
 import type { IdentityTokenVerifier } from "../infrastructure/firebase/verifier.js";
 import type { AppCheckTokenVerifier } from "../infrastructure/firebase/appCheckVerifier.js";
+import type { OperatorTokenVerifier } from "../infrastructure/operator/oidcVerifier.js";
 import type { RevenueCatEntitlementReader } from "../infrastructure/revenuecat/client.js";
 import { OPENAPI_DOCUMENT } from "./openapi.js";
 import { authenticateIdentity, authenticateRequest } from "../modules/auth/request.js";
@@ -48,6 +49,7 @@ export type ApplicationDependencies = Readonly<{
   firestore: FirestoreRuntime | null;
   verifier: IdentityTokenVerifier | null;
   appCheckVerifier: AppCheckTokenVerifier | null;
+  operatorTokenVerifier?: OperatorTokenVerifier | null;
   stores: BackendStores | null;
   revenueCatEntitlementReader?: RevenueCatEntitlementReader | null;
   contentPackages?: ContentPackageService | null;

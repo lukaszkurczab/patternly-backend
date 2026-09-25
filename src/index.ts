@@ -7,6 +7,7 @@ import { createFirebaseTokenVerifier } from "./infrastructure/firebase/verifier.
 import { createBootstrapLogger } from "./infrastructure/logging/logger.js";
 import { createSmtpLegalRequestEmailSender, createSmtpPrivacyEmailSender, createSmtpPurchaseReceiptEmailSender, createSmtpSecurityIncidentEmailSender } from "./infrastructure/email/smtpPrivacyEmailSender.js";
 import { createRevenueCatEntitlementReader } from "./infrastructure/revenuecat/client.js";
+import { createOperatorTokenVerifier } from "./infrastructure/operator/oidcVerifier.js";
 import { ContentPackageService, FirestoreContentPackagePointerStore, LocalFilesystemContentPackageStorage } from "./modules/content/packages.js";
 
 async function main(): Promise<void> {
@@ -28,6 +29,7 @@ async function main(): Promise<void> {
       firestore,
       verifier: createFirebaseTokenVerifier(environment),
       appCheckVerifier: createFirebaseAppCheckVerifier(environment),
+      operatorTokenVerifier: createOperatorTokenVerifier(environment),
       stores: createFirestoreStores(firestore, environment),
       revenueCatEntitlementReader: environment.revenueCatReadApiKey && environment.revenueCatEntitlementId && environment.revenueCatProductId && environment.revenueCatWebhookEnvironment
         ? createRevenueCatEntitlementReader({ baseUrl: environment.revenueCatApiBaseUrl, apiKey: environment.revenueCatReadApiKey, entitlementId: environment.revenueCatEntitlementId, productId: environment.revenueCatProductId, environment: environment.revenueCatWebhookEnvironment })
