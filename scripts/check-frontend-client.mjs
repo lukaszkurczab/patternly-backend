@@ -117,6 +117,22 @@ function extractOperations(source, file, scope) {
   const variablePattern = /\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*(?:\s*:\s*[^=;\n]+)?\s*=\s*([\s\S]*?);/gu;
   for (const match of source.matchAll(variablePattern)) variableValues.set(match[1], match[2]);
 
+  // Binary transports construct a URL from a typed local path rather than
+  // using requestJson. Bind the URL variable back to that path and require an
+  // explicit HTTP method at the fetchImplementation callsite.
+  const urlPathVariables = new Map();
+  const urlPattern = /\bconst\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*new\s+URL\(\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*,/gu;
+  for (const match of source.matchAll(urlPattern)) {
+    const pathExpression = variableValues.get(match[2]);
+    if (pathExpression !== undefined) urlPathVariables.set(match[1], pathExpression);
+  }
+  const binaryFetchPattern = /\bfetchImplementation\(\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*,\s*\{[\s\S]{0,500}?\bmethod\s*:\s*([`'”"])(GET|POST|PUT|DELETE|PATCH)\2/gu;
+  for (const match of source.matchAll(binaryFetchPattern)) {
+    const pathExpression = urlPathVariables.get(match[1]);
+    const literal = pathExpression?.match(/^([`'"])([\s\S]*)\1$/u)?.[2];
+    if (literal !== undefined) addOperation(operations, scope, file, match[3], literal, source, match.index ?? 0, "fetchImplementation-url");
+  }
+
   // The mobile adapter is the canonical transport wrapper. Its second
   // argument is the actual HTTP method, so this catches every adapter method.
   const requestJsonPattern = /\brequestJson(?:<[\s\S]*?>)?\(\s*([`'”"])([\s\S]*?)\1\s*,\s*([`'”"])(GET|POST|PUT|DELETE|PATCH)\3/gu;

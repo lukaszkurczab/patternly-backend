@@ -241,7 +241,7 @@ test("frontend checker rejects an unknown consumer operation", async () => {
     const web = join(root, "web");
     await mkdir(join(mobile, "src"), { recursive: true });
     await mkdir(join(web, "src"), { recursive: true });
-    await writeFile(join(mobile, "src", "transport.ts"), 'fetch("/v1/not-documented", { method: "GET" });\n', "utf8");
+    await writeFile(join(mobile, "src", "transport.ts"), 'const path = `/v1/not-documented`;\nconst url = new URL(path, origin);\nfetchImplementation(url, { method: "GET" });\n', "utf8");
     await assert.rejects(
       execFileAsync(process.execPath, [resolve(process.cwd(), "scripts/check-frontend-client.mjs")], {
         cwd: process.cwd(),
