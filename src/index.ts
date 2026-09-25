@@ -7,6 +7,7 @@ import { createFirebaseTokenVerifier } from "./infrastructure/firebase/verifier.
 import { createBootstrapLogger } from "./infrastructure/logging/logger.js";
 import { createSmtpLegalRequestEmailSender, createSmtpPrivacyEmailSender, createSmtpPurchaseReceiptEmailSender, createSmtpSecurityIncidentEmailSender } from "./infrastructure/email/smtpPrivacyEmailSender.js";
 import { createRevenueCatEntitlementReader } from "./infrastructure/revenuecat/client.js";
+import { ContentPackageService, FirestoreContentPackagePointerStore, LocalFilesystemContentPackageStorage } from "./modules/content/packages.js";
 
 async function main(): Promise<void> {
   const bootstrapLogger = createBootstrapLogger();
@@ -30,6 +31,9 @@ async function main(): Promise<void> {
       stores: createFirestoreStores(firestore, environment),
       revenueCatEntitlementReader: environment.revenueCatReadApiKey && environment.revenueCatEntitlementId && environment.revenueCatProductId && environment.revenueCatWebhookEnvironment
         ? createRevenueCatEntitlementReader({ baseUrl: environment.revenueCatApiBaseUrl, apiKey: environment.revenueCatReadApiKey, entitlementId: environment.revenueCatEntitlementId, productId: environment.revenueCatProductId, environment: environment.revenueCatWebhookEnvironment })
+        : null,
+      contentPackages: environment.contentPackageLocalRoot
+        ? new ContentPackageService(new FirestoreContentPackagePointerStore(firestore.db), new LocalFilesystemContentPackageStorage(environment.contentPackageLocalRoot))
         : null,
       privacyRequestEmailSender,
       legalRequestEmailSender,

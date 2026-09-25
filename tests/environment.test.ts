@@ -39,6 +39,7 @@ test("production rejects either Firebase emulator host before runtime configurat
       { message: "production_firebase_emulator_config_forbidden" },
     );
   }
+  assert.throws(() => loadEnvironment({ ...production, CONTENT_PACKAGE_LOCAL_ROOT: "/var/lib/patternly/packages" }), { message: "production_local_content_package_storage_forbidden" });
 });
 
 test("explicit local emulator configuration remains accepted outside production", () => {

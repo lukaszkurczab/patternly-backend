@@ -3933,6 +3933,139 @@
         "x-patternly-consumer-scope": "mobile"
       }
     },
+    "/v1/content/packages/{trackId}/{nodeId}": {
+      "x-patternly-security-profile": "app_check_bearer",
+      "x-patternly-consumer-scope": "mobile",
+      "get": {
+        "description": "Stream current immutable gzip package bytes after a fresh RevenueCat entitlement read. Local filesystem package storage is development-only.",
+        "parameters": [
+          {
+            "name": "trackId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+            }
+          },
+          {
+            "name": "nodeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact verified gzip package bytes",
+            "headers": {
+              "Content-Length": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              },
+              "X-Content-Package-Sha256": {
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              },
+              "X-Content-Artifact-Sha256": {
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              },
+              "X-Content-Version": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/gzip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid track or node identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication or App Check required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Current entitlement is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unpublished package; account_not_found when the verified bearer identity has no Patternly account",
+            "x-patternly-error-codes": [
+              "account_not_found"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Entitlement reader or package bytes unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_v1_content_packages_by_trackid_by_nodeid",
+        "security": [
+          {
+            "appCheckAuth": [],
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "app_check_bearer",
+        "x-patternly-consumer-scope": "mobile"
+      }
+    },
     "/v1/content/reports": {
       "x-patternly-security-profile": "app_check_optional_bearer",
       "x-patternly-consumer-scope": "mobile",

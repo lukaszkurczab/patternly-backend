@@ -166,12 +166,11 @@ function schemaHasContent(document: OpenApiDocumentLike, value: unknown, seen = 
   return hasComposition;
 }
 
-function responseHasJsonSchema(document: OpenApiDocumentLike, response: unknown): boolean {
+function responseHasSchema(document: OpenApiDocumentLike, response: unknown): boolean {
   const resolved = resolveLocalReference(document, response);
   const responseRecord = asRecord(resolved);
   const content = asRecord(responseRecord?.content);
-  const json = asRecord(content?.["application/json"]);
-  return schemaHasContent(document, json?.schema);
+  return content !== null && Object.values(content).some((mediaType) => schemaHasContent(document, asRecord(mediaType)?.schema));
 }
 
 function requestBodyHasJsonSchema(document: OpenApiDocumentLike, operation: OpenApiOperation): boolean {
@@ -294,8 +293,8 @@ export function collectOpenApiContractErrors(documentValue: unknown): readonly s
       const numericStatus = responseStatus(status);
       if (numericStatus === null) continue;
       if (numericStatus >= 200 && numericStatus < 300) {
-        if (numericStatus !== 204 && !responseHasJsonSchema(document, response)) failures.push(`${identity}:success_schema_missing:${status}`);
-      } else if (numericStatus >= 400 && !responseHasJsonSchema(document, response)) {
+        if (numericStatus !== 204 && !responseHasSchema(document, response)) failures.push(`${identity}:success_schema_missing:${status}`);
+      } else if (numericStatus >= 400 && !responseHasSchema(document, response)) {
         failures.push(`${identity}:error_schema_missing:${status}`);
       } else if (numericStatus >= 400) {
         const resolved = asRecord(resolveLocalReference(document, response));

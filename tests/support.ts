@@ -39,6 +39,7 @@ export const testEnvironment: Environment = loadEnvironment({
 
 export type EmulatorContext = Readonly<{
   app: ReturnType<typeof buildApplication>;
+  db: import("firebase-admin/firestore").Firestore;
   stores: BackendStores;
   close: () => Promise<void>;
   privacyLinks: readonly Readonly<{ recipient: string; purpose: "verify" | "response" | "extension"; requestId: string; token: string; code: string; extensionReason?: string }>[];
@@ -49,7 +50,7 @@ export type EmulatorContext = Readonly<{
   deletedSubjects: readonly string[];
 }>;
 
-export function createEmulatorContext(options: Readonly<{ projectId?: string; revenueCatEntitlementReader?: import("../src/infrastructure/revenuecat/client.js").RevenueCatEntitlementReader | null }> = {}): EmulatorContext {
+export function createEmulatorContext(options: Readonly<{ projectId?: string; revenueCatEntitlementReader?: import("../src/infrastructure/revenuecat/client.js").RevenueCatEntitlementReader | null; contentPackages?: import("../src/modules/content/packages.js").ContentPackageService | null; createContentPackages?: (db: import("firebase-admin/firestore").Firestore) => import("../src/modules/content/packages.js").ContentPackageService }> = {}): EmulatorContext {
   const environment = options.projectId ? Object.freeze({ ...testEnvironment, firebaseProjectId: options.projectId, firebaseAuthIssuer: `https://securetoken.google.com/${options.projectId}` }) : testEnvironment;
   const runtime = createFirestoreRuntime(environment);
   const privacyLinks: Array<Readonly<{ recipient: string; purpose: "verify" | "response" | "extension"; requestId: string; token: string; code: string; extensionReason?: string }>> = [];
@@ -78,6 +79,7 @@ export function createEmulatorContext(options: Readonly<{ projectId?: string; re
     appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
     stores,
     revenueCatEntitlementReader: options.revenueCatEntitlementReader ?? null,
+    contentPackages: options.contentPackages ?? options.createContentPackages?.(runtime.db) ?? null,
     privacyRequestEmailSender: { send: async (input) => {
       const token = input.code.split(".")[1];
       if (!token) throw new Error("privacy_test_code_invalid");
@@ -85,7 +87,7 @@ export function createEmulatorContext(options: Readonly<{ projectId?: string; re
     } },
     purchaseReceiptEmailSender: { send: async (input) => { purchaseReceipts.push(input); } },
   });
-  return Object.freeze({ app, stores, privacyLinks, purchaseReceipts, customTokenSubjects, customTokenClaims, revokedSubjects, deletedSubjects, close: async () => { await app.close(); await runtime.close(); } });
+  return Object.freeze({ app, db: runtime.db, stores, privacyLinks, purchaseReceipts, customTokenSubjects, customTokenClaims, revokedSubjects, deletedSubjects, close: async () => { await app.close(); await runtime.close(); } });
 }
 
 export async function clearFirestore(): Promise<void> {

@@ -86,7 +86,7 @@ test("unready runtime response matches the documented 503 schema", async () => {
 
 test("runtime parity uses the real app, normalizes parameters, and ignores automatic HEAD", async () => {
   const routes = await runtimeInventory();
-  assert.equal(routes.length, 57);
+  assert.equal(routes.length, 58);
   assert.equal(routes.find((route) => operationKey(route.method, route.path) === "POST /v1/account/registration")?.securityProfile, "app_check_verify_only_bearer");
   assert.equal(routes.find((route) => operationKey(route.method, route.path) === "POST /v1/account/session/exchange")?.securityProfile, "app_check_verify_only_bearer");
   assert.equal(OPENAPI_DOCUMENT.paths["/v1/account/session/exchange"].post.requestBody.required, false);

@@ -25,6 +25,8 @@ import { z } from "zod";
 import { canonicalJson } from "../infrastructure/identity/canonicalJson.js";
 import { runtimeRoute, type RuntimeRouteDescriptor } from "./openapi-validator.js";
 import { normalizeRoutePath, type RouteGuard } from "./route-contract.js";
+import type { ContentPackageService } from "../modules/content/packages.js";
+import { isPackageId } from "../modules/content/packages.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -48,6 +50,7 @@ export type ApplicationDependencies = Readonly<{
   appCheckVerifier: AppCheckTokenVerifier | null;
   stores: BackendStores | null;
   revenueCatEntitlementReader?: RevenueCatEntitlementReader | null;
+  contentPackages?: ContentPackageService | null;
   privacyRequestEmailSender?: import("../modules/privacy-requests/store.js").PrivacyRequestEmailSender | null;
   securityIncidentEmailSender?: import("../modules/security-incidents/store.js").SecurityIncidentEmailSender | null;
   legalRequestEmailSender?: import("../modules/legal-requests/store.js").LegalRequestEmailSender | null;
@@ -1014,6 +1017,33 @@ export function buildApplication(dependencies: ApplicationDependencies) {
 
   app.get("/v1/tracks", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request) => ({ tracks: await requireStores(dependencies).tracks.readAccess(request.userId!) }));
   app.get("/v1/content/versions", { preHandler: routeGuard("app_check_bearer", dependencies) }, async () => ({ versions: await requireStores(dependencies).content.readCurrent() }));
+  app.get("/v1/content/packages/:trackId/:nodeId", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
+    const params = request.params as { trackId?: unknown; nodeId?: unknown };
+    if (!isPackageId(params.trackId) || !isPackageId(params.nodeId)) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!dependencies.revenueCatEntitlementReader) return reply.code(503).send({ error: { code: "entitlement_unavailable" } });
+    let entitlement;
+    try { entitlement = await dependencies.revenueCatEntitlementReader.read(request.userId!); }
+    catch { return reply.code(503).send({ error: { code: "entitlement_unavailable" } }); }
+    if (entitlement.state === "unavailable") return reply.code(503).send({ error: { code: "entitlement_unavailable" } });
+    const now = Date.now();
+    const expiry = entitlement.state === "grace" ? entitlement.providerGraceExpiresAt : entitlement.providerExpiresAt;
+    const parsedExpiry = expiry === null ? Number.NaN : Date.parse(expiry);
+    if ((entitlement.state !== "active" && entitlement.state !== "grace") || !Number.isFinite(parsedExpiry) || parsedExpiry <= now) {
+      return reply.code(403).send({ error: { code: "entitlement_required" } });
+    }
+    if (!dependencies.contentPackages) return reply.code(503).send({ error: { code: "package_unavailable" } });
+    let packageData;
+    try { packageData = await dependencies.contentPackages.readCurrent(params.trackId, params.nodeId); }
+    catch { return reply.code(503).send({ error: { code: "package_unavailable" } }); }
+    if (!packageData) return reply.code(404).send({ error: { code: "not_found" } });
+    reply.header("content-type", "application/gzip");
+    reply.header("content-length", String(packageData.bytes.length));
+    reply.header("cache-control", "private, no-store");
+    reply.header("x-content-package-sha256", packageData.manifest.packageSha256);
+    reply.header("x-content-artifact-sha256", packageData.manifest.artifactSha256);
+    reply.header("x-content-version", packageData.manifest.contentVersion);
+    return reply.code(200).send(packageData.bytes);
+  });
   app.post("/v1/content/reports", { preHandler: routeGuard("app_check_optional_bearer", dependencies) }, async (request, reply) => {
     const parsed = createContentReportSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request", issues: parsed.error.issues.map((issue) => issue.path.join(".")) } });

@@ -39,6 +39,7 @@ const environmentSchema = z.object({
   CONTENT_CATALOG_ORIGIN: z.string().url().optional(),
   ADMIN_CONTENT_ROOT: z.string().min(1).optional(),
   ADMIN_CONTENT_RELEASE_ID: z.string().regex(ADMIN_CONTENT_RELEASE_ID_PATTERN).optional(),
+  CONTENT_PACKAGE_LOCAL_ROOT: z.string().min(1).optional(),
 });
 
 export type Environment = Readonly<{
@@ -70,6 +71,7 @@ export type Environment = Readonly<{
   contentCatalogOrigin: string | undefined;
   adminContentRoot: string | undefined;
   adminContentReleaseId: string | undefined;
+  contentPackageLocalRoot: string | undefined;
 }>;
 
 export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
@@ -83,6 +85,7 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     }
     if (!smtpConfiguration(value)) throw new Error("production_smtp_config_required");
     if (!value.REVENUECAT_WEBHOOK_SECRET || !value.REVENUECAT_APP_ID || !value.REVENUECAT_ENTITLEMENT_ID || !value.REVENUECAT_PRODUCT_ID || !value.REVENUECAT_WEBHOOK_ENVIRONMENT) throw new Error("production_revenuecat_config_required");
+    if (value.CONTENT_PACKAGE_LOCAL_ROOT !== undefined) throw new Error("production_local_content_package_storage_forbidden");
   }
   const adminWebOrigin = parseAdminWebOrigin(value);
   return Object.freeze({
@@ -114,6 +117,7 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     contentCatalogOrigin: value.CONTENT_CATALOG_ORIGIN,
     adminContentRoot: value.ADMIN_CONTENT_ROOT,
     adminContentReleaseId: value.ADMIN_CONTENT_RELEASE_ID,
+    contentPackageLocalRoot: value.CONTENT_PACKAGE_LOCAL_ROOT,
   });
 }
 
