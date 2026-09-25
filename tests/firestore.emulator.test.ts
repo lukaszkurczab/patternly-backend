@@ -624,6 +624,52 @@ test("session exchange pins the active generation, supports legacy generation on
   assert.deepEqual(tombstoned.json(), { error: { code: "account_deleted" } });
 });
 
+test("a generation rotated after exchange reads it produces a stale token rejected by account guards", async () => {
+  const auth = await createAuthUser();
+  const { userId } = await registerAuthUser(context, auth);
+  const userRef = firestore().collection(COLLECTIONS.users).doc(userId);
+  let mintEntered!: () => void;
+  let releaseMint!: () => void;
+  const entered = new Promise<void>((resolve) => { mintEntered = resolve; });
+  const blocked = new Promise<void>((resolve) => { releaseMint = resolve; });
+  const firebaseAuth = {
+    ...context.stores.firebaseAuth,
+    createCustomToken: async (subject: string, claims?: Readonly<Record<string, unknown>>) => {
+      mintEntered();
+      await blocked;
+      return context.stores.firebaseAuth.createCustomToken(subject, claims);
+    },
+  };
+  const app = buildAppWithOverrides({ firebaseAuth });
+  try {
+    const exchange = app.inject({
+      method: "POST",
+      url: "/v1/account/session/exchange",
+      headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
+      payload: {},
+    });
+    await entered;
+    await userRef.update({ authorizationGeneration: 2 });
+    releaseMint();
+
+    const response = await exchange;
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(context.customTokenClaims.at(-1), { authorizationGeneration: 1 });
+
+    const staleSession = await setAuthCustomClaimsAndSignIn(auth, { authorizationGeneration: 1 });
+    const guarded = await app.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { authorization: `Bearer ${staleSession.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
+    });
+    assert.equal(guarded.statusCode, 401);
+    assert.deepEqual(guarded.json(), { error: { code: "authorization_generation_stale" } });
+  } finally {
+    releaseMint();
+    await app.close();
+  }
+});
+
 test("registration rejects an active deletion tombstone and replaces only an expired tombstone", async () => {
   const auth = await createAuthUser();
   const pseudonym = parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson).active("firebase", auth.localId);
