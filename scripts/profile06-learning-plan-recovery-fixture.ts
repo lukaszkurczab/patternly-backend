@@ -24,7 +24,7 @@ function requireLocalEnvironment(): string {
 }
 
 const command = process.argv[2];
-if (!new Set(["prepare", "heal", "assert", "cleanup"]).has(command ?? "")) throw new Error("profile06_e_fixture_command_required");
+if (!new Set(["prepare", "heal", "assert", "assert-healed", "cleanup"]).has(command ?? "")) throw new Error("profile06_e_fixture_command_required");
 const email = requireLocalEnvironment();
 const app = getApps()[0] ?? initializeApp({ projectId: PROJECT });
 const authUser = await getAuth(app).getUserByEmail(email);
@@ -115,25 +115,28 @@ if (command === "prepare") {
 }
 if (command === "heal") {
   const now = Timestamp.now();
-  await planRef.set({ ...planIdentity, version: 8, state: validPlanState, fingerprint: createMergeRecordFingerprint({ recordId: TRACK, recordType: "learning_plan", state: validPlanState, trackId: TRACK }), lastMutationId: "profile06-e-heal-plan", updatedAt: now, ...(generation === 0 ? {} : { generation }) });
+  await planRef.set({ ...planIdentity, version: 10, state: validPlanState, fingerprint: createMergeRecordFingerprint({ recordId: TRACK, recordType: "learning_plan", state: validPlanState, trackId: TRACK }), lastMutationId: "profile06-e-heal-plan", updatedAt: now, ...(generation === 0 ? {} : { generation }) });
 }
 
 const [activeTrack, goal, plan, attempt, session, result, accountMetadata] = await Promise.all([activeTrackRef.get(), goalRef.get(), planRef.get(), attemptRef.get(), sessionRef.get(), resultRef.get(), metadataRef.get()]);
-if (command === "assert") {
+if (command === "assert" || command === "assert-healed") {
   const expectedAccountRevision = Number(process.env.PROFILE06_E_EXPECTED_ACCOUNT_REVISION);
   if (!Number.isSafeInteger(expectedAccountRevision) || expectedAccountRevision < 0 || accountMetadata.get("accountRevision") !== expectedAccountRevision) {
     throw new Error("profile06_e_account_revision_changed");
   }
   const exact = (snapshot: FirebaseFirestore.DocumentSnapshot, expected: Readonly<{ fingerprint: string; lastMutationId: string }>) => snapshot.get("fingerprint") === expected.fingerprint
     && snapshot.get("lastMutationId") === expected.lastMutationId && snapshot.get("state.deleted") !== true;
+  const expectedPlan = command === "assert-healed"
+    ? { fingerprint: createMergeRecordFingerprint({ recordId: TRACK, recordType: "learning_plan", state: validPlanState, trackId: TRACK }), lastMutationId: "profile06-e-heal-plan", schemaVersion: 1, version: 10 }
+    : { fingerprint: createMergeRecordFingerprint({ recordId: TRACK, recordType: "learning_plan", state: invalidPlanState, trackId: TRACK }), lastMutationId: "profile06-e-invalid-plan", schemaVersion: 99, version: 9 };
   if (!activeTrack.exists || activeTrack.get("version") !== 2 || activeTrack.get("state.trackId") !== TRACK
-    || !goal.exists || goal.get("version") !== 3 || !plan.exists || plan.get("version") !== 9 || plan.get("state.plan.schemaVersion") !== 99
+    || !goal.exists || goal.get("version") !== 3 || !plan.exists || plan.get("version") !== expectedPlan.version || plan.get("state.plan.schemaVersion") !== expectedPlan.schemaVersion
     || !attempt.exists || attempt.get("version") !== 4 || attempt.get("state.id") !== ATTEMPT_ID
     || !session.exists || session.get("version") !== 2 || session.get("state.status") !== "completed"
     || !result.exists || result.get("version") !== 2 || result.get("state.sessionId") !== SESSION_ID
     || !exact(activeTrack, { fingerprint: createMergeRecordFingerprint({ recordId: "current", recordType: "active_track", state: activeTrackState, trackId: TRACK }), lastMutationId: "profile06-e-active-track-fixture" })
     || !exact(goal, { fingerprint: createMergeRecordFingerprint({ recordId: TRACK, recordType: "goal", state: goalState, trackId: TRACK }), lastMutationId: "profile06-e-goal-fixture" })
-    || !exact(plan, { fingerprint: createMergeRecordFingerprint({ recordId: TRACK, recordType: "learning_plan", state: invalidPlanState, trackId: TRACK }), lastMutationId: "profile06-e-invalid-plan" })
+    || !exact(plan, expectedPlan)
     || !exact(attempt, { fingerprint: createMergeRecordFingerprint({ recordId: ATTEMPT_ID, recordType: "training_attempt", state: attemptState, trackId: TRACK }), lastMutationId: "profile06-e-attempt-fixture" })
     || !exact(session, { fingerprint: createMergeRecordFingerprint({ recordId: SESSION_ID, recordType: "training_session_summary", state: sessionState, trackId: TRACK }), lastMutationId: "profile06-e-session-fixture" })
     || !exact(result, { fingerprint: createMergeRecordFingerprint({ recordId: RESULT_ID, recordType: "training_session_result", state: resultState, trackId: TRACK }), lastMutationId: "profile06-e-result-fixture" })) throw new Error("profile06_e_fixture_assertion_failed");
