@@ -120,6 +120,10 @@ if (command === "heal") {
 
 const [activeTrack, goal, plan, attempt, session, result, accountMetadata] = await Promise.all([activeTrackRef.get(), goalRef.get(), planRef.get(), attemptRef.get(), sessionRef.get(), resultRef.get(), metadataRef.get()]);
 if (command === "assert") {
+  const expectedAccountRevision = Number(process.env.PROFILE06_E_EXPECTED_ACCOUNT_REVISION);
+  if (!Number.isSafeInteger(expectedAccountRevision) || expectedAccountRevision < 0 || accountMetadata.get("accountRevision") !== expectedAccountRevision) {
+    throw new Error("profile06_e_account_revision_changed");
+  }
   const exact = (snapshot: FirebaseFirestore.DocumentSnapshot, expected: Readonly<{ fingerprint: string; lastMutationId: string }>) => snapshot.get("fingerprint") === expected.fingerprint
     && snapshot.get("lastMutationId") === expected.lastMutationId && snapshot.get("state.deleted") !== true;
   if (!activeTrack.exists || activeTrack.get("version") !== 2 || activeTrack.get("state.trackId") !== TRACK
