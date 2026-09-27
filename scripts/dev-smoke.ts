@@ -4,7 +4,7 @@ import { buildApplication } from "../src/api/app.js";
 import { createFirestoreRuntime } from "../src/infrastructure/firestore/client.js";
 import { createFirestoreStores } from "../src/infrastructure/firestore/stores.js";
 import { createFirebaseTokenVerifier } from "../src/infrastructure/firebase/verifier.js";
-import { localAppCheckVerifier, smokeEndpoints, smokeEnvironment, type SmokeSecrets } from "./localSmoke.js";
+import { localAppCheckVerifier, localSmokeEntitlementStateEnvironmentKey, localSmokeRevenueCatEntitlementReader, smokeEndpoints, smokeEnvironment, type SmokeSecrets } from "./localSmoke.js";
 
 const directory = new URL("../.local/smoke/", import.meta.url);
 await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -18,14 +18,16 @@ catch (error) {
 }
 await chmod(path, 0o600);
 const environment = smokeEnvironment(process.env, secrets);
+const revenueCatEntitlementReader = localSmokeRevenueCatEntitlementReader(process.env[localSmokeEntitlementStateEnvironmentKey]);
 for (const host of [smokeEndpoints.auth, smokeEndpoints.firestore]) {
   await fetch(`http://${host}/`, { signal: AbortSignal.timeout(3000) });
 }
 const firestore = createFirestoreRuntime(environment);
 const app = buildApplication({ environment, firestore, stores: createFirestoreStores(firestore, environment),
-  verifier: createFirebaseTokenVerifier(environment), appCheckVerifier: localAppCheckVerifier(secrets.appCheckToken) });
+  verifier: createFirebaseTokenVerifier(environment), appCheckVerifier: localAppCheckVerifier(secrets.appCheckToken),
+  revenueCatEntitlementReader });
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => {
   void app.close().then(() => firestore.close());
 });
-console.info("Local smoke API: emulator identity + local test App Check (not provider attestation); SMTP and RevenueCat disabled.");
+console.info("Local smoke API: emulator identity + local test App Check and entitlement fixture (not provider attestation); SMTP and remote RevenueCat disabled.");
 await app.listen({ host: environment.host, port: environment.port });

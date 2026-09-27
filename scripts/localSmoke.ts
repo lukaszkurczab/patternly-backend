@@ -1,9 +1,13 @@
 import { timingSafeEqual } from "node:crypto";
 import { loadEnvironment } from "../src/config/environment.js";
+import type { RevenueCatEntitlementReader } from "../src/infrastructure/revenuecat/client.js";
 
 export const smokeEndpoints = Object.freeze({
   project: "patternly-app-sandbox", auth: "127.0.0.1:19099", firestore: "127.0.0.1:18081", port: 8080,
 });
+export const localSmokeEntitlementStateEnvironmentKey = "PATTERNLY_LOCAL_SMOKE_ENTITLEMENT_STATE";
+const localSmokeEntitlement = "premium";
+const localSmokeProductId = "com.lkurczab.patternly.premium.monthly";
 export type SmokeSecrets = { appCheckToken: string; storageKey: string; hmacKey: string };
 
 export function smokeEnvironment(source: NodeJS.ProcessEnv, secrets: SmokeSecrets) {
@@ -33,4 +37,23 @@ export function localAppCheckVerifier(token: string) {
     const supplied = Buffer.from(value);
     if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) throw new Error("app_check_invalid");
   } };
+}
+
+/** Deterministic local-only reader for the dev:smoke route contract; it is not provider evidence. */
+export function localSmokeRevenueCatEntitlementReader(stateValue?: string): RevenueCatEntitlementReader {
+  const state = stateValue ?? "expired";
+  if (state !== "active" && state !== "expired") throw new Error("invalid_local_smoke_entitlement_state");
+  return {
+    async read() {
+      const now = Date.now();
+      return Object.freeze({
+        entitlement: localSmokeEntitlement,
+        productId: localSmokeProductId,
+        state,
+        providerExpiresAt: state === "active" ? new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString() : null,
+        providerGraceExpiresAt: null,
+        providerObservedAt: new Date(now).toISOString(),
+      });
+    },
+  };
 }
