@@ -52,6 +52,19 @@ secret, response, rate-limit and audit records. Privacy responses are retained
 for 30 days after delivery; minimal pseudonymous evidence is retained for three
 years after closure.
 
+## Sandbox snapshot — 30 September 2026
+
+- Email/password sign-in was confirmed working on the Android sandbox after the
+  backend session-exchange route was deployed. The later loading-screen polish
+  for the transient sign-out state has not been published to EAS; the tester
+  chose to continue with the current build.
+- Brevo SMTP is configured for the sandbox in Google Cloud Secret Manager.
+  SMTP authentication over TLS was checked, but no test email was sent. Secret
+  values are intentionally not recorded here.
+- The RevenueCat project exists, but App Store Connect and Google Play remain
+  intentionally unconnected. No purchase or store lifecycle has been verified.
+  Do not treat local entitlement tests as provider-backed purchase evidence.
+
 Historical content-report cleanup is an explicit operator action, not an HTTP
 endpoint or a background job. Run `npm run retention:purge -- --project
 <project-id> --database '(default)'` first and add `--execute` only after its
