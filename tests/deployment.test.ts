@@ -52,6 +52,7 @@ test("Firestore export retention and history indexes are repository-deployable",
   ]);
   assert.equal(ttl.policies.length, 31);
   const indexes = JSON.parse(await readFile(resolve(process.cwd(), "firestore.indexes.json"), "utf8")) as { indexes?: readonly { collectionGroup?: unknown; queryScope?: unknown; fields?: readonly { fieldPath?: unknown; order?: unknown }[] }[] };
+  assert.equal(indexes.indexes?.every((index) => (index.fields?.length ?? 0) >= 2), true, "Single-field indexes belong in fieldOverrides; Firestore rejects them as composite indexes");
   assert.equal(indexes.indexes?.some((index) => index.collectionGroup === "accountDataExportAudits" && index.queryScope === "COLLECTION" && index.fields?.[0]?.fieldPath === "userId" && index.fields?.[0]?.order === "ASCENDING" && index.fields?.[1]?.fieldPath === "createdAt" && index.fields?.[1]?.order === "DESCENDING"), true);
   const packageJson = JSON.parse(await readFile(resolve(process.cwd(), "package.json"), "utf8")) as { scripts?: Record<string, unknown> };
   assert.match(String(packageJson.scripts?.["firestore:ttl:check"] ?? ""), /check-firestore-ttl\.mjs/u);

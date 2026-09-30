@@ -45,6 +45,14 @@ function isExpiredTombstone(value: unknown): boolean {
   return (expiresAt instanceof Timestamp ? expiresAt.toMillis() : expiresAt instanceof Date ? expiresAt.getTime() : Number.POSITIVE_INFINITY) <= Date.now();
 }
 
+function deletedIdentityReferences(db: Firestore, pseudonymKeyRing: PseudonymKeyRing, provider: string, subject: string) {
+  const references = pseudonymKeyRing.candidates(provider, subject)
+    .map(({ documentId }) => db.collection(COLLECTIONS.deletedIdentities).doc(documentId));
+  const legacyId = identityDocumentId(provider, subject);
+  if (!references.some(({ id }) => id === legacyId)) references.push(db.collection(COLLECTIONS.deletedIdentities).doc(legacyId));
+  return references;
+}
+
 function profileFromIdentity(userId: string, createdAt: Timestamp, acceptedTermsVersion: string | null, identity: AuthenticatedIdentity): UserProfile {
   return Object.freeze({
     id: userId,
@@ -81,7 +89,7 @@ export class FirestoreUserStore implements UserStore {
   public async resolveExistingUser(identity: AuthenticatedIdentity): Promise<Readonly<{ userId: string; authorizationGeneration: number }>> {
     const identityId = identityDocumentId(identity.provider, identity.subject);
     const identityRef = this.db.collection(COLLECTIONS.identityMappings).doc(identityId);
-    const deletedIdentityRefs = this.pseudonymKeyRing.candidates(identity.provider, identity.subject).map(({ documentId }) => this.db.collection(COLLECTIONS.deletedIdentities).doc(documentId));
+    const deletedIdentityRefs = deletedIdentityReferences(this.db, this.pseudonymKeyRing, identity.provider, identity.subject);
     const result = await this.db.runTransaction(async (transaction) => {
       const [identitySnapshot, ...deletedSnapshots] = await transaction.getAll(identityRef, ...deletedIdentityRefs);
       if (deletedSnapshots.some((snapshot) => snapshot.exists && !isExpiredTombstone(snapshot.data()))) throw new Error("account_deleted");
@@ -104,7 +112,7 @@ export class FirestoreUserStore implements UserStore {
   public async pinSessionAuthorization(identity: AuthenticatedIdentity): Promise<Readonly<{ firebaseSubject: string; authorizationGeneration: number }>> {
     const identityId = identityDocumentId(identity.provider, identity.subject);
     const identityRef = this.db.collection(COLLECTIONS.identityMappings).doc(identityId);
-    const deletedIdentityRefs = this.pseudonymKeyRing.candidates(identity.provider, identity.subject).map(({ documentId }) => this.db.collection(COLLECTIONS.deletedIdentities).doc(documentId));
+    const deletedIdentityRefs = deletedIdentityReferences(this.db, this.pseudonymKeyRing, identity.provider, identity.subject);
     return this.db.runTransaction(async (transaction) => {
       const [identitySnapshot, ...deletedSnapshots] = await transaction.getAll(identityRef, ...deletedIdentityRefs);
       if (deletedSnapshots.some((snapshot) => snapshot.exists && !isExpiredTombstone(snapshot.data()))) throw new Error("account_deleted");
@@ -128,7 +136,7 @@ export class FirestoreUserStore implements UserStore {
   public async registerUser(identity: AuthenticatedIdentity, input: AccountRegistrationInput): Promise<AccountRegistrationResult> {
     const identityId = identityDocumentId(identity.provider, identity.subject);
     const identityRef = this.db.collection(COLLECTIONS.identityMappings).doc(identityId);
-    const deletedIdentityRefs = this.pseudonymKeyRing.candidates(identity.provider, identity.subject).map(({ documentId }) => this.db.collection(COLLECTIONS.deletedIdentities).doc(documentId));
+    const deletedIdentityRefs = deletedIdentityReferences(this.db, this.pseudonymKeyRing, identity.provider, identity.subject);
     const userId = randomUUID();
     const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
     const acceptanceRef = userRef.collection("legalAcceptances").doc(`terms-${input.termsVersion}`);
