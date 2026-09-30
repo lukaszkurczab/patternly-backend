@@ -615,6 +615,8 @@ test("session exchange pins the active generation, supports legacy generation on
   const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
   const { userId } = await registerAuthUser(context, auth);
   const userRef = firestore().collection(COLLECTIONS.users).doc(userId);
+  const legalEvidenceBefore = (await userRef.collection("legalAcceptances").get()).docs.map((document) => ({ id: document.id, data: document.data() }));
+  assert.ok(legalEvidenceBefore.length > 0);
 
   await userRef.update({ authorizationGeneration: FieldValue.delete(), authorizationState: FieldValue.delete(), authorizationRotatedAtSeconds: FieldValue.delete() });
   const noBody = await context.app.inject({ method: "POST", url: "/v1/account/session/exchange", headers });
@@ -627,6 +629,7 @@ test("session exchange pins the active generation, supports legacy generation on
   assert.equal(context.customTokenSubjects.at(-1), auth.localId);
   assert.equal(context.customTokenSubjects.length, tokensBeforeExchange + 2);
   assert.deepEqual(context.customTokenClaims.at(-1), { authorizationGeneration: 1 });
+  assert.deepEqual((await userRef.collection("legalAcceptances").get()).docs.map((document) => ({ id: document.id, data: document.data() })), legalEvidenceBefore);
   const invalidBody = await context.app.inject({ method: "POST", url: "/v1/account/session/exchange", headers, payload: { unexpected: true } });
   assert.equal(invalidBody.statusCode, 400);
 
@@ -656,6 +659,22 @@ test("session exchange pins the active generation, supports legacy generation on
   const tombstoned = await context.app.inject({ method: "POST", url: "/v1/account/session/exchange", headers, payload: {} });
   assert.equal(tombstoned.statusCode, 401);
   assert.deepEqual(tombstoned.json(), { error: { code: "account_deleted" } });
+});
+
+test("session exchange classifies an unmapped identity without creating account or legal evidence", async () => {
+  const auth = await createAuthUser();
+  const response = await context.app.inject({
+    method: "POST",
+    url: "/v1/account/session/exchange",
+    headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
+    payload: {},
+  });
+
+  assert.equal(response.statusCode, 404);
+  assert.deepEqual(response.json(), { error: { code: "account_not_found" } });
+  assert.equal((await firestore().collection(COLLECTIONS.users).get()).size, 0);
+  assert.equal((await firestore().collection(COLLECTIONS.identityMappings).get()).size, 0);
+  assert.equal((await firestore().collectionGroup("legalAcceptances").get()).size, 0);
 });
 
 test("a generation rotated after exchange reads it produces a stale token rejected by account guards", async () => {
