@@ -32,7 +32,7 @@ jobs:
           path: patternly-web
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.13.1
+          node-version: 22.22.3
           cache: npm
           cache-dependency-path: patternly-backend/package-lock.json
       - uses: actions/setup-java@v4

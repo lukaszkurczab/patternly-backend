@@ -1,0 +1,5 @@
+{
+  "allowedOrigins": [
+    "https://operator-api.example.com"
+  ]
+}
