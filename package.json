@@ -24,9 +24,10 @@
     "openapi:generate": "node --import tsx scripts/generate-openapi.ts",
     "openapi:check": "node --import tsx scripts/check-openapi.ts",
     "frontend:client:check": "node scripts/check-frontend-client.mjs",
-    "ci": "npm run lint && npm run typecheck && npm run firestore:ttl:check && npm run test:emulator && npm run test:operator:emulator && npm run openapi:check && npm run frontend:client:check && npm run build",
+    "ci": "npm run lint && npm run typecheck && npm run firestore:ttl:check && npm run test:emulator && npm run test:operator:emulator && npm run test:operator:acceptance && npm run openapi:check && npm run frontend:client:check && npm run build",
     "ci:cloud": "npm run lint && npm run typecheck && npm run firestore:ttl:check && npm run test:cloud && npm run openapi:check && npm run build",
-    "test:operator:emulator": "node scripts/run-operator-emulator-tests.mjs"
+    "test:operator:emulator": "node scripts/run-operator-emulator-tests.mjs",
+    "test:operator:acceptance": "node scripts/run-operator-acceptance-tests.mjs"
   },
   "dependencies": {
     "fastify": "^5.12.1",

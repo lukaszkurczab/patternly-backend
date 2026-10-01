@@ -386,7 +386,7 @@ export async function runOperatorCli(argv: readonly string[], io: OperatorCliIO)
       const detailSchema = responseValidator(ajv, detailPath, "get", 200);
       const current = await apiRead(requestUrl(command.origin, familyRoute(command.family, command.id)), token, detailSchema);
       validateActionPrecondition(command.family, current, mutationBody);
-      const action = (mutationBody as Record<string, unknown>).action;
+      const action = command.family === "content-reports" ? "transition" : (mutationBody as Record<string, unknown>).action;
       const phrase = `apply ${command.family} ${String(action)} to ${command.id}`;
       const effect = safeEffectSummary(command.family, mutationBody as Record<string, unknown>);
       io.writeOut(`Current state: ${JSON.stringify({

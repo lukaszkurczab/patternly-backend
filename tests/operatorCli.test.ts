@@ -435,3 +435,49 @@ test("authority export uses its exact read-only route and canonical schema", asy
     });
   } finally { await fixture.close(); await config.cleanup(); }
 });
+
+for (const confirmed of [false, true]) {
+  test(`content status transition uses its explicit family confirmation (${confirmed ? "apply" : "cancel"})`, async () => {
+    const token = signedToken();
+    const id = "33333333-3333-4333-8333-333333333333";
+    const payload = { expectedStatus: "open", status: "in_review" };
+    const privateDescription = "private-content-context-marker";
+    const item = { clientSubmissionId: id, trackId: "fixture", contentVersion: "v1", itemId: "item1", reason: "other", status: "open", createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z" };
+    const context = { releasePackageId: "fixture-package", trackNode: null, modeRoute: "answer_review", locale: "en", appBuild: "fixture", platform: "ios", occurredAt: "2026-10-01T00:00:00.000Z" };
+    let reads = 0;
+    let writes = 0;
+    let authorizationMatched = true;
+    const fixture = await createTlsFixture(async (request, response) => {
+      authorizationMatched &&= request.headers.authorization === `Bearer ${token}`;
+      response.setHeader("content-type", "application/json");
+      if (request.method === "GET") {
+        reads += 1;
+        response.end(JSON.stringify({ item: { ...item, description: privateDescription, context, linkage: "unlinked" } }));
+      } else {
+        writes += 1;
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString("utf8")), payload);
+        response.end(JSON.stringify({ item: { ...item, status: "in_review" }, duplicate: false }));
+      }
+    });
+    const config = await configFile(fixture.origin);
+    const phrase = `apply content-reports transition to ${id}`;
+    try {
+      await withTrustedTls(fixture.caCertificatePath, async () => {
+        const cli = createIo({ token, payload: JSON.stringify(payload), confirmation: confirmed ? phrase : "no" });
+        const code = await runOperatorCli(args(fixture.origin, config.path, "action", "content-reports", id, "--payload-fd", "3"), cli.io);
+        assert.equal(code, confirmed ? 0 : 130);
+        assert.deepEqual(cli.linePrompts(), [`Type "${phrase}" to confirm: `]);
+        assert.match(cli.linePromptOutput()[0] ?? "", /"proposedEffect":\{"status":"in_review"\}/u);
+        assert.equal(cli.output().includes("undefined"), false);
+        assert.equal(cli.output().includes(privateDescription), false);
+        assert.equal(cli.output().includes(JSON.stringify(payload)), false);
+        assert.equal(cli.output().includes(token), false);
+        assert.equal(reads, 1);
+        assert.equal(writes, confirmed ? 1 : 0);
+        assert.equal(authorizationMatched, true);
+      });
+    } finally { await fixture.close(); await config.cleanup(); }
+  });
+}
