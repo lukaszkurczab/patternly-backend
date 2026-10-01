@@ -1,13 +1,14 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import type { Firestore } from "firebase-admin/firestore";
 import { Timestamp } from "firebase-admin/firestore";
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
 import { asIsoString, asRecord, asTimestamp, now } from "../../infrastructure/firestore/values.js";
 import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
-import { projectContentReportContext, type ContentReportStatus, type ContentReportStore, type ContentReportView, type CreateContentReport } from "./contracts.js";
+import { projectContentReportContext, type ContentReportStatus, type ContentReportStore, type ContentReportView, type CreateContentReport, type OperatorContentReportDetail, type OperatorContentReportItem } from "./contracts.js";
 
 const REPORT_RETENTION_DAYS = 30;
 const IDENTIFIABLE_RETENTION_DAYS = 180;
+const OPERATOR_QUEUE_LIMIT = 100;
 
 function toView(row: Record<string, unknown>): ContentReportView {
   if (typeof row.id !== "string" || typeof row.clientSubmissionId !== "string" || typeof row.trackId !== "string" || typeof row.contentVersion !== "string" || typeof row.itemId !== "string" || typeof row.reason !== "string" || typeof row.description !== "string" || typeof row.status !== "string" || typeof row.context !== "object" || row.context === null || Array.isArray(row.context)) throw new Error("content_report_record_invalid");
@@ -87,7 +88,45 @@ export class FirestoreContentReportStore implements ContentReportStore {
     return Object.freeze(rows.docs.map((row) => toView(asRecord(row.data(), "content_report"))).sort((left, right) => right.createdAt.localeCompare(left.createdAt)));
   }
 
-  public async transitionStatus(clientSubmissionId: string, actorId: string, nextStatus: ContentReportStatus): Promise<Readonly<{ report: ContentReportView; duplicate: boolean }>> {
+  public async listOperatorQueue(actorId: string): Promise<Readonly<{ items: readonly OperatorContentReportItem[]; truncated: boolean }>> {
+    const snapshot = await this.db.collection(COLLECTIONS.contentReports).orderBy("createdAt", "desc").limit(OPERATOR_QUEUE_LIMIT + 1).get();
+    const selected = snapshot.docs.slice(0, OPERATOR_QUEUE_LIMIT);
+    const at = now();
+    if (selected.length > 0) {
+      const batch = this.db.batch();
+      for (const document of selected) {
+        const data = asRecord(document.data(), "content_report");
+        batch.create(document.ref.collection(COLLECTIONS.contentReportAudit).doc(randomUUID()), {
+          event: "operator_queue_read",
+          actorPseudonym: this.actorPseudonym(actorId),
+          occurredAt: at,
+          ...(data.expiresAt === undefined ? {} : { expiresAt: data.expiresAt }),
+        });
+      }
+      await batch.commit();
+    }
+    return Object.freeze({
+      items: Object.freeze(selected.map((document) => this.toOperatorItem(toView(asRecord(document.data(), "content_report"))))),
+      truncated: snapshot.docs.length > OPERATOR_QUEUE_LIMIT,
+    });
+  }
+
+  public async readOperator(clientSubmissionId: string, actorId: string): Promise<OperatorContentReportDetail | null> {
+    const ref = this.db.collection(COLLECTIONS.contentReports).doc(clientSubmissionId);
+    const snapshot = await ref.get();
+    if (!snapshot.exists) return null;
+    const data = asRecord(snapshot.data(), "content_report");
+    const report = toView(data);
+    await ref.collection(COLLECTIONS.contentReportAudit).doc(randomUUID()).create({
+      event: "operator_details_read",
+      actorPseudonym: this.actorPseudonym(actorId),
+      occurredAt: now(),
+      ...(data.expiresAt === undefined ? {} : { expiresAt: data.expiresAt }),
+    });
+    return this.toOperatorDetail(report);
+  }
+
+  public async transitionStatus(clientSubmissionId: string, actorId: string, nextStatus: ContentReportStatus, expectedStatus?: ContentReportStatus): Promise<Readonly<{ report: ContentReportView; duplicate: boolean }>> {
     const reportRef = this.db.collection(COLLECTIONS.contentReports).doc(clientSubmissionId);
     const auditRef = reportRef.collection(COLLECTIONS.contentReportAudit).doc(randomUUID());
     const changedAt = now();
@@ -97,16 +136,50 @@ export class FirestoreContentReportStore implements ContentReportStore {
       const row = asRecord(snapshot.data(), "content_report");
       const current = toView(row);
       const expiresAt = asTimestamp(row.expiresAt, "content_report_expiry");
+      if (expectedStatus !== undefined && current.status !== expectedStatus) throw new Error("content_report_status_conflict");
       if (current.status === nextStatus) return { report: current, duplicate: true };
       if (!isAllowedTransition(current.status, nextStatus)) throw new Error("content_report_transition_invalid");
       transaction.update(reportRef, { status: nextStatus, updatedAt: changedAt });
-      transaction.create(auditRef, { id: auditRef.id, fromStatus: current.status, toStatus: nextStatus, actorId, changedAt, expiresAt });
+      transaction.create(auditRef, { id: auditRef.id, fromStatus: current.status, toStatus: nextStatus, actorPseudonym: this.actorPseudonym(actorId), changedAt, expiresAt });
       return { report: toView({ ...row, status: nextStatus, updatedAt: changedAt }), duplicate: false };
     }));
   }
 
   private rateLimitDocumentId(rateLimitKey: string): string {
     return createHash("sha256").update(`${this.options.rateLimitHashSecret}:${rateLimitKey}`, "utf8").digest("hex");
+  }
+
+  private actorPseudonym(actorId: string): string {
+    return createHmac("sha256", this.options.rateLimitHashSecret).update(`content-report-actor\0${actorId}`, "utf8").digest("base64url");
+  }
+
+  private toOperatorItem(report: ContentReportView): OperatorContentReportItem {
+    return Object.freeze({
+      clientSubmissionId: report.clientSubmissionId,
+      trackId: report.trackId,
+      contentVersion: report.contentVersion,
+      itemId: report.itemId,
+      reason: report.reason,
+      status: report.status,
+      createdAt: report.createdAt,
+      updatedAt: report.updatedAt,
+    });
+  }
+
+  private toOperatorDetail(report: ContentReportView): OperatorContentReportDetail {
+    return Object.freeze({
+      clientSubmissionId: report.clientSubmissionId,
+      trackId: report.trackId,
+      contentVersion: report.contentVersion,
+      itemId: report.itemId,
+      reason: report.reason,
+      description: report.description,
+      context: report.context,
+      linkage: report.linkage,
+      status: report.status,
+      createdAt: report.createdAt,
+      updatedAt: report.updatedAt,
+    });
   }
 }
 

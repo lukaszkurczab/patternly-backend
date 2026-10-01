@@ -13,6 +13,7 @@ export const ROUTE_SECURITY_PROFILES = [
   "app_check_verify_only_bearer",
   "app_check_only",
   "app_check_optional_bearer",
+  "operator",
   "admin",
   "webhook",
 ] as const;
@@ -21,7 +22,7 @@ export type RouteSecurityProfile = (typeof ROUTE_SECURITY_PROFILES)[number];
 export const ROUTE_CONSUMER_SCOPES = ["backend-only", "diagnostic", "mobile", "web", "mobile+web"] as const;
 export type RouteConsumerScope = (typeof ROUTE_CONSUMER_SCOPES)[number];
 
-export const ROUTE_GUARDS = ["none", "bearer", "app_check_bearer", "app_check_verify_only_bearer", "app_check_only", "app_check_optional_bearer", "admin", "webhook"] as const;
+export const ROUTE_GUARDS = ["none", "bearer", "app_check_bearer", "app_check_verify_only_bearer", "app_check_only", "app_check_optional_bearer", "operator", "admin", "webhook"] as const;
 export type RouteGuard = (typeof ROUTE_GUARDS)[number];
 
 /** Fastify route paths and OpenAPI paths share this canonical identity. */

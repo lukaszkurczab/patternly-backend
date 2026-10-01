@@ -5622,6 +5622,1196 @@
         "x-patternly-security-profile": "admin",
         "x-patternly-consumer-scope": "mobile+web"
       }
+    },
+    "/v1/operator/content-reports": {
+      "x-patternly-security-profile": "operator",
+      "x-patternly-consumer-scope": "backend-only",
+      "get": {
+        "description": "List a bounded, pseudonymously audited operator projection of content reports. The response is capped at 100 and reports whether more items remain.",
+        "responses": {
+          "200": {
+            "description": "Bounded content report queue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "items",
+                    "truncated"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/OperatorContentReportItem"
+                      }
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator token is invalid or lacks this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator access is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_v1_operator_content_reports",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only"
+      }
+    },
+    "/v1/operator/content-reports/{clientSubmissionId}": {
+      "x-patternly-security-profile": "operator",
+      "x-patternly-consumer-scope": "backend-only",
+      "get": {
+        "description": "Read one pseudonymously audited detail projection with report description and safe client context; account and contact identifiers are omitted.",
+        "parameters": [
+          {
+            "name": "clientSubmissionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Content report detail projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "item"
+                  ],
+                  "properties": {
+                    "item": {
+                      "$ref": "#/components/schemas/OperatorContentReportDetail"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator token is invalid or lacks this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Report unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator access is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_v1_operator_content_reports_by_clientsubmissionid",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only"
+      },
+      "patch": {
+        "description": "Apply one status transition with an atomic expected-status check.",
+        "parameters": [
+          {
+            "name": "clientSubmissionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorContentReportTransition"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Minimal transition result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "item",
+                    "duplicate"
+                  ],
+                  "properties": {
+                    "item": {
+                      "$ref": "#/components/schemas/OperatorContentReportItem"
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator token is invalid or lacks this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Report unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale status or unavailable transition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator access is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "patch_v1_operator_content_reports_by_clientsubmissionid",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only"
+      }
+    },
+    "/v1/operator/privacy-requests": {
+      "x-patternly-security-profile": "operator",
+      "x-patternly-consumer-scope": "backend-only",
+      "get": {
+        "description": "List a bounded, pseudonymously audited privacy-request projection. The response is capped at 100 and reports whether more items remain.",
+        "responses": {
+          "200": {
+            "description": "Bounded privacy queue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "items",
+                    "truncated"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PrivacyRequestListItem"
+                      }
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator token is invalid or lacks this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator access is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_v1_operator_privacy_requests",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only"
+      }
+    },
+    "/v1/operator/privacy-requests/{requestId}": {
+      "x-patternly-security-profile": "operator",
+      "x-patternly-consumer-scope": "backend-only",
+      "get": {
+        "description": "Read an audited allowlisted privacy-request detail projection. It includes the request narrative and operational metadata, but no response body, session token, or encryption material.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PrivacyRequestId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Privacy request detail projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "item"
+                  ],
+                  "properties": {
+                    "item": {
+                      "$ref": "#/components/schemas/OperatorPrivacyRequestDetail"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator token is invalid or lacks this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator access is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_v1_operator_privacy_requests_by_requestid",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only"
+      },
+      "patch": {
+        "description": "Apply a strict allowlisted privacy action. Public SMTP delivery and extension-notice actions are unavailable.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PrivacyRequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorPrivacyRequestAction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Minimal action result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "item",
+                    "action"
+                  ],
+                  "properties": {
+                    "item": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "requestId",
+                        "status",
+                        "revision"
+                      ],
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    "action": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator token is invalid or lacks this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Revision, lifecycle, or action availability conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator access is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "patch_v1_operator_privacy_requests_by_requestid",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only"
+      }
+    },
+    "/v1/operator/legal-requests": {
+      "x-patternly-security-profile": "operator",
+      "x-patternly-consumer-scope": "backend-only",
+      "get": {
+        "description": "List a bounded, pseudonymously audited legal-request projection. The response is capped at 100 and reports whether more items remain.",
+        "responses": {
+          "200": {
+            "description": "Bounded legal queue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "items",
+                    "truncated"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/OperatorLegalRequestItem"
+                      }
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator token is invalid or lacks this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator access is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_v1_operator_legal_requests",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only"
+      }
+    },
+    "/v1/operator/legal-requests/{requestId}": {
+      "x-patternly-security-profile": "operator",
+      "x-patternly-consumer-scope": "backend-only",
+      "get": {
+        "description": "Read an audited allowlisted legal-request detail projection including narrative and transaction reference, but not email or response content.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/LegalRequestId"
+          },
+          {
+            "$ref": "#/components/parameters/LegalRequestId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Legal request detail projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "item"
+                  ],
+                  "properties": {
+                    "item": {
+                      "$ref": "#/components/schemas/OperatorLegalRequestDetail"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator token is invalid or lacks this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator access is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_v1_operator_legal_requests_by_requestid",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only"
+      },
+      "patch": {
+        "description": "Apply a strict allowlisted revision-guarded legal action. Email answers are unavailable.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/LegalRequestId"
+          },
+          {
+            "$ref": "#/components/parameters/LegalRequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorLegalRequestAction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Minimal action result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "item",
+                    "action"
+                  ],
+                  "properties": {
+                    "item": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "requestId",
+                        "status",
+                        "revision"
+                      ],
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    "action": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator token is invalid or lacks this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Revision, lifecycle, or action availability conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator access is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "patch_v1_operator_legal_requests_by_requestid",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only"
+      }
+    },
+    "/v1/operator/security-incidents": {
+      "x-patternly-security-profile": "operator",
+      "x-patternly-consumer-scope": "backend-only",
+      "get": {
+        "description": "List a bounded, pseudonymously audited security-incident projection. The response is capped at 100 and reports whether more items remain.",
+        "responses": {
+          "200": {
+            "description": "Bounded security incident queue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "items",
+                    "truncated"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SecurityIncidentListItem"
+                      }
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator token is invalid or lacks this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator access is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_v1_operator_security_incidents",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only"
+      }
+    },
+    "/v1/operator/security-incidents/{incidentId}": {
+      "x-patternly-security-profile": "operator",
+      "x-patternly-consumer-scope": "backend-only",
+      "put": {
+        "description": "Create or replay one security incident under a caller-supplied stable incident ID. Both initial creation and replay return 200.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SecurityIncidentId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecurityIncidentCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created or replayed minimal incident projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "item"
+                  ],
+                  "properties": {
+                    "item": {
+                      "$ref": "#/components/schemas/SecurityIncidentListItem"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator token is invalid or lacks this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Incident ID was already used with different content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator access is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "put_v1_operator_security_incidents_by_incidentid",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only"
+      },
+      "get": {
+        "description": "Read an audited allowlisted incident detail projection containing the current assessment and pseudonymous decision and delivery history, without recipient email addresses or raw audit snapshots.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SecurityIncidentId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Security incident detail projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "item"
+                  ],
+                  "properties": {
+                    "item": {
+                      "$ref": "#/components/schemas/OperatorSecurityIncidentDetail"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator token is invalid or lacks this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Incident unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator access is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_v1_operator_security_incidents_by_incidentid",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only"
+      },
+      "patch": {
+        "description": "Apply a strict allowlisted revision-guarded incident action. Notification delivery uses its durable delivery state and requires explicit reconciliation for unknown outcomes.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SecurityIncidentId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecurityIncidentAction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Minimal action result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "item",
+                    "action"
+                  ],
+                  "properties": {
+                    "item": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "incidentId",
+                        "nextAction",
+                        "revision"
+                      ],
+                      "properties": {
+                        "incidentId": {
+                          "type": "string"
+                        },
+                        "nextAction": {
+                          "type": "string"
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    "action": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator token is invalid or lacks this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Incident unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Revision, lifecycle, or action availability conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator access is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "patch_v1_operator_security_incidents_by_incidentid",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only"
+      }
+    },
+    "/v1/operator/security-incidents/{incidentId}/authority-exports/{version}": {
+      "x-patternly-security-profile": "operator",
+      "x-patternly-consumer-scope": "backend-only",
+      "get": {
+        "description": "Read one exact versioned authority export and audit the read.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SecurityIncidentId"
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact authority export",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "payload",
+                    "digest",
+                    "version"
+                  ],
+                  "properties": {
+                    "payload": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "digest": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{43}$"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator token is invalid or lacks this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Export unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator access is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_v1_operator_security_incidents_by_incidentid_authority_exports_by_version",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only"
+      }
     }
   },
   "components": {
@@ -8828,6 +10018,386 @@
           }
         }
       },
+      "OperatorContentReportTransition": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedStatus",
+          "status"
+        ],
+        "properties": {
+          "expectedStatus": {
+            "type": "string",
+            "enum": [
+              "open",
+              "in_review",
+              "resolved",
+              "closed"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "in_review",
+              "resolved",
+              "closed"
+            ]
+          }
+        }
+      },
+      "OperatorContentReportItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "clientSubmissionId",
+          "trackId",
+          "contentVersion",
+          "itemId",
+          "reason",
+          "status",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "clientSubmissionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "trackId": {
+            "type": "string"
+          },
+          "contentVersion": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "incorrect_answer",
+              "unclear_explanation",
+              "outdated_content",
+              "technical_issue",
+              "other"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "in_review",
+              "resolved",
+              "closed"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "OperatorContentReportDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "clientSubmissionId",
+          "trackId",
+          "contentVersion",
+          "itemId",
+          "reason",
+          "description",
+          "context",
+          "linkage",
+          "status",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "clientSubmissionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "trackId": {
+            "type": "string"
+          },
+          "contentVersion": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "incorrect_answer",
+              "unclear_explanation",
+              "outdated_content",
+              "technical_issue",
+              "other"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ContentReportContext"
+          },
+          "linkage": {
+            "type": "string",
+            "enum": [
+              "unlinked",
+              "account",
+              "contact",
+              "account_and_contact"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "in_review",
+              "resolved",
+              "closed"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "OperatorLegalRequestItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requestId",
+          "kind",
+          "status",
+          "receivedAt",
+          "responseDueAt",
+          "answeredAt",
+          "retentionUntil",
+          "legalHold",
+          "revision"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "pattern": "^lr_[0-9a-f-]{36}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "complaint",
+              "withdrawal",
+              "data_recovery",
+              "suspension_appeal"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "received",
+              "in_review",
+              "answered",
+              "closed"
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "responseDueAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "answeredAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retentionUntil": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "legalHold": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "OperatorLegalRequestDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requestId",
+          "kind",
+          "status",
+          "receivedAt",
+          "responseDueAt",
+          "answeredAt",
+          "retentionUntil",
+          "legalHold",
+          "revision",
+          "narrative",
+          "transactionId"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "pattern": "^lr_[0-9a-f-]{36}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "complaint",
+              "withdrawal",
+              "data_recovery",
+              "suspension_appeal"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "received",
+              "in_review",
+              "answered",
+              "closed"
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "responseDueAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "answeredAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retentionUntil": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "legalHold": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "narrative": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "transactionId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "OperatorPrivacyRequestAction": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PrivacyRequestAdminAction"
+          },
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "const": "retry_extension_notice"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "OperatorLegalRequestAction": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/LegalRequestAdminAction"
+          },
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "const": "answer"
+                }
+              }
+            }
+          }
+        ]
+      },
       "ErrorEnvelope": {
         "type": "object",
         "additionalProperties": false,
@@ -9177,6 +10747,525 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "OperatorPrivacyRequestDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requestId",
+          "right",
+          "channel",
+          "status",
+          "outcome",
+          "receivedAt",
+          "deadlineAt",
+          "deliveredAt",
+          "extendedAt",
+          "revision",
+          "narrative",
+          "reportSubmissionIds",
+          "reason",
+          "executionEvidence",
+          "responseAvailableUntil",
+          "subjectVerified",
+          "extensionNoticeStatus"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "pattern": "^pr_[0-9a-f-]{36}$"
+          },
+          "right": {
+            "$ref": "#/components/schemas/PrivacyRight"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "account",
+              "public"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "received",
+              "identity_verification_required",
+              "in_review",
+              "response_ready",
+              "fulfilled",
+              "partially_fulfilled",
+              "refused",
+              "closed"
+            ]
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "fulfilled",
+                  "partially_fulfilled",
+                  "refused"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deadlineAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deliveredAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "extendedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "narrative": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reportSubmissionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "executionEvidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "responseAvailableUntil": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subjectVerified": {
+            "type": "boolean"
+          },
+          "extensionNoticeStatus": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "available_in_app",
+                  "pending",
+                  "delivered",
+                  "failed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "OperatorSecurityAuditEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event",
+          "actorPseudonym",
+          "at",
+          "revision",
+          "assessmentVersion"
+        ],
+        "properties": {
+          "event": {
+            "type": "string"
+          },
+          "actorPseudonym": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assessmentVersion": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "OperatorSecurityDelivery": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "recipientPseudonym",
+          "snapshotVersion",
+          "status",
+          "deliveryId"
+        ],
+        "properties": {
+          "recipientPseudonym": {
+            "type": "string"
+          },
+          "snapshotVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "sent",
+              "failed",
+              "unknown",
+              "superseded"
+            ]
+          },
+          "deliveryId": {
+            "type": "string"
+          }
+        }
+      },
+      "OperatorSecurityRecipient": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "recipientPseudonym",
+          "snapshotVersion"
+        ],
+        "properties": {
+          "recipientPseudonym": {
+            "type": "string"
+          },
+          "snapshotVersion": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "OperatorSecurityIncidentDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "incidentId",
+          "classification",
+          "authorityDecision",
+          "authorityDeliveryStatus",
+          "subjectDecision",
+          "subjectNotificationStatus",
+          "awarenessAt",
+          "authorityDeadlineAt",
+          "closedAt",
+          "revision",
+          "legalHold",
+          "nextAction",
+          "title",
+          "details",
+          "assessment",
+          "createdAt",
+          "updatedAt",
+          "authorityExportVersion",
+          "assessmentVersion",
+          "authorityReason",
+          "subjectReason",
+          "authoritySubmissionReference",
+          "subjectNotifications",
+          "preparedRecipients",
+          "auditHistory"
+        ],
+        "properties": {
+          "incidentId": {
+            "type": "string"
+          },
+          "classification": {
+            "enum": [
+              "triage",
+              "breach_confirmed",
+              "not_a_breach"
+            ]
+          },
+          "authorityDecision": {
+            "enum": [
+              "undecided",
+              "required",
+              "not_required"
+            ]
+          },
+          "authorityDeliveryStatus": {
+            "enum": [
+              "not_started",
+              "submitted",
+              "supplemented"
+            ]
+          },
+          "subjectDecision": {
+            "enum": [
+              "undecided",
+              "required",
+              "not_required"
+            ]
+          },
+          "subjectNotificationStatus": {
+            "enum": [
+              "not_started",
+              "prepared",
+              "pending",
+              "sent",
+              "failed",
+              "unknown"
+            ]
+          },
+          "awarenessAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "authorityDeadlineAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "closedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "legalHold": {
+            "type": "boolean"
+          },
+          "nextAction": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "details": {
+            "type": "string"
+          },
+          "assessment": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "details": {
+                "type": "string"
+              },
+              "detectedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "occurredAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "containedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "categories": {
+                "type": "string"
+              },
+              "dataSubjectCount": {
+                "type": "string"
+              },
+              "recordCount": {
+                "type": "string"
+              },
+              "specialData": {
+                "type": "boolean"
+              },
+              "confidentialityImpact": {
+                "type": "string"
+              },
+              "integrityImpact": {
+                "type": "string"
+              },
+              "availabilityImpact": {
+                "type": "string"
+              },
+              "consequences": {
+                "type": "string"
+              },
+              "likelihood": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "string"
+              },
+              "containment": {
+                "type": "string"
+              },
+              "remediation": {
+                "type": "string"
+              },
+              "prevention": {
+                "type": "string"
+              },
+              "postmortem": {
+                "type": "string"
+              }
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "authorityExportVersion": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assessmentVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "authorityReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subjectReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "authoritySubmissionReference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subjectNotifications": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorSecurityDelivery"
+            }
+          },
+          "preparedRecipients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorSecurityRecipient"
+            }
+          },
+          "auditHistory": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorSecurityAuditEntry"
+            }
           }
         }
       },

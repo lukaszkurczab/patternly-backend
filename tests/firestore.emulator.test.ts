@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import test from "node:test";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
@@ -1310,7 +1310,8 @@ test("administrator report triage uses an idempotent monotonic state machine and
   const audit = await firestore().collection("contentReports").doc(input.clientSubmissionId).collection("audit").get();
   assert.equal(audit.size, 1);
   assert.deepEqual(audit.docs[0]?.data().toStatus, "in_review");
-  assert.equal(audit.docs[0]?.data().actorId, "admin-user-id");
+  assert.equal(audit.docs[0]?.data().actorId, undefined);
+  assert.equal(audit.docs[0]?.data().actorPseudonym, createHmac("sha256", testEnvironment.reportRateLimitHashSecret).update("content-report-actor\0admin-user-id", "utf8").digest("base64url"));
   const report = (await firestore().collection("contentReports").doc(input.clientSubmissionId).get()).data();
   assert.equal(audit.docs[0]?.data().expiresAt.toMillis(), report?.expiresAt.toMillis());
   const queue = await context.stores.contentReports.listQueue();

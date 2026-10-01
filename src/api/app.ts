@@ -5,15 +5,17 @@ import type { Environment } from "../config/environment.js";
 import type { FirestoreRuntime } from "../infrastructure/firestore/client.js";
 import type { IdentityTokenVerifier } from "../infrastructure/firebase/verifier.js";
 import type { AppCheckTokenVerifier } from "../infrastructure/firebase/appCheckVerifier.js";
-import type { OperatorTokenVerifier } from "../infrastructure/operator/oidcVerifier.js";
+import type { OperatorTokenVerifier, VerifiedOperatorIdentity } from "../infrastructure/operator/oidcVerifier.js";
+import type { OperatorAction } from "../modules/operator-access/contracts.js";
 import type { RevenueCatEntitlementReader } from "../infrastructure/revenuecat/client.js";
 import { OPENAPI_DOCUMENT } from "./openapi.js";
 import { authenticateIdentity, authenticateRequest } from "../modules/auth/request.js";
 import type { AuthenticatedIdentity } from "../modules/auth/contracts.js";
 import type { BackendStores } from "../infrastructure/firestore/stores.js";
+import type { PrivacyRequestDetails } from "../modules/privacy-requests/store.js";
 import { createProgressPageToken, isSyncRequestWithinBudget, parseProgressPageToken, syncRequestSchema, type ProgressRecord } from "../modules/progress/contracts.js";
 import { guestMergeConfirmationSchema, guestMergeSnapshotSchema } from "../modules/users/merge.js";
-import { createContentReportSchema, transitionContentReportSchema } from "../modules/content-reports/contracts.js";
+import { contentReportStatusSchema, createContentReportSchema, transitionContentReportSchema, type ContentReportStatus, type ContentReportView, type OperatorContentReportDetail } from "../modules/content-reports/contracts.js";
 import { accountRecoveryCodeConsumeSchema, accountRecoveryCodeIssueSchema, accountSessionRevokeSchema, accountDeletionRequestSchema, publicDeletionStatusSchema } from "../modules/account-lifecycle/contracts.js";
 import { createLogger } from "../infrastructure/logging/logger.js";
 import { DataExportRateLimitError, DataExportTooLargeError } from "../modules/data-export/contracts.js";
@@ -28,6 +30,8 @@ import { runtimeRoute, type RuntimeRouteDescriptor } from "./openapi-validator.j
 import { normalizeRoutePath, type RouteGuard } from "./route-contract.js";
 import type { ContentPackageService } from "../modules/content/packages.js";
 import { isPackageId } from "../modules/content/packages.js";
+import type { LegalRequestDetails } from "../modules/legal-requests/store.js";
+import type { SecurityIncidentDetails } from "../modules/security-incidents/store.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -38,6 +42,7 @@ declare module "fastify" {
     authenticatedIdentity: AuthenticatedIdentity | undefined;
     authTime: number | undefined;
     expectedAuthorizationGeneration: number | undefined;
+    operatorIdentity: VerifiedOperatorIdentity | undefined;
   }
   interface FastifyInstance {
     patternlyRouteInventory: RuntimeRouteDescriptor[];
@@ -59,6 +64,21 @@ export type ApplicationDependencies = Readonly<{
   purchaseReceiptEmailSender?: import("../infrastructure/email/smtpPrivacyEmailSender.js").PurchaseReceiptEmailSender | null;
   logStream?: DestinationStream;
 }>;
+
+const operatorPrivacyActions = new Set(["require_verification", "verify_subject", "start_review", "extend", "prepare_response", "deliver", "execute_export", "close"]);
+const operatorLegalActions = new Set(["start_review", "close", "set_legal_hold"]);
+const operatorIncidentActions = new Set([
+  "acknowledge_awareness", "classify", "correct_assessment", "decide_authority",
+  "prepare_authority_export", "record_authority_submission", "decide_subject",
+  "prepare_subject_notification", "send_subject_notification",
+  "resolve_subject_notification_unknown", "reconcile_subject_notifications",
+  "set_legal_hold", "release_legal_hold", "close",
+]);
+
+const operatorContentTransitionSchema = z.object({
+  expectedStatus: contentReportStatusSchema,
+  status: contentReportStatusSchema,
+}).strict();
 
 const RECENT_AUTH_SECONDS = 300;
 const PRIVACY_REQUEST_ID_PATTERN = /^pr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -285,6 +305,173 @@ function requireAdministrator(request: FastifyRequest, reply: FastifyReply, depe
   return true;
 }
 
+function operatorError(error: unknown, reply: FastifyReply, family: "content_report" | "privacy_request" | "legal_request" | "security_incident"): boolean {
+  const message = error instanceof Error ? error.message : "";
+  if (message === `${family}_not_found`) {
+    reply.code(404).send({ error: { code: message } });
+    return true;
+  }
+  const domainPrefix = `${family}_`;
+  if (message.startsWith(domainPrefix) || message === "operator_action_unavailable") {
+    const code = message.includes("email_unavailable") || message.includes("executor_required") || message.includes("operator_action_unavailable")
+      ? "operator_action_unavailable"
+      : message;
+    reply.code(409).send({ error: { code } });
+    return true;
+  }
+  return false;
+}
+
+async function executePrivacyRequestExport(
+  dependencies: ApplicationDependencies,
+  requestId: string,
+  actorId: string,
+  expectedRevision: number,
+): Promise<PrivacyRequestDetails> {
+  const stores = requireStores(dependencies);
+  const privacy = stores.privacyRequests;
+  const context = await privacy.readExecutionContext(requestId);
+  if (!context) throw new Error("privacy_request_not_found");
+  if (context.revision !== expectedRevision) throw new Error("privacy_request_revision_conflict");
+  if (context.channel !== "account" || !context.userId || (context.right !== "access" && context.right !== "portability")) {
+    throw new Error("privacy_request_executor_unavailable");
+  }
+  const stableExportId = `export_${createHash("sha256").update(`privacy:${requestId}`, "utf8").digest("base64url").slice(0, 32)}`;
+  let result: PrivacyRequestDetails | null = null;
+  await stores.dataExport.create(context.userId, {
+    kind: "admin_privacy_request",
+    administratorUserId: actorId,
+    privacyRequestId: requestId,
+    expectedRevision,
+  }, stableExportId, async (exported) => {
+    result = await privacy.prepareExecutedResponse(
+      requestId,
+      actorId,
+      expectedRevision,
+      exported.serialized,
+      `${context.right === "access" ? "article_15_export" : "portability_export"}:${exported.exportId}`,
+    );
+  });
+  if (!result) throw new Error("privacy_request_executor_incomplete");
+  return result;
+}
+
+function projectSecurityIncidentListItem(incident: import("../modules/security-incidents/store.js").SecurityIncidentListItem) {
+  return Object.freeze({
+    incidentId: incident.incidentId,
+    classification: incident.classification,
+    authorityDecision: incident.authorityDecision,
+    authorityDeliveryStatus: incident.authorityDeliveryStatus,
+    subjectDecision: incident.subjectDecision,
+    subjectNotificationStatus: incident.subjectNotificationStatus,
+    awarenessAt: incident.awarenessAt,
+    authorityDeadlineAt: incident.authorityDeadlineAt,
+    closedAt: incident.closedAt,
+    revision: incident.revision,
+    legalHold: incident.legalHold,
+    nextAction: incident.nextAction,
+  });
+}
+
+function projectOperatorSecurityIncidentDetails(incident: SecurityIncidentDetails) {
+  return Object.freeze({
+    ...projectSecurityIncidentListItem(incident),
+    title: incident.title,
+    details: incident.details,
+    assessment: projectOperatorSecurityAssessment(incident.assessment),
+    createdAt: incident.createdAt,
+    updatedAt: incident.updatedAt,
+    authorityExportVersion: incident.authorityExportVersion,
+    assessmentVersion: incident.assessmentVersion,
+    authorityReason: incident.authorityReason,
+    subjectReason: incident.subjectReason,
+    authoritySubmissionReference: incident.authoritySubmissionReference,
+    subjectNotifications: Object.freeze(incident.subjectNotifications.map(({ recipientPseudonym, snapshotVersion, status, deliveryId }) => Object.freeze({ recipientPseudonym, snapshotVersion, status, deliveryId }))),
+    preparedRecipients: Object.freeze(incident.preparedRecipients.map(({ recipientPseudonym, snapshotVersion }) => Object.freeze({ recipientPseudonym, snapshotVersion }))),
+    auditHistory: Object.freeze(incident.auditHistory.map(({ event, actorPseudonym, at, revision, assessmentVersion }) => Object.freeze({ event, actorPseudonym, at, revision, assessmentVersion }))),
+  });
+}
+
+function projectOperatorSecurityAssessment(assessment: Readonly<Record<string, unknown>>) {
+  const keys = ["details", "detectedAt", "occurredAt", "containedAt", "categories", "dataSubjectCount", "recordCount", "specialData", "confidentialityImpact", "integrityImpact", "availabilityImpact", "consequences", "likelihood", "severity", "containment", "remediation", "prevention", "postmortem"] as const;
+  return Object.freeze(Object.fromEntries(keys.filter((key) => Object.hasOwn(assessment, key)).map((key) => [key, assessment[key]])));
+}
+
+function projectOperatorPrivacyRequestDetails(request: PrivacyRequestDetails) {
+  return Object.freeze({
+    requestId: request.requestId,
+    right: request.right,
+    channel: request.channel,
+    status: request.status,
+    outcome: request.outcome,
+    receivedAt: request.receivedAt,
+    deadlineAt: request.deadlineAt,
+    deliveredAt: request.deliveredAt,
+    extendedAt: request.extendedAt,
+    revision: request.revision,
+    narrative: request.narrative,
+    reportSubmissionIds: request.reportSubmissionIds,
+    reason: request.reason,
+    executionEvidence: request.executionEvidence,
+    responseAvailableUntil: request.responseAvailableUntil,
+    subjectVerified: request.subjectVerified,
+    extensionNoticeStatus: request.extensionNoticeStatus,
+  });
+}
+
+function projectOperatorLegalRequestDetails(request: LegalRequestDetails) {
+  return Object.freeze({
+    requestId: request.requestId,
+    kind: request.kind,
+    status: request.status,
+    receivedAt: request.receivedAt,
+    responseDueAt: request.responseDueAt,
+    answeredAt: request.answeredAt,
+    retentionUntil: request.retentionUntil,
+    legalHold: request.legalHold,
+    revision: request.revision,
+    narrative: request.narrative,
+    transactionId: request.transactionId,
+  });
+}
+
+function projectOperatorContentReport(report: ContentReportView) {
+  return Object.freeze({
+    clientSubmissionId: report.clientSubmissionId,
+    trackId: report.trackId,
+    contentVersion: report.contentVersion,
+    itemId: report.itemId,
+    reason: report.reason,
+    status: report.status,
+    createdAt: report.createdAt,
+    updatedAt: report.updatedAt,
+  });
+}
+
+function projectOperatorContentReportDetail(report: OperatorContentReportDetail) {
+  return Object.freeze({
+    clientSubmissionId: report.clientSubmissionId,
+    trackId: report.trackId,
+    contentVersion: report.contentVersion,
+    itemId: report.itemId,
+    reason: report.reason,
+    description: report.description,
+    context: Object.freeze({
+      releasePackageId: report.context.releasePackageId,
+      trackNode: report.context.trackNode,
+      modeRoute: report.context.modeRoute,
+      locale: report.context.locale,
+      appBuild: report.context.appBuild,
+      platform: report.context.platform,
+      occurredAt: report.context.occurredAt,
+    }),
+    linkage: report.linkage,
+    status: report.status,
+    createdAt: report.createdAt,
+    updatedAt: report.updatedAt,
+  });
+}
+
 type RoutePreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void> | void;
 
 type RouteFunction = (...args: never[]) => unknown;
@@ -355,12 +542,39 @@ function createAdminGuard(dependencies: ApplicationDependencies): RoutePreHandle
   return guard;
 }
 
-function routeGuard(profile: RouteGuard, dependencies: ApplicationDependencies): RoutePreHandler {
+function createOperatorGuard(dependencies: ApplicationDependencies, action: OperatorAction): RoutePreHandler {
+  const guard: RoutePreHandler = async (request, reply) => {
+    const verifier = dependencies.operatorTokenVerifier;
+    if (!verifier) {
+      reply.code(503).send({ error: { code: "operator_unavailable" } });
+      return;
+    }
+    const authorization = request.headers.authorization;
+    const match = typeof authorization === "string" ? /^Bearer ([^\s]+)$/iu.exec(authorization) : null;
+    if (!match?.[1]) {
+      reply.code(401).send({ error: { code: "operator_token_invalid" } });
+      return;
+    }
+    try {
+      request.operatorIdentity = await verifier.verifyAndAuthorize(match[1], action);
+    } catch {
+      reply.code(401).send({ error: { code: "operator_token_invalid" } });
+    }
+  };
+  routeProtections.set(guard as RouteFunction, "operator");
+  return guard;
+}
+
+function routeGuard(profile: RouteGuard, dependencies: ApplicationDependencies, operatorAction?: OperatorAction): RoutePreHandler {
   if (profile === "bearer") return createBearerGuard(dependencies);
   if (profile === "app_check_bearer") return createAppCheckBearerGuard(dependencies);
   if (profile === "app_check_verify_only_bearer") return createAppCheckVerifyOnlyBearerGuard(dependencies);
   if (profile === "app_check_only") return createAppCheckOnlyGuard(dependencies);
   if (profile === "app_check_optional_bearer") return createAppCheckGuard(dependencies);
+  if (profile === "operator") {
+    if (operatorAction === undefined) throw new Error("operator_route_action_required");
+    return createOperatorGuard(dependencies, operatorAction);
+  }
   if (profile === "admin") return createAdminGuard(dependencies);
   throw new Error(`route_guard_not_supported:${profile}`);
 }
@@ -448,9 +662,11 @@ export function buildApplication(dependencies: ApplicationDependencies) {
   app.decorateRequest("authenticatedEmailVerified", undefined);
   app.decorateRequest("authenticatedIdentity", undefined);
   app.decorateRequest("authTime", undefined);
+  app.decorateRequest("operatorIdentity", undefined);
   app.addHook("onRequest", async (request, reply) => {
     request.correlationId = request.id;
     reply.header("x-correlation-id", request.id);
+    if (request.url.startsWith("/v1/operator/")) reply.header("cache-control", "private, no-store");
     const origin = request.headers.origin;
     const isAdminRoute = request.url.startsWith("/v1/admin/");
     if (isAdminRoute && dependencies.environment.nodeEnv === "production") {
@@ -1065,6 +1281,126 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       throw error;
     }
   });
+  app.get("/v1/operator/content-reports", { preHandler: routeGuard("operator", dependencies, "content_reports:read") }, async (request) => {
+    const queue = await requireStores(dependencies).contentReports.listOperatorQueue(request.operatorIdentity!.actorPseudonym);
+    return { items: queue.items, truncated: queue.truncated };
+  });
+  app.get("/v1/operator/content-reports/:clientSubmissionId", { preHandler: routeGuard("operator", dependencies, "content_reports:read") }, async (request, reply) => {
+    const id = (request.params as { clientSubmissionId?: unknown }).clientSubmissionId;
+    if (typeof id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(id)) return reply.code(404).send({ error: { code: "content_report_not_found" } });
+    const report = await requireStores(dependencies).contentReports.readOperator(id, request.operatorIdentity!.actorPseudonym);
+    return report ? reply.code(200).send({ item: projectOperatorContentReportDetail(report) }) : reply.code(404).send({ error: { code: "content_report_not_found" } });
+  });
+  app.patch("/v1/operator/content-reports/:clientSubmissionId", { preHandler: routeGuard("operator", dependencies, "content_reports:transition") }, async (request, reply) => {
+    const id = (request.params as { clientSubmissionId?: unknown }).clientSubmissionId;
+    const parsed = operatorContentTransitionSchema.safeParse(request.body);
+    if (typeof id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(id) || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      const result = await requireStores(dependencies).contentReports.transitionStatus(id, request.operatorIdentity!.actorPseudonym, parsed.data.status, parsed.data.expectedStatus);
+      return reply.code(200).send({ item: projectOperatorContentReport(result.report), duplicate: result.duplicate });
+    } catch (error) {
+      if (operatorError(error, reply, "content_report")) return;
+      throw error;
+    }
+  });
+  app.get("/v1/operator/privacy-requests", { preHandler: routeGuard("operator", dependencies, "privacy_requests:read") }, async (request) => {
+    const queue = await requireStores(dependencies).privacyRequests.listOperatorQueue(request.operatorIdentity!.actorPseudonym);
+    return { items: queue.items, truncated: queue.truncated };
+  });
+  app.get("/v1/operator/privacy-requests/:requestId", { preHandler: routeGuard("operator", dependencies, "privacy_requests:read") }, async (request, reply) => {
+    const id = privacyRequestId((request.params as { requestId?: unknown }).requestId);
+    if (!id) return reply.code(404).send({ error: { code: "privacy_request_not_found" } });
+    const result = await requireStores(dependencies).privacyRequests.readAdmin(id, request.operatorIdentity!.actorPseudonym);
+    if (!result) return reply.code(404).send({ error: { code: "privacy_request_not_found" } });
+    return reply.code(200).send({ item: projectOperatorPrivacyRequestDetails(result) });
+  });
+  app.patch("/v1/operator/privacy-requests/:requestId", { preHandler: routeGuard("operator", dependencies, "privacy_requests:action") }, async (request, reply) => {
+    const id = privacyRequestId((request.params as { requestId?: unknown }).requestId);
+    const parsed = privacyRequestAdminActionSchema.safeParse(request.body);
+    if (!id || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!operatorPrivacyActions.has(parsed.data.action)) return reply.code(409).send({ error: { code: "operator_action_unavailable" } });
+    try {
+      if (parsed.data.action === "execute_export") {
+        const result = await executePrivacyRequestExport(dependencies, id, request.operatorIdentity!.actorPseudonym, parsed.data.expectedRevision);
+        return reply.code(200).send({ item: { requestId: result.requestId, status: result.status, revision: result.revision }, action: parsed.data.action });
+      }
+      const result = await requireStores(dependencies).privacyRequests.transitionAdmin(id, request.operatorIdentity!.actorPseudonym, parsed.data, dependencies.privacyRequestEmailSender ?? null, true);
+      return reply.code(200).send({ item: { requestId: result.requestId, status: result.status, revision: result.revision }, action: parsed.data.action });
+    } catch (error) {
+      if (operatorError(error, reply, "privacy_request")) return;
+      throw error;
+    }
+  });
+  app.get("/v1/operator/legal-requests", { preHandler: routeGuard("operator", dependencies, "legal_requests:read") }, async (request) => {
+    const queue = await requireStores(dependencies).legalRequests.listOperatorQueue(request.operatorIdentity!.actorPseudonym);
+    return { items: queue.items, truncated: queue.truncated };
+  });
+  app.get("/v1/operator/legal-requests/:requestId", { preHandler: routeGuard("operator", dependencies, "legal_requests:read") }, async (request, reply) => {
+    const id = legalRequestId((request.params as { requestId?: unknown }).requestId);
+    if (!id) return reply.code(404).send({ error: { code: "legal_request_not_found" } });
+    const result = await requireStores(dependencies).legalRequests.readAdmin(id, request.operatorIdentity!.actorPseudonym);
+    if (!result) return reply.code(404).send({ error: { code: "legal_request_not_found" } });
+    const item = projectOperatorLegalRequestDetails(result);
+    return reply.code(200).send({ item });
+  });
+  app.patch("/v1/operator/legal-requests/:requestId", { preHandler: routeGuard("operator", dependencies, "legal_requests:action") }, async (request, reply) => {
+    const id = legalRequestId((request.params as { requestId?: unknown }).requestId);
+    const parsed = legalRequestAdminActionSchema.safeParse(request.body);
+    if (!id || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!operatorLegalActions.has(parsed.data.action)) return reply.code(409).send({ error: { code: "operator_action_unavailable" } });
+    try {
+      const result = await requireStores(dependencies).legalRequests.transitionAdmin(id, request.operatorIdentity!.actorPseudonym, parsed.data, dependencies.legalRequestEmailSender ?? null);
+      return reply.code(200).send({ item: { requestId: result.requestId, status: result.status, revision: result.revision }, action: parsed.data.action });
+    } catch (error) {
+      if (operatorError(error, reply, "legal_request")) return;
+      throw error;
+    }
+  });
+  app.put("/v1/operator/security-incidents/:incidentId", { preHandler: routeGuard("operator", dependencies, "security_incidents:create") }, async (request, reply) => {
+    const id = securityIncidentId((request.params as { incidentId?: unknown }).incidentId);
+    const parsed = createSecurityIncidentSchema.safeParse(request.body);
+    if (!id || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      const incident = await requireStores(dependencies).securityIncidents.create(request.operatorIdentity!.actorPseudonym, parsed.data, id.slice(3));
+      return reply.code(200).send({ item: projectSecurityIncidentListItem(incident) });
+    } catch (error) {
+      if (operatorError(error, reply, "security_incident")) return;
+      throw error;
+    }
+  });
+  app.get("/v1/operator/security-incidents", { preHandler: routeGuard("operator", dependencies, "security_incidents:read") }, async (request) => {
+    const queue = await requireStores(dependencies).securityIncidents.listOperatorQueue(request.operatorIdentity!.actorPseudonym);
+    return { items: queue.items.map(projectSecurityIncidentListItem), truncated: queue.truncated };
+  });
+  app.get("/v1/operator/security-incidents/:incidentId", { preHandler: routeGuard("operator", dependencies, "security_incidents:read") }, async (request, reply) => {
+    const id = securityIncidentId((request.params as { incidentId?: unknown }).incidentId);
+    if (!id) return reply.code(404).send({ error: { code: "security_incident_not_found" } });
+    const result = await requireStores(dependencies).securityIncidents.readAdmin(id, request.operatorIdentity!.actorPseudonym);
+    return result ? reply.code(200).send({ item: projectOperatorSecurityIncidentDetails(result) }) : reply.code(404).send({ error: { code: "security_incident_not_found" } });
+  });
+  app.get("/v1/operator/security-incidents/:incidentId/authority-exports/:version", { preHandler: routeGuard("operator", dependencies, "security_incidents:read") }, async (request, reply) => {
+    const params = request.params as { incidentId?: unknown; version?: unknown };
+    const id = securityIncidentId(params.incidentId);
+    const version = typeof params.version === "string" && /^[1-9][0-9]*$/u.test(params.version) ? Number(params.version) : Number.NaN;
+    if (!id || !Number.isSafeInteger(version)) return reply.code(404).send({ error: { code: "security_incident_export_not_found" } });
+    const exported = await requireStores(dependencies).securityIncidents.readAuthorityExport(id, version, request.operatorIdentity!.actorPseudonym);
+    return exported ? reply.code(200).send(exported) : reply.code(404).send({ error: { code: "security_incident_export_not_found" } });
+  });
+  app.patch("/v1/operator/security-incidents/:incidentId", { preHandler: routeGuard("operator", dependencies, "security_incidents:action") }, async (request, reply) => {
+    const id = securityIncidentId((request.params as { incidentId?: unknown }).incidentId);
+    const parsed = securityIncidentActionSchema.safeParse(request.body);
+    if (!id || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!operatorIncidentActions.has(parsed.data.action)) return reply.code(409).send({ error: { code: "operator_action_unavailable" } });
+    if (parsed.data.action === "send_subject_notification" && !dependencies.securityIncidentEmailSender) return reply.code(409).send({ error: { code: "operator_action_unavailable" } });
+    try {
+      const result = await requireStores(dependencies).securityIncidents.act(id, request.operatorIdentity!.actorPseudonym, parsed.data, dependencies.securityIncidentEmailSender ?? null);
+      return reply.code(200).send({ item: { incidentId: result.incidentId, nextAction: result.nextAction, revision: result.revision }, action: parsed.data.action });
+    } catch (error) {
+      if (operatorError(error, reply, "security_incident")) return;
+      throw error;
+    }
+  });
+
   app.get("/v1/admin/content-reports", { preHandler: routeGuard("admin", dependencies) }, async (request, reply) => {
     if (!requireAdministrator(request, reply, dependencies)) return;
     return { reports: await requireStores(dependencies).contentReports.listQueue() };
@@ -1158,22 +1494,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     if (!requestId || !parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     try {
       if (parsed.data.action === "execute_export") {
-        const privacy = requireStores(dependencies).privacyRequests;
-        const context = await privacy.readExecutionContext(requestId);
-        if (!context) return reply.code(404).send({ error: { code: "privacy_request_not_found" } });
-        if (context.revision !== parsed.data.expectedRevision) return reply.code(409).send({ error: { code: "privacy_request_revision_conflict" } });
-        if (context.channel !== "account" || !context.userId || (context.right !== "access" && context.right !== "portability")) return reply.code(409).send({ error: { code: "privacy_request_executor_unavailable" } });
-        const stableExportId = `export_${createHash("sha256").update(`privacy:${requestId}`, "utf8").digest("base64url").slice(0, 32)}`;
-        let result: Awaited<ReturnType<typeof privacy.prepareExecutedResponse>> | null = null;
-        await requireStores(dependencies).dataExport.create(context.userId, {
-          kind: "admin_privacy_request",
-          administratorUserId: request.userId!,
-          privacyRequestId: requestId,
-          expectedRevision: parsed.data.expectedRevision,
-        }, stableExportId, async (exported) => {
-          result = await privacy.prepareExecutedResponse(requestId, request.userId!, parsed.data.expectedRevision, exported.serialized, `${context.right === "access" ? "article_15_export" : "portability_export"}:${exported.exportId}`);
-        });
-        if (!result) throw new Error("privacy_request_executor_incomplete");
+        const result = await executePrivacyRequestExport(dependencies, requestId, request.userId!, parsed.data.expectedRevision);
         return reply.code(200).send({ request: result });
       }
       const result = await requireStores(dependencies).privacyRequests.transitionAdmin(requestId, request.userId!, parsed.data, dependencies.privacyRequestEmailSender ?? null);

@@ -18,6 +18,18 @@ export type LegalRequestItem = Readonly<{
   revision: number;
 }>;
 export type LegalRequestDetails = LegalRequestItem & Readonly<{ email: string; narrative: string | null; transactionId: string | null }>;
+export type OperatorLegalRequestItem = Readonly<{
+  requestId: string;
+  kind: LegalRequestKind;
+  status: LegalRequestStatus;
+  receivedAt: string;
+  responseDueAt: string | null;
+  answeredAt: string | null;
+  retentionUntil: string | null;
+  legalHold: boolean;
+  revision: number;
+}>;
+export type LegalRequestOperatorQueue = Readonly<{ items: readonly OperatorLegalRequestItem[]; truncated: boolean }>;
 
 export interface LegalRequestEmailSender {
   send(input: Readonly<{ recipient: string; purpose: "received" | "answered"; requestId: string; kind: LegalRequestKind; response?: string }>): Promise<void>;
@@ -35,8 +47,9 @@ export interface LegalRequestStore {
   listAccount(userId: string): Promise<readonly LegalRequestItem[]>;
   readAccount(userId: string, requestId: string): Promise<LegalRequestItem | null>;
   listAdmin(): Promise<readonly LegalRequestItem[]>;
+  listOperatorQueue(actorId: string): Promise<LegalRequestOperatorQueue>;
   readAdmin(requestId: string, actorId: string): Promise<LegalRequestDetails | null>;
-  transitionAdmin(requestId: string, actorId: string, action: LegalRequestAdminAction, sender: LegalRequestEmailSender): Promise<LegalRequestItem>;
+  transitionAdmin(requestId: string, actorId: string, action: LegalRequestAdminAction, sender: LegalRequestEmailSender | null): Promise<LegalRequestItem>;
 }
 
 export class FirestoreLegalRequestStore implements LegalRequestStore {
@@ -95,6 +108,29 @@ export class FirestoreLegalRequestStore implements LegalRequestStore {
     return Object.freeze(snapshot.docs.map((document) => this.read(document.id, asRecord(document.data(), "legal_request"))).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt)));
   }
 
+  public async listOperatorQueue(actorId: string): Promise<LegalRequestOperatorQueue> {
+    const snapshot = await this.db.collection("legalRequests").orderBy("receivedAt", "desc").limit(101).get();
+    const selected = snapshot.docs.slice(0, 100);
+    if (selected.length > 0) {
+      const occurredAt = Timestamp.now();
+      const batch = this.db.batch();
+      for (const document of selected) {
+        const data = asRecord(document.data(), "legal_request");
+        batch.create(document.ref.collection("audit").doc(), {
+          action: "operator_queue_read",
+          actorPseudonym: this.actorPseudonym(actorId),
+          occurredAt,
+          expiresAt: data.expiresAt ?? null,
+        });
+      }
+      await batch.commit();
+    }
+    return Object.freeze({
+      items: Object.freeze(selected.map((document) => this.toOperatorItem(document.id, asRecord(document.data(), "legal_request")))),
+      truncated: snapshot.docs.length > 100,
+    });
+  }
+
   public async readAdmin(requestId: string, actorId: string): Promise<LegalRequestDetails | null> {
     const ref = this.db.collection("legalRequests").doc(requestId);
     const snapshot = await ref.get();
@@ -105,7 +141,8 @@ export class FirestoreLegalRequestStore implements LegalRequestStore {
     return Object.freeze({ ...this.read(requestId, data), email: String(data.email), narrative: typeof data.narrative === "string" ? data.narrative : null, transactionId: typeof data.transactionId === "string" ? data.transactionId : null });
   }
 
-  public async transitionAdmin(requestId: string, actorId: string, action: LegalRequestAdminAction, sender: LegalRequestEmailSender): Promise<LegalRequestItem> {
+  public async transitionAdmin(requestId: string, actorId: string, action: LegalRequestAdminAction, sender: LegalRequestEmailSender | null): Promise<LegalRequestItem> {
+    if (action.action === "answer" && sender === null) throw new Error("legal_request_email_unavailable");
     const ref = this.db.collection("legalRequests").doc(requestId);
     let recipient = "";
     let kind: LegalRequestKind = "complaint";
@@ -139,6 +176,7 @@ export class FirestoreLegalRequestStore implements LegalRequestStore {
       transaction.create(ref.collection("audit").doc(), { action: action.action, actorPseudonym, occurredAt: Timestamp.fromDate(now), expiresAt: update.expiresAt ?? data.expiresAt ?? null });
     });
     if (action.action === "answer" && response) {
+      if (!sender) throw new Error("legal_request_email_unavailable");
       try {
         await sender.send({ recipient, purpose: "answered", requestId, kind, response });
         await this.db.runTransaction(async (transaction) => {
@@ -194,6 +232,20 @@ export class FirestoreLegalRequestStore implements LegalRequestStore {
       answeredAt: data.answeredAt ? asTimestamp(data.answeredAt, "legal_request_answered_at").toDate().toISOString() : null,
       retentionUntil: data.retentionUntil ? asTimestamp(data.retentionUntil, "legal_request_retention_until").toDate().toISOString() : null,
       response: typeof data.response === "string" ? data.response : null,
+      legalHold: data.legalHold === true,
+      revision: Number(data.revision),
+    });
+  }
+
+  private toOperatorItem(requestId: string, data: Record<string, unknown>): OperatorLegalRequestItem {
+    return Object.freeze({
+      requestId,
+      kind: data.kind as LegalRequestKind,
+      status: data.status as LegalRequestStatus,
+      receivedAt: asTimestamp(data.receivedAt, "legal_request_received_at").toDate().toISOString(),
+      responseDueAt: data.responseDueAt ? asTimestamp(data.responseDueAt, "legal_request_response_due_at").toDate().toISOString() : null,
+      answeredAt: data.answeredAt ? asTimestamp(data.answeredAt, "legal_request_answered_at").toDate().toISOString() : null,
+      retentionUntil: data.retentionUntil ? asTimestamp(data.retentionUntil, "legal_request_retention_until").toDate().toISOString() : null,
       legalHold: data.legalHold === true,
       revision: Number(data.revision),
     });

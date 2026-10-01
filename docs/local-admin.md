@@ -22,6 +22,11 @@ wyłącznie do odczytu źródło panelu i wybiera niezmienny release
 opublikowanego release, a nie z danych emulatora Firestore. Ten montaż służy
 wyłącznie lokalnemu panelowi; Cloud Run nie udostępnia tras administratora.
 
+Nowy backendowy interfejs operacyjny /v1/operator/* jest odrębnym API z
+autoryzacją OIDC i jawnie skonfigurowaną listą akcji. Nie korzysta z konta
+emulatora ani panelu lokalnego. Produkcyjne trasy administratora /v1/admin/*
+pozostają niedostępne.
+
 Projekt `demo-patternly-admin` korzysta z prawdziwych emulatorów Auth (29199)
 i Firestore (28181). Hub, logowanie emulatorów i WebSocket używają odpowiednio
 24410, 24510 i 9152. Wszystkie usługi słuchają na loopback. Zajęcie dowolnego

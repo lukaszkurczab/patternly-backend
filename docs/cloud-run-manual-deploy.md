@@ -8,8 +8,17 @@ Required runtime configuration is supplied through Secret Manager or the
 Cloud Run service configuration:
 
 - `FIREBASE_PROJECT_ID` and `FIREBASE_AUTH_ISSUER`;
-- No administrator web origin is configured in production. Administrator routes
-  are unavailable there; the panel uses only the local backend and emulators;
+- No administrator web origin is configured in production. The /v1/admin/*
+  panel routes remain unavailable there; the panel uses only the local backend
+  and emulators. The separate /v1/operator/* API is backend-only and is enabled
+  only when all four operator OIDC settings below are supplied;
+- OPERATOR_OIDC_ISSUER, OPERATOR_OIDC_AUDIENCE, OPERATOR_OIDC_JWKS_URL and
+  OPERATOR_ALLOWLIST_JSON — configure the real identity provider and reviewed
+  operator subjects/actions through the restricted Cloud Run runtime
+  configuration. Do not copy test issuer values, test signing keys, or
+  synthetic local identities into production. Production operator enablement
+  remains a release gate until the real issuer, audience, JWKS endpoint and
+  allowlist are verified;
 - `REPORT_RATE_LIMIT_HASH_SECRET`;
 - Google Workspace SMTP settings for in-app guest privacy codes
   `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_FROM_EMAIL`,

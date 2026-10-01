@@ -74,9 +74,9 @@ async function probe(
   operation: ProbeOperation,
   headers: Readonly<Record<string, string>> = {},
   payload?: Readonly<Record<string, unknown>>,
-): Promise<{ statusCode: number; body: string; errorCode: string | null }> {
+): Promise<{ statusCode: number; body: string; errorCode: string | null; headers: InjectResponse["headers"] }> {
   const response = await app.inject({ method: operation.method as NonNullable<InjectOptions["method"]>, url: probePath(operation.path), headers: { ...headers }, ...(payload === undefined ? {} : { payload }) });
-  return { statusCode: response.statusCode, body: response.body, errorCode: responseErrorCode(response) };
+  return { statusCode: response.statusCode, body: response.body, errorCode: responseErrorCode(response), headers: response.headers };
 }
 
 function describe(operation: ProbeOperation): string {
@@ -144,6 +144,12 @@ export async function assertSecurityProbes(app: ProbeApp, document: unknown): Pr
       if (nonAdmin.statusCode !== 403 || nonAdmin.errorCode !== "administrator_required") {
         failures.push(`${describe(operation)}:admin_rejection_expected:403:administrator_required:got:${nonAdmin.statusCode}:${nonAdmin.errorCode ?? "no_code"}`);
       }
+    } else if (operation.profile === "operator") {
+      const unavailable = await probe(app, operation);
+      if (unavailable.statusCode !== 503 || unavailable.errorCode !== "operator_unavailable") {
+        failures.push(`${describe(operation)}:operator_unavailable_expected:503:operator_unavailable:got:${unavailable.statusCode}:${unavailable.errorCode ?? "no_code"}`);
+      }
+      if (unavailable.headers?.["cache-control"] !== "private, no-store") failures.push(`${describe(operation)}:operator_no_store_header_missing`);
     } else if (operation.profile === "webhook") {
       const missingAuthorization = await probe(app, operation);
       if (missingAuthorization.statusCode !== 401 || missingAuthorization.errorCode !== "revenuecat_webhook_unauthorized") {

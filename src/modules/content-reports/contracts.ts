@@ -106,8 +106,30 @@ export type ContentReportView = Readonly<{
   updatedAt: string;
 }>;
 
+export type OperatorContentReportItem = Readonly<{
+  clientSubmissionId: string;
+  trackId: string;
+  contentVersion: string;
+  itemId: string;
+  reason: CreateContentReport["reason"];
+  status: ContentReportStatus;
+  createdAt: string;
+  updatedAt: string;
+}>;
+
+export type OperatorContentReportDetail = Readonly<Pick<ContentReportView,
+  "clientSubmissionId" | "trackId" | "contentVersion" | "itemId" | "reason" | "description" | "context" | "linkage" | "status" | "createdAt" | "updatedAt"
+>>;
+
+export type ContentReportOperatorQueue = Readonly<{
+  items: readonly OperatorContentReportItem[];
+  truncated: boolean;
+}>;
+
 export interface ContentReportStore {
   create(userId: string | undefined, expectedAuthorizationGeneration: number | undefined, input: CreateContentReport, context: Readonly<{ rateLimitKey: string }>): Promise<Readonly<{ report: ContentReportView; duplicate: boolean }>>;
   listQueue(): Promise<readonly ContentReportView[]>;
-  transitionStatus(clientSubmissionId: string, actorId: string, nextStatus: ContentReportStatus): Promise<Readonly<{ report: ContentReportView; duplicate: boolean }>>;
+  listOperatorQueue(actorId: string): Promise<ContentReportOperatorQueue>;
+  readOperator(clientSubmissionId: string, actorId: string): Promise<OperatorContentReportDetail | null>;
+  transitionStatus(clientSubmissionId: string, actorId: string, nextStatus: ContentReportStatus, expectedStatus?: ContentReportStatus): Promise<Readonly<{ report: ContentReportView; duplicate: boolean }>>;
 }

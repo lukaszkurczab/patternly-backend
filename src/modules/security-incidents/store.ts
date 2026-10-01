@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { Timestamp, type Firestore, type Transaction } from "firebase-admin/firestore";
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
+import { canonicalJson } from "../../infrastructure/identity/canonicalJson.js";
 import { asRecord, asTimestamp } from "../../infrastructure/firestore/values.js";
 import { incidentArtifactExpiry, incidentDeadline, incidentRetentionExpiry, type AuthorityDeliveryStatus, type IncidentClassification, type IncidentDecision, type SecurityIncidentAction, type SubjectNotificationStatus } from "./contracts.js";
 
@@ -15,6 +16,7 @@ export type SecurityIncidentListItem = Readonly<{
   awarenessAt: string | null; authorityDeadlineAt: string | null; closedAt: string | null; revision: number; legalHold: boolean;
   nextAction: "acknowledge_awareness" | "classify" | "decide_authority" | "prepare_authority_export" | "record_authority_submission" | "decide_subject" | "prepare_subject_notification" | "resolve_subject_notification_unknown" | "send_subject_notification" | "close" | "none";
 }>;
+export type SecurityIncidentOperatorQueue = Readonly<{ items: readonly SecurityIncidentListItem[]; truncated: boolean }>;
 
 export type SecurityIncidentDetails = SecurityIncidentListItem & Readonly<{
   title: string; details: string; assessment: Readonly<Record<string, unknown>>; createdAt: string; updatedAt: string; authorityExportVersion: number | null; assessmentVersion: number; authorityReason: string | null; subjectReason: string | null;
@@ -28,8 +30,9 @@ export interface SecurityIncidentEmailSender {
 }
 
 export interface SecurityIncidentStore {
-  create(actorId: string, input: Readonly<Record<string, unknown>>): Promise<SecurityIncidentDetails>;
+  create(actorId: string, input: Readonly<Record<string, unknown>>, clientIncidentId?: string): Promise<SecurityIncidentDetails>;
   listAdmin(): Promise<readonly SecurityIncidentListItem[]>;
+  listOperatorQueue(actorId: string): Promise<SecurityIncidentOperatorQueue>;
   readAdmin(incidentId: string, actorId: string): Promise<SecurityIncidentDetails | null>;
   readAuthorityExport(incidentId: string, version: number, actorId: string): Promise<Readonly<{ payload: string; digest: string; version: number }> | null>;
   act(incidentId: string, actorId: string, action: SecurityIncidentAction, sender: SecurityIncidentEmailSender | null): Promise<SecurityIncidentDetails>;
@@ -43,12 +46,25 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
     if (Buffer.byteLength(auditHmacSecret, "utf8") < 32) throw new Error("security_incident_audit_secret_invalid");
   }
 
-  public async create(actorId: string, input: Readonly<Record<string, unknown>>): Promise<SecurityIncidentDetails> {
-    const incidentId = `si_${randomUUID()}`;
+  public async create(actorId: string, input: Readonly<Record<string, unknown>>, clientIncidentId?: string): Promise<SecurityIncidentDetails> {
+    if (clientIncidentId !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(clientIncidentId)) throw new Error("security_incident_idempotency_key_invalid");
+    const fingerprint = clientIncidentId === undefined
+      ? undefined
+      : createHmac("sha256", this.auditHmacSecret).update(`security-incident-idempotency\0${canonicalJson(input)}`, "utf8").digest("hex");
+    const incidentId = `si_${clientIncidentId ?? randomUUID()}`;
     const now = new Date();
-    const record = { classification: "triage", authorityDecision: "undecided", authorityDeliveryStatus: "not_started", subjectDecision: "undecided", subjectNotificationStatus: "not_started", awarenessAt: null, authorityDeadlineAt: null, closedAt: null, revision: 0, assessmentVersion: 1, legalHold: false, createdAt: Timestamp.fromDate(now), updatedAt: Timestamp.fromDate(now) };
+    const record = { classification: "triage", authorityDecision: "undecided", authorityDeliveryStatus: "not_started", subjectDecision: "undecided", subjectNotificationStatus: "not_started", awarenessAt: null, authorityDeadlineAt: null, closedAt: null, revision: 0, assessmentVersion: 1, legalHold: false, ...(fingerprint === undefined ? {} : { clientPayloadFingerprint: fingerprint }), createdAt: Timestamp.fromDate(now), updatedAt: Timestamp.fromDate(now) };
     await this.db.runTransaction(async (tx) => {
-      tx.create(this.incidentRef(incidentId), record);
+      const incidentRef = this.incidentRef(incidentId);
+      const existing = await tx.get(incidentRef);
+      if (existing.exists) {
+        const existingData = asRecord(existing.data(), "security_incident");
+        if (fingerprint === undefined || existingData.clientPayloadFingerprint !== fingerprint) throw new Error("security_incident_idempotency_conflict");
+        const secret = await tx.get(this.secretRef(incidentId));
+        if (!secret.exists) throw new Error("security_incident_secret_missing");
+        return;
+      }
+      tx.create(incidentRef, record);
       tx.create(this.secretRef(incidentId), { payload: this.encrypt(JSON.stringify({ ...input, assessments: [{ version: 1, ...input, createdAt: now.toISOString() }] })), createdAt: Timestamp.fromDate(now), expiresAt: null });
       this.audit(tx, incidentId, actorId, "incident_created", now);
     });
@@ -59,6 +75,29 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
     const snapshot = await this.db.collection(COLLECTIONS.securityIncidents).orderBy("createdAt", "desc").limit(LIST_LIMIT).get();
     await Promise.all(snapshot.docs.map((doc) => this.materializeReminders(doc.id)));
     return Object.freeze(snapshot.docs.map((doc) => this.toList(doc.id, asRecord(doc.data(), "security_incident"))));
+  }
+
+  public async listOperatorQueue(actorId: string): Promise<SecurityIncidentOperatorQueue> {
+    const snapshot = await this.db.collection(COLLECTIONS.securityIncidents).orderBy("createdAt", "desc").limit(LIST_LIMIT + 1).get();
+    const selected = snapshot.docs.slice(0, LIST_LIMIT);
+    if (selected.length > 0) {
+      const occurredAt = new Date();
+      await this.db.runTransaction(async (transaction) => {
+        for (const document of selected) {
+          const data = asRecord(document.data(), "security_incident");
+          const expiry = data.closedAt
+            ? data.legalHold === true
+              ? null
+              : Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(data.closedAt, "closed_at").toDate()))
+            : undefined;
+          this.audit(transaction, document.id, actorId, "operator_queue_read", occurredAt, undefined, undefined, undefined, expiry);
+        }
+      });
+    }
+    return Object.freeze({
+      items: Object.freeze(selected.map((document) => this.toList(document.id, asRecord(document.data(), "security_incident")))),
+      truncated: snapshot.docs.length > LIST_LIMIT,
+    });
   }
 
   public async readAdmin(incidentId: string, actorId: string): Promise<SecurityIncidentDetails | null> {
