@@ -86,7 +86,7 @@ test("unready runtime response matches the documented 503 schema", async () => {
 
 test("runtime parity uses the real app, normalizes parameters, and ignores automatic HEAD", async () => {
   const routes = await runtimeInventory();
-  assert.equal(routes.length, 72);
+  assert.equal(routes.length, 76);
   assert.equal(routes.find((route) => operationKey(route.method, route.path) === "POST /v1/account/registration")?.securityProfile, "app_check_verify_only_bearer");
   assert.equal(routes.find((route) => operationKey(route.method, route.path) === "POST /v1/account/session/exchange")?.securityProfile, "app_check_verify_only_bearer");
   assert.equal(OPENAPI_DOCUMENT.paths["/v1/account/session/exchange"].post.requestBody.required, false);
@@ -152,6 +152,42 @@ test("every account-resolving operation documents account_not_found", () => {
     }
   }
   assert.ok(documented.length > 0);
+});
+
+test("recovery operation routes document strict operation-bound payloads, guards, and no-store responses", () => {
+  const document = OPENAPI_DOCUMENT as unknown as MutableDocument;
+  const issue = operation(document, "POST /v1/account/recovery-codes");
+  const consume = operation(document, "POST /v1/public/recovery-codes/consume");
+  const consumeStatus = operation(document, "POST /v1/public/recovery-codes/consume/status");
+  const consumeAck = operation(document, "POST /v1/account/recovery-codes/consume/ack");
+  const issueStatus = operation(document, "GET /v1/account/recovery-codes/issue/status");
+  const issueAck = operation(document, "POST /v1/account/recovery-codes/issue/saved-ack");
+  assert.equal(OPENAPI_DOCUMENT.paths["/v1/account/recovery-codes"]["x-patternly-security-profile"], "app_check_bearer");
+  assert.equal(OPENAPI_DOCUMENT.paths["/v1/public/recovery-codes/consume"]["x-patternly-security-profile"], "app_check_only");
+  assert.equal(OPENAPI_DOCUMENT.paths["/v1/public/recovery-codes/consume/status"]["x-patternly-security-profile"], "app_check_only");
+  const paths = OPENAPI_DOCUMENT.paths as unknown as Record<string, { "x-patternly-security-profile"?: string }>;
+  for (const path of ["/v1/account/recovery-codes/consume/ack", "/v1/account/recovery-codes/issue/status", "/v1/account/recovery-codes/issue/saved-ack"]) {
+    assert.equal(paths[path]?.["x-patternly-security-profile"], "bearer");
+  }
+  assert.deepEqual(issueStatus.parameters, [{ name: "operationId", in: "query", required: true, schema: { type: "string", format: "uuid" } }]);
+
+  const schemas = OPENAPI_DOCUMENT.components.schemas;
+  const validator = new Ajv2020({ strict: false });
+  const issueRequest = validator.compile(schemas.OperationRequest);
+  const consumeRequest = validator.compile(schemas.RecoveryCodeConsumeRequest);
+  assert.equal(issueRequest({ operationId: "11111111-1111-4111-8111-111111111111" }), true);
+  assert.equal(issueRequest({}), false);
+  assert.equal(issueRequest({ legacy: true }), false);
+  assert.equal(consumeRequest({ operationId: "11111111-1111-4111-8111-111111111111", code: "ABCD-EFGH-JKLM-NPQR" }), true);
+  assert.equal(consumeRequest({ code: "ABCD-EFGH-JKLM-NPQR" }), false);
+  assert.equal(consumeRequest({ operationId: "11111111-1111-4111-8111-111111111111", code: "ABCD-EFGH-JKLM-NPQR", legacy: true }), false);
+
+  for (const route of [issue, consume, consumeStatus, consumeAck, issueStatus, issueAck]) {
+    for (const response of Object.values(route.responses as Record<string, Record<string, unknown>>)) {
+      const cacheControl = (response.headers as Record<string, { schema?: { const?: string } }> | undefined)?.["Cache-Control"]?.schema?.const;
+      assert.equal(cacheControl, "private, no-store", "every recovery response must be non-cacheable");
+    }
+  }
 });
 
 test("behavioral security probes reject a no-op guard fixture", async () => {

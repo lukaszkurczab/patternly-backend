@@ -12,6 +12,8 @@ export const COLLECTIONS = Object.freeze({
   identityMappings: "identityMappings",
   rateLimitBuckets: "rateLimitBuckets",
   recoveryCodeIndex: "recoveryCodeIndex",
+  accountRecoveryOperations: "accountRecoveryOperations",
+  accountRecoveryOperationResults: "accountRecoveryOperationResults",
   sessionRevocationOperations: "sessionRevocationOperations",
   accountDataExportAudits: "accountDataExportAudits",
   accountDataExportRateLimits: "accountDataExportRateLimits",

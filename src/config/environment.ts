@@ -34,6 +34,9 @@ const environmentSchema = z.object({
   ACCOUNT_DATA_EXPORT_MAX_SERIALIZED_BYTES: z.coerce.number().int().positive().max(50 * 1024 * 1024).default(5 * 1024 * 1024),
   PRIVACY_RESPONSE_KEY_BASE64: z.string().min(1),
   PRIVACY_AUDIT_HMAC_SECRET: z.string().min(32),
+  RECOVERY_OPERATION_KEYS_JSON: z.string().min(1).optional(),
+  RECOVERY_OPERATION_RATE_LIMIT_MAX: z.coerce.number().int().positive().max(600).default(30),
+  RECOVERY_OPERATION_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().max(3_600).default(60),
   REVENUECAT_API_BASE_URL: z.string().url().default("https://api.revenuecat.com"),
   REVENUECAT_READ_API_KEY: z.string().min(1).optional(),
   REVENUECAT_WEBHOOK_SECRET: z.string().min(1).optional(),
@@ -72,6 +75,9 @@ export type Environment = Readonly<{
   accountDataExportMaxSerializedBytes: number;
   privacyResponseKeyBase64: string;
   privacyAuditHmacSecret: string;
+  recoveryOperationKeysJson: string | undefined;
+  recoveryOperationRateLimitMax: number;
+  recoveryOperationRateLimitWindowSeconds: number;
   revenueCatApiBaseUrl: string;
   revenueCatReadApiKey: string | undefined;
   revenueCatWebhookSecret: string | undefined;
@@ -120,6 +126,9 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     accountDataExportMaxSerializedBytes: value.ACCOUNT_DATA_EXPORT_MAX_SERIALIZED_BYTES,
     privacyResponseKeyBase64: value.PRIVACY_RESPONSE_KEY_BASE64,
     privacyAuditHmacSecret: value.PRIVACY_AUDIT_HMAC_SECRET,
+    recoveryOperationKeysJson: value.RECOVERY_OPERATION_KEYS_JSON,
+    recoveryOperationRateLimitMax: value.RECOVERY_OPERATION_RATE_LIMIT_MAX,
+    recoveryOperationRateLimitWindowSeconds: value.RECOVERY_OPERATION_RATE_LIMIT_WINDOW_SECONDS,
     revenueCatApiBaseUrl: value.REVENUECAT_API_BASE_URL,
     revenueCatReadApiKey: value.REVENUECAT_READ_API_KEY,
     revenueCatWebhookSecret: value.REVENUECAT_WEBHOOK_SECRET,

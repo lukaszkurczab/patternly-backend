@@ -3264,52 +3264,71 @@
       "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
-        "description": "Replace the account's ten one-time recovery codes after recent reauthentication",
+        "description": "Start or replay one operation-bound recovery-code issue after recent reauthentication",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/EmptyRequest"
+                "$ref": "#/components/schemas/OperationRequest"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Recovery codes returned once",
+            "description": "Issue operation status and codes only while the original recovery deadline permits",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": [
-                    "generationId",
-                    "codes"
-                  ],
-                  "properties": {
-                    "generationId": {
-                      "type": "string"
-                    },
-                    "codes": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    }
-                  }
+                  "$ref": "#/components/schemas/RecoveryCodeIssueResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid operation request",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
           },
           "401": {
-            "description": "Recent reauthentication required or account is inactive",
+            "description": "Recent reauthentication or an active account is required",
             "x-patternly-error-codes": [
               "recent_reauthentication_required",
               "account_deleted",
               "authorization_generation_required",
-              "authorization_generation_invalid"
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
             ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -3319,10 +3338,18 @@
             }
           },
           "404": {
-            "description": "account_not_found when the verified bearer identity has no Patternly account",
+            "description": "Account unavailable; account_not_found when the verified bearer identity has no Patternly account",
             "x-patternly-error-codes": [
               "account_not_found"
             ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -3332,10 +3359,60 @@
             }
           },
           "409": {
-            "description": "Authorization generation changed before recovery codes were issued",
+            "description": "Authorization generation or another security operation conflicts",
             "x-patternly-error-codes": [
-              "authorization_generation_conflict"
+              "authorization_generation_conflict",
+              "recovery_operation_conflict",
+              "recovery_operation_in_progress"
             ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Recovery operation rate limit exceeded",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Recovery operations are unavailable or retryable",
+            "x-patternly-error-codes": [
+              "recovery_operations_unavailable",
+              "recovery_operation_pending"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -3365,7 +3442,7 @@
             "appCheckAuth": []
           }
         ],
-        "description": "Consume one possession recovery code and issue a Firebase custom token",
+        "description": "Start or replay possession-based recovery with an operation ID and code proof",
         "requestBody": {
           "required": true,
           "content": {
@@ -3378,27 +3455,54 @@
         },
         "responses": {
           "200": {
-            "description": "Recovery code consumed",
+            "description": "Consume operation status; a result includes the generation-pinned custom token",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": [
-                    "customToken"
-                  ],
-                  "properties": {
-                    "customToken": {
-                      "type": "string",
-                      "minLength": 1
-                    }
-                  }
+                  "$ref": "#/components/schemas/RecoveryConsumeResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid operation request",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
           },
           "401": {
-            "description": "Invalid recovery code",
+            "description": "Invalid recovery proof",
+            "x-patternly-error-codes": [
+              "recovery_code_invalid"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -3408,7 +3512,60 @@
             }
           },
           "409": {
-            "description": "Recovery code already used",
+            "description": "Recovery operation conflicts",
+            "x-patternly-error-codes": [
+              "recovery_code_used",
+              "recovery_operation_conflict",
+              "recovery_operation_in_progress"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Recovery operation rate limit exceeded",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Recovery operation unavailable or retryable",
+            "x-patternly-error-codes": [
+              "recovery_operations_unavailable",
+              "recovery_operation_pending"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -3420,6 +3577,625 @@
         },
         "operationId": "post_v1_public_recovery_codes_consume",
         "x-patternly-security-profile": "app_check_only",
+        "x-patternly-consumer-scope": "mobile"
+      }
+    },
+    "/v1/public/recovery-codes/consume/status": {
+      "x-patternly-security-profile": "app_check_only",
+      "x-patternly-consumer-scope": "mobile",
+      "post": {
+        "security": [
+          {
+            "appCheckAuth": []
+          }
+        ],
+        "description": "Read only a consume operation proven by its operation ID and recovery code",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryCodeConsumeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Operation status or uniform expired-or-invalid result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryConsumeResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid proof request",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Recovery operation rate limit exceeded",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Recovery operations are unavailable",
+            "x-patternly-error-codes": [
+              "recovery_operations_unavailable",
+              "recovery_operation_pending"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_v1_public_recovery_codes_consume_status",
+        "x-patternly-security-profile": "app_check_only",
+        "x-patternly-consumer-scope": "mobile"
+      }
+    },
+    "/v1/account/recovery-codes/consume/ack": {
+      "x-patternly-security-profile": "bearer",
+      "x-patternly-consumer-scope": "mobile",
+      "post": {
+        "description": "Acknowledge a consumed recovery operation for the current account generation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recovery operation acknowledged",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryOperationAcknowledgement"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid operation request",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication or account authorization required",
+            "x-patternly-error-codes": [
+              "authentication_required",
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Account unavailable; account_not_found when the verified bearer identity has no Patternly account",
+            "x-patternly-error-codes": [
+              "account_not_found"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Operation or authorization generation conflicts",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict",
+              "recovery_operation_conflict"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Recovery operation rate limit exceeded",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Recovery operations are unavailable",
+            "x-patternly-error-codes": [
+              "recovery_operations_unavailable",
+              "recovery_operation_pending"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_v1_account_recovery_codes_consume_ack",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "bearer",
+        "x-patternly-consumer-scope": "mobile"
+      }
+    },
+    "/v1/account/recovery-codes/issue/status": {
+      "x-patternly-security-profile": "bearer",
+      "x-patternly-consumer-scope": "mobile",
+      "get": {
+        "description": "Read the current account's issue operation; retry may return codes only while the original deadline remains open",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Issue operation status",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodeIssueResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid operation query",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication or account authorization required",
+            "x-patternly-error-codes": [
+              "authentication_required",
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Operation unavailable; account_not_found when the verified bearer identity has no Patternly account",
+            "x-patternly-error-codes": [
+              "recovery_operation_unavailable",
+              "account_not_found"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Operation or authorization generation conflicts",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict",
+              "recovery_operation_conflict"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Recovery operation rate limit exceeded",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Recovery operations are unavailable",
+            "x-patternly-error-codes": [
+              "recovery_operations_unavailable",
+              "recovery_operation_pending"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_v1_account_recovery_codes_issue_status",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "bearer",
+        "x-patternly-consumer-scope": "mobile"
+      }
+    },
+    "/v1/account/recovery-codes/issue/saved-ack": {
+      "x-patternly-security-profile": "bearer",
+      "x-patternly-consumer-scope": "mobile",
+      "post": {
+        "description": "Acknowledge that issued recovery codes were saved by the authenticated account",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Issue operation acknowledged",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryOperationAcknowledgement"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid operation request",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication or account authorization required",
+            "x-patternly-error-codes": [
+              "authentication_required",
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Account unavailable; account_not_found when the verified bearer identity has no Patternly account",
+            "x-patternly-error-codes": [
+              "account_not_found",
+              "recovery_operation_unavailable"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Operation or authorization generation conflicts",
+            "x-patternly-error-codes": [
+              "authorization_generation_conflict",
+              "recovery_operation_conflict"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Recovery operation rate limit exceeded",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Recovery operations are unavailable",
+            "x-patternly-error-codes": [
+              "recovery_operations_unavailable",
+              "recovery_operation_pending"
+            ],
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_v1_account_recovery_codes_issue_saved_ack",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
@@ -9179,12 +9955,154 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "operationId",
           "code"
         ],
         "properties": {
+          "operationId": {
+            "type": "string",
+            "format": "uuid"
+          },
           "code": {
             "type": "string",
             "pattern": "^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){3}$"
+          }
+        }
+      },
+      "RecoveryOperationProgress": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operationId",
+          "status"
+        ],
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "acknowledged",
+              "delivery_unconfirmed",
+              "superseded",
+              "expired_or_invalid",
+              "provider_retryable"
+            ]
+          },
+          "authorizationGeneration": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "RecoveryConsumeResult": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/RecoveryOperationProgress"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "operationId",
+              "status",
+              "firebaseUid",
+              "authorizationGeneration",
+              "customToken"
+            ],
+            "properties": {
+              "operationId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "status": {
+                "type": "string",
+                "const": "result_available"
+              },
+              "firebaseUid": {
+                "type": "string",
+                "minLength": 1
+              },
+              "authorizationGeneration": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "customToken": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        ]
+      },
+      "RecoveryCodeIssueResult": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/RecoveryOperationProgress"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "operationId",
+              "status",
+              "generationId",
+              "authorizationGeneration",
+              "codes"
+            ],
+            "properties": {
+              "operationId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "status": {
+                "type": "string",
+                "const": "result_available"
+              },
+              "generationId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "authorizationGeneration": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "codes": {
+                "type": "array",
+                "minItems": 10,
+                "maxItems": 10,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){3}$"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "RecoveryOperationAcknowledgement": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operationId",
+          "status",
+          "authorizationGeneration"
+        ],
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "const": "acknowledged"
+          },
+          "authorizationGeneration": {
+            "type": "integer",
+            "minimum": 1
           }
         }
       },

@@ -8,7 +8,7 @@ export const smokeEndpoints = Object.freeze({
 export const localSmokeEntitlementStateEnvironmentKey = "PATTERNLY_LOCAL_SMOKE_ENTITLEMENT_STATE";
 const localSmokeEntitlement = "premium";
 const localSmokeProductId = "com.lkurczab.patternly.premium.monthly";
-export type SmokeSecrets = { appCheckToken: string; storageKey: string; hmacKey: string };
+export type SmokeSecrets = { appCheckToken: string; storageKey: string; hmacKey: string; recoveryOperationKey: string };
 
 export function smokeEnvironment(source: NodeJS.ProcessEnv, secrets: SmokeSecrets) {
   if (source.NODE_ENV === "production") throw new Error("local_smoke_forbidden_in_production");
@@ -26,6 +26,7 @@ export function smokeEnvironment(source: NodeJS.ProcessEnv, secrets: SmokeSecret
     REPORT_RATE_LIMIT_HASH_SECRET: secrets.hmacKey, PRIVACY_AUDIT_HMAC_SECRET: secrets.hmacKey,
     PRIVACY_RESPONSE_KEY_BASE64: Buffer.from(secrets.storageKey, "hex").toString("base64"),
     DELETION_PSEUDONYM_KEYS_JSON: JSON.stringify([{ version: "local-v1", status: "active", keyBase64: Buffer.from(secrets.storageKey, "hex").toString("base64") }]),
+    RECOVERY_OPERATION_KEYS_JSON: JSON.stringify({ version: 1, keys: [{ version: "local-v1", status: "active", keyBase64: Buffer.from(secrets.recoveryOperationKey, "hex").toString("base64") }] }),
   });
 }
 

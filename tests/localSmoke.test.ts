@@ -3,12 +3,14 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { buildApplication } from "../src/api/app.js";
 import { localAppCheckVerifier, localSmokeRevenueCatEntitlementReader, smokeEndpoints, smokeEnvironment } from "../scripts/localSmoke.js";
-const keys = { appCheckToken: "a".repeat(64), storageKey: "b".repeat(64), hmacKey: "c".repeat(64) };
+const keys = { appCheckToken: "a".repeat(64), storageKey: "b".repeat(64), hmacKey: "c".repeat(64), recoveryOperationKey: "d".repeat(64) };
 const source = { FIREBASE_PROJECT_ID: smokeEndpoints.project, FIREBASE_AUTH_EMULATOR_HOST: smokeEndpoints.auth, FIRESTORE_EMULATOR_HOST: smokeEndpoints.firestore };
 test("smoke launcher requires existing local emulator configuration and excludes remote integrations", () => {
   const env = smokeEnvironment({ ...source, SMTP_HOST: "remote.invalid", REVENUECAT_READ_API_KEY: "remote", HOST: "0.0.0.0" }, keys);
   assert.equal(env.host, "127.0.0.1"); assert.equal(env.port, 8080);
   assert.equal(env.smtp, null); assert.equal(env.revenueCatReadApiKey, undefined);
+  assert.equal(Object.hasOwn(env, "recoveryOperationTerminalRetentionMs"), false);
+  assert.notEqual(Buffer.from(JSON.parse(env.recoveryOperationKeysJson!).keys[0].keyBase64, "base64").toString("hex"), keys.storageKey);
   for (const change of [{ NODE_ENV: "production" }, { FIREBASE_PROJECT_ID: "production" }, { FIREBASE_AUTH_EMULATOR_HOST: "remote:19099" }, { FIRESTORE_EMULATOR_HOST: "" }]) {
     assert.throws(() => smokeEnvironment({ ...source, ...change }, keys));
   }
@@ -79,6 +81,7 @@ test("local smoke rejects unknown entitlement state and remains isolated from pr
     readFile(new URL("../src/index.ts", import.meta.url), "utf8"),
   ]);
   assert.match(launcher, /localSmokeRevenueCatEntitlementReader\(process\.env\[localSmokeEntitlementStateEnvironmentKey\]\)/u);
+  assert.match(launcher, /if \(typeof secrets\.recoveryOperationKey !== "string"\)[\s\S]*?secrets = \{ \.\.\.secrets, recoveryOperationKey: randomBytes\(32\)\.toString\("hex"\) \}[\s\S]*?writeFile\(path, JSON\.stringify\(secrets\), \{ mode: 0o600 \}\)/u);
   assert.match(launcher, /revenueCatEntitlementReader/u);
   assert.match(launcher, /Local smoke API:.*entitlement fixture \(not provider attestation\); SMTP and remote RevenueCat disabled/u);
   assert.doesNotMatch(production, /localSmokeRevenueCatEntitlementReader|localSmokeEntitlementStateEnvironmentKey|com\.lkurczab\.patternly\.premium\.monthly/u);

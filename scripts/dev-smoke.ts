@@ -13,8 +13,12 @@ let secrets: SmokeSecrets;
 try { secrets = JSON.parse(await readFile(path, "utf8")) as SmokeSecrets; }
 catch (error) {
   if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  secrets = { appCheckToken: randomBytes(32).toString("hex"), storageKey: randomBytes(32).toString("hex"), hmacKey: randomBytes(32).toString("hex") };
+  secrets = { appCheckToken: randomBytes(32).toString("hex"), storageKey: randomBytes(32).toString("hex"), hmacKey: randomBytes(32).toString("hex"), recoveryOperationKey: randomBytes(32).toString("hex") };
   await writeFile(path, JSON.stringify(secrets), { mode: 0o600, flag: "wx" });
+}
+if (typeof secrets.recoveryOperationKey !== "string") {
+  secrets = { ...secrets, recoveryOperationKey: randomBytes(32).toString("hex") };
+  await writeFile(path, JSON.stringify(secrets), { mode: 0o600 });
 }
 await chmod(path, 0o600);
 const environment = smokeEnvironment(process.env, secrets);

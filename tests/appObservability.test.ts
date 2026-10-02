@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import test from "node:test";
 import { buildApplication } from "../src/api/app.js";
 import { createLogger } from "../src/infrastructure/logging/logger.js";
@@ -80,6 +81,120 @@ test("App Check rejections log only a bounded code and server correlation ID", a
     for (const canary of ["private-auth-token", "private-invalid-app-check-token", "private-valid-looking-token", "private-query@example.invalid", clientCorrelationId]) assert.doesNotMatch(serialized, new RegExp(canary, "u"));
   }
 });
+
+test("recovery routes set no-store before guards and fail unavailable before any rate-limit write", async () => {
+  const output: string[] = [];
+  const app = application({}, output);
+  try {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/public/recovery-codes/consume",
+      headers: { "x-firebase-appcheck": "observability-test-app-check" },
+      payload: { operationId: "11111111-1111-4111-8111-111111111111", code: "ABCD-EFGH-JKLM-NPQR" },
+    });
+    assert.equal(response.statusCode, 503);
+    assert.equal(response.json().error.code, "recovery_operations_unavailable");
+    assert.equal(response.headers["cache-control"], "private, no-store");
+
+    const rejected = await app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", payload: {} });
+    assert.equal(rejected.statusCode, 401);
+    assert.equal(rejected.headers["cache-control"], "private, no-store");
+  } finally {
+    await app.close();
+  }
+});
+
+test("recovery rate limiting hashes the requester before storage and never logs proof codes", async () => {
+  const recoveryEnvironment: Environment = Object.freeze({
+    ...environment,
+    recoveryOperationKeysJson: JSON.stringify({ version: 1, keys: [{ version: "v1", status: "active", keyBase64: Buffer.alloc(32, 17).toString("base64") }] }),
+    recoveryOperationRateLimitMax: 2,
+    recoveryOperationRateLimitWindowSeconds: 60,
+  });
+  const proof = "ABCD-EFGH-JKLM-NPQR";
+  const output: string[] = [];
+  const limitCalls: Readonly<{ hash: string; max: number; windowSeconds: number }>[] = [];
+  let consumeCalls = 0;
+  const stores = {
+    users: { resolveExistingUser: async () => ({ userId: "server-user", authorizationGeneration: 1 }) },
+    accountLifecycle: {
+      claimRecoveryRequestRateLimit: async (hash: string, max: number, windowSeconds: number) => {
+        limitCalls.push({ hash, max, windowSeconds });
+        throw new Error("recovery_rate_limited");
+      },
+      consumeRecoveryCode: async () => { consumeCalls += 1; throw new Error("must_not_mint"); },
+    },
+  } as unknown as BackendStores;
+  const app = buildApplication({
+    environment: recoveryEnvironment,
+    firestore: null,
+    verifier: null,
+    appCheckVerifier: { verify: async (token) => { if (token !== "observability-test-app-check") throw new Error("app_check_invalid"); } },
+    stores,
+    logStream: { write: (line) => { output.push(line); } },
+  });
+  let response: Awaited<ReturnType<typeof app.inject>>;
+  try {
+    response = await app.inject({
+      method: "POST",
+      url: "/v1/public/recovery-codes/consume",
+      headers: { "x-firebase-appcheck": "observability-test-app-check" },
+      payload: { operationId: "11111111-1111-4111-8111-111111111111", code: proof },
+    });
+  } finally {
+    await app.close();
+  }
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.headers["cache-control"], "private, no-store");
+  assert.equal(consumeCalls, 0);
+  assert.deepEqual(limitCalls, [{
+    hash: createHmac("sha256", environment.reportRateLimitHashSecret).update("patternly:recovery-operation-rate-limit:v1\0").update("127.0.0.1").digest("hex"),
+    max: 2,
+    windowSeconds: 60,
+  }]);
+  assert.doesNotMatch(output.join(""), new RegExp(proof, "u"));
+});
+test("recovery contention and damaged persisted security state return explicit contract errors without exposing proof", async () => {
+  for (const scenario of [
+    { failure: "operation_in_progress", limiter: false, status: 409, code: "recovery_operation_in_progress" },
+    { failure: "recovery_rate_limit_invalid", limiter: true, status: 503, code: "recovery_operations_unavailable" },
+    { failure: "invalid_recovery_operation_envelope", limiter: false, status: 503, code: "recovery_operations_unavailable" },
+    { failure: "recovery_operation_encryption_failed", limiter: false, status: 503, code: "recovery_operations_unavailable" },
+    { failure: "recovery_operation_invalid", limiter: false, status: 503, code: "recovery_operations_unavailable" },
+    { failure: "invalid_recovery_operation_context", limiter: false, status: 503, code: "recovery_operations_unavailable" },
+  ]) {
+    const output: string[] = [];
+    let consumeCalls = 0;
+    const proof = "ABCD-EFGH-JKLM-NPQR";
+    const stores = {
+      accountLifecycle: {
+        claimRecoveryRequestRateLimit: async () => { if (scenario.limiter) throw new Error(scenario.failure); },
+        consumeRecoveryCode: async () => { consumeCalls += 1; throw new Error(scenario.failure); },
+      },
+    } as unknown as BackendStores;
+    const app = buildApplication({
+      environment: Object.freeze({ ...environment, recoveryOperationKeysJson: JSON.stringify({ version: 1, keys: [{ version: "v1", status: "active", keyBase64: Buffer.alloc(32, 17).toString("base64") }] }) }),
+      firestore: null, verifier: null,
+      appCheckVerifier: { verify: async () => undefined },
+      stores, logStream: { write: (line) => { output.push(line); } },
+    });
+    try {
+      const response = await app.inject({
+        method: "POST", url: "/v1/public/recovery-codes/consume",
+        headers: { "x-firebase-appcheck": "observability-test-app-check" },
+        payload: { operationId: "11111111-1111-4111-8111-111111111111", code: proof },
+      });
+      assert.equal(response.statusCode, scenario.status);
+      assert.deepEqual(response.json(), { error: { code: scenario.code } });
+      assert.equal(response.headers["cache-control"], "private, no-store");
+      assert.equal(consumeCalls, scenario.limiter ? 0 : 1);
+      assert.doesNotMatch(output.join(""), new RegExp(proof, "u"));
+    } finally {
+      await app.close();
+    }
+  }
+});
+
 const validSyncPayload = {
   canonicalVersion: "canonical-json-v1",
   expectedAccountRevision: 0,

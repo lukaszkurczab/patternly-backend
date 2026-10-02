@@ -33,6 +33,8 @@ Cloud Run service configuration:
   RevenueCat, supplied through Secret Manager and never stored in source;
 - `REVENUECAT_READ_API_KEY` — a server-only RevenueCat API key with customer-read permission, supplied through Secret Manager. Without it the authenticated `/v1/entitlements` refresh returns `503`; a webhook projection is not presented as a fresh provider read;
 - `DELETION_PSEUDONYM_KEYS_JSON` — a Secret Manager value containing exactly one `active` HMAC key and any `verify_only` predecessors. Grant the Cloud Run runtime service account only `roles/secretmanager.secretAccessor` on this secret; never expose its material in source control, build logs or ordinary environment files;
+- `RECOVERY_OPERATION_KEYS_JSON` — a dedicated Secret Manager keyring for recovery operation results, with exactly one `active` 32-byte AES-256 key and any retained `decrypt_only` predecessors. Generate independent random key material and never reuse the privacy-response encryption key or deletion pseudonym keys. The backend rejects recovery key reuse against the privacy-response key. If this secret is absent, recovery operations fail closed with `503`; there is no privacy-key fallback;
+- `RECOVERY_OPERATION_RATE_LIMIT_MAX` and `RECOVERY_OPERATION_RATE_LIMIT_WINDOW_SECONDS` — optional bounded controls for durable recovery-request rate limits; defaults are 30 requests per 60 seconds. Rate-limit requester identities are domain-separated HMACs, never raw IP addresses or recovery codes;
 - `LOG_LEVEL` and `NODE_ENV`.
 
 Local question-bank inspection uses the checksum-verified immutable content
@@ -40,10 +42,18 @@ release configured by `npm run dev:admin`. Cloud Run does not serve the panel.
 
 Rotate deletion pseudonym keys by publishing a new secret version with one new `active` key and the previous key marked `verify_only`. Keep a predecessor available for at least 45 days (the tombstone retention period), then remove it only after confirming no unexpired tombstones require it. Revoke a suspected compromised key by replacing the secret, auditing access, and treating affected tombstones as a privacy incident; recovery requires an encrypted, access-audited backup of the keyring. Startup fails closed for missing, malformed, weak, duplicate or ambiguously active keys.
 
+Recovery operation keys use a separate versioned JSON keyring with one `active`
+key and retained `decrypt_only` keys. Keep every predecessor until all encrypted
+recovery-operation results using that version have expired or been acknowledged.
+Publish a new active key before removing an old version; do not change the active
+version while an operation result that depends on it remains recoverable. The
+minimal operation history expires 30 days after ACK or actual supersession;
+unfinished operations and delivery-unconfirmed reissues have no operation TTL.
+Encrypted results keep their independent short deadline.
+
 Before promotion, run `npm run ci` (including the Firebase Emulator Suite),
 run `npm run firestore:ttl:apply -- --project <target-project>` to apply the
-repository-owned export retention policy, verify the Firestore TTL/PITR
-checklist for the target project, and verify
+repository-owned TTL policies, verify the Firestore TTL/PITR checklist for the target project, and verify
 `/health` and `/ready`. `/ready` must not be treated as healthy until
 Firestore, Firebase verifier and App Check wiring are available.
 

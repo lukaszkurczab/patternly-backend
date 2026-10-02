@@ -40,6 +40,10 @@ jobs:
           distribution: temurin
           java-version: '21'
       - run: npm ci
+      - name: Install pinned mobile Firebase SDK dependencies
+        run: npm ci --prefix ../patternly
+      - name: Pin mobile checkout for recovery emulator gate
+        run: echo "PATTERNLY_FRONTEND_EXPECTED_SHA=$(git -C ../patternly rev-parse HEAD)" >> "$GITHUB_ENV"
       - name: Install Firebase Emulator CLI
         run: npm install --global firebase-tools@15.19.0
       - run: npm run ci

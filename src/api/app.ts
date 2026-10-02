@@ -1,6 +1,6 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { DestinationStream } from "pino";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import type { Environment } from "../config/environment.js";
 import type { FirestoreRuntime } from "../infrastructure/firestore/client.js";
 import type { IdentityTokenVerifier } from "../infrastructure/firebase/verifier.js";
@@ -16,7 +16,7 @@ import type { PrivacyRequestDetails } from "../modules/privacy-requests/store.js
 import { createProgressPageToken, isSyncRequestWithinBudget, parseProgressPageToken, syncRequestSchema, type ProgressRecord } from "../modules/progress/contracts.js";
 import { guestMergeConfirmationSchema, guestMergeSnapshotSchema } from "../modules/users/merge.js";
 import { contentReportStatusSchema, createContentReportSchema, transitionContentReportSchema, type ContentReportStatus, type ContentReportView, type OperatorContentReportDetail } from "../modules/content-reports/contracts.js";
-import { accountRecoveryCodeConsumeSchema, accountRecoveryCodeIssueSchema, accountSessionRevokeSchema, accountDeletionRequestSchema, publicDeletionStatusSchema } from "../modules/account-lifecycle/contracts.js";
+import { accountRecoveryCodeConsumeSchema, accountRecoveryCodeIssueSchema, accountRecoveryCodeIssueStatusSchema, accountRecoveryCodeSavedAckSchema, accountRecoveryOperationAckSchema, accountRecoveryOperationStatusSchema, accountSessionRevokeSchema, accountDeletionRequestSchema, publicDeletionStatusSchema } from "../modules/account-lifecycle/contracts.js";
 import { createLogger } from "../infrastructure/logging/logger.js";
 import { DataExportRateLimitError, DataExportTooLargeError } from "../modules/data-export/contracts.js";
 import { createAccountPrivacyRequestSchema, createGuestPrivacyRequestSchema, exchangeGuestPrivacyCodeSchema, privacyRequestAdminActionSchema, publicPrivacySessionSchema, resendGuestPrivacyCodeSchema, PRIVACY_RIGHT_POLICIES } from "../modules/privacy-requests/contracts.js";
@@ -473,6 +473,57 @@ function projectOperatorContentReportDetail(report: OperatorContentReportDetail)
 }
 
 type RoutePreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void> | void;
+
+const recoveryOperationNoStore: RoutePreHandler = async (_request, reply) => { reply.header("cache-control", "private, no-store"); };
+
+function recoveryOperationRuntimeAvailable(environment: Environment): boolean {
+  return environment.recoveryOperationKeysJson !== undefined;
+}
+
+async function claimRecoveryOperationRateLimit(request: FastifyRequest, dependencies: ApplicationDependencies): Promise<void> {
+  const requesterHash = createHmac("sha256", dependencies.environment.reportRateLimitHashSecret)
+    .update("patternly:recovery-operation-rate-limit:v1\0", "utf8")
+    .update(request.ip, "utf8")
+    .digest("hex");
+  await requireStores(dependencies).accountLifecycle.claimRecoveryRequestRateLimit(
+    requesterHash,
+    dependencies.environment.recoveryOperationRateLimitMax,
+    dependencies.environment.recoveryOperationRateLimitWindowSeconds,
+  );
+}
+
+function recoveryOperationErrorResponse(error: unknown, reply: FastifyReply): boolean {
+  const message = error instanceof Error ? error.message : "";
+  if (message === "recovery_rate_limited") {
+    reply.code(429).send({ error: { code: "recovery_rate_limited" } });
+    return true;
+  }
+  if (["recovery_operations_unavailable", "firestore_not_ready", "recovery_rate_limit_invalid", "recovery_operation_invalid", "invalid_recovery_operation_context", "invalid_recovery_operation_envelope", "recovery_operation_encryption_failed", "recovery_operation_decryption_failed", "recovery_operation_key_unavailable", "recovery_operation_result_invalid", "recovery_session_revocation_failed"].includes(message)) {
+    reply.code(503).send({ error: { code: "recovery_operations_unavailable" } });
+    return true;
+  }
+  if (["recovery_code_invalid", "account_deleted", "authorization_generation_required", "authorization_generation_invalid", "authorization_generation_stale", "firebase_authorization_generation_invalid", "recent_reauthentication_required"].includes(message)) {
+    reply.code(401).send({ error: { code: message === "recovery_code_invalid" ? message : errorCode(error) } });
+    return true;
+  }
+  if (message === "recovery_operation_not_found") {
+    reply.code(404).send({ error: { code: message } });
+    return true;
+  }
+  if (message === "operation_in_progress") {
+    reply.code(409).send({ error: { code: "recovery_operation_in_progress" } });
+    return true;
+  }
+  if (["recovery_code_used", "authorization_generation_conflict", "recovery_operation_conflict", "recovery_operation_in_progress", "recovery_operation_expired", "recovery_operation_superseded", "security_operation_conflict"].includes(message)) {
+    reply.code(409).send({ error: { code: message } });
+    return true;
+  }
+  if (message === "invalid_recovery_operation_request") {
+    reply.code(400).send({ error: { code: "invalid_request" } });
+    return true;
+  }
+  return false;
+}
 
 type RouteFunction = (...args: never[]) => unknown;
 const routeProtections = new WeakMap<RouteFunction, RouteGuard>();
@@ -1158,30 +1209,86 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/account/recovery-codes", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
-    if (!requireRecentReauthentication(request, reply)) return;
-    const parsed = accountRecoveryCodeIssueSchema.safeParse(request.body ?? {});
+  app.post("/v1/account/recovery-codes", { onRequest: recoveryOperationNoStore, preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
+    const parsed = accountRecoveryCodeIssueSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!requireRecentReauthentication(request, reply)) return;
+    if (!recoveryOperationRuntimeAvailable(dependencies.environment)) return reply.code(503).send({ error: { code: "recovery_operations_unavailable" } });
     try {
-      return reply.code(200).send(await requireStores(dependencies).accountLifecycle.issueRecoveryCodes(request.userId!, request.expectedAuthorizationGeneration!));
+      await claimRecoveryOperationRateLimit(request, dependencies);
+      return reply.code(200).send(await requireStores(dependencies).accountLifecycle.issueRecoveryCodes(
+        request.userId!, request.expectedAuthorizationGeneration!, parsed.data.operationId, request.authTime!,
+      ));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "account_deleted";
-      if (message === "authorization_generation_conflict") return reply.code(409).send({ error: { code: message } });
-      if (message === "account_deleted" || message === "authorization_generation_required" || message === "authorization_generation_invalid") return reply.code(401).send({ error: { code: errorCode(error) } });
+      if (recoveryOperationErrorResponse(error, reply)) return;
       throw error;
     }
   });
 
-  app.post("/v1/public/recovery-codes/consume", { preHandler: routeGuard("app_check_only", dependencies) }, async (request, reply) => {
+  app.post("/v1/public/recovery-codes/consume", { onRequest: recoveryOperationNoStore, preHandler: routeGuard("app_check_only", dependencies) }, async (request, reply) => {
     const parsed = accountRecoveryCodeConsumeSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!recoveryOperationRuntimeAvailable(dependencies.environment)) return reply.code(503).send({ error: { code: "recovery_operations_unavailable" } });
     try {
-      return reply.code(200).send(await requireStores(dependencies).accountLifecycle.consumeRecoveryCode(parsed.data.code));
+      await claimRecoveryOperationRateLimit(request, dependencies);
+      return reply.code(200).send(await requireStores(dependencies).accountLifecycle.consumeRecoveryCode(parsed.data.operationId, parsed.data.code));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "recovery_code_invalid";
-      if (message === "recovery_code_used") return reply.code(409).send({ error: { code: "recovery_code_used" } });
-      if (message === "recovery_session_revocation_failed") return reply.code(503).send({ error: { code: "recovery_session_revocation_pending" } });
-      if (message === "recovery_code_invalid" || message === "account_deleted") return reply.code(401).send({ error: { code: "recovery_code_invalid" } });
+      if (recoveryOperationErrorResponse(error, reply)) return;
+      throw error;
+    }
+  });
+
+  app.post("/v1/public/recovery-codes/consume/status", { onRequest: recoveryOperationNoStore, preHandler: routeGuard("app_check_only", dependencies) }, async (request, reply) => {
+    const parsed = accountRecoveryOperationStatusSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!recoveryOperationRuntimeAvailable(dependencies.environment)) return reply.code(503).send({ error: { code: "recovery_operations_unavailable" } });
+    try {
+      await claimRecoveryOperationRateLimit(request, dependencies);
+      const status = await requireStores(dependencies).accountLifecycle.readRecoveryOperationStatus(parsed.data.operationId, parsed.data.code);
+      return reply.code(200).send(status ?? { operationId: parsed.data.operationId, status: "expired_or_invalid" });
+    } catch (error) {
+      if (recoveryOperationErrorResponse(error, reply)) return;
+      throw error;
+    }
+  });
+
+  app.post("/v1/account/recovery-codes/consume/ack", { onRequest: recoveryOperationNoStore, preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+    const parsed = accountRecoveryOperationAckSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!recoveryOperationRuntimeAvailable(dependencies.environment)) return reply.code(503).send({ error: { code: "recovery_operations_unavailable" } });
+    try {
+      await claimRecoveryOperationRateLimit(request, dependencies);
+      return reply.code(200).send(await requireStores(dependencies).accountLifecycle.acknowledgeRecovery(parsed.data.operationId, request.userId!, request.expectedAuthorizationGeneration!));
+    } catch (error) {
+      if (recoveryOperationErrorResponse(error, reply)) return;
+      throw error;
+    }
+  });
+
+  app.get("/v1/account/recovery-codes/issue/status", { onRequest: recoveryOperationNoStore, preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+    const query = request.query as Readonly<Record<string, unknown>>;
+    const parsed = accountRecoveryCodeIssueStatusSchema.safeParse({ operationId: query.operationId });
+    if (!parsed.success || Object.keys(query).some((key) => key !== "operationId")) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!recoveryOperationRuntimeAvailable(dependencies.environment)) return reply.code(503).send({ error: { code: "recovery_operations_unavailable" } });
+    try {
+      await claimRecoveryOperationRateLimit(request, dependencies);
+      const status = await requireStores(dependencies).accountLifecycle.readRecoveryCodeIssueStatus(parsed.data.operationId, request.userId!, request.expectedAuthorizationGeneration!);
+      return status ? reply.code(200).send(status) : reply.code(404).send({ error: { code: "recovery_operation_unavailable" } });
+    } catch (error) {
+      if (recoveryOperationErrorResponse(error, reply)) return;
+      throw error;
+    }
+  });
+
+  app.post("/v1/account/recovery-codes/issue/saved-ack", { onRequest: recoveryOperationNoStore, preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+    const parsed = accountRecoveryCodeSavedAckSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if (!recoveryOperationRuntimeAvailable(dependencies.environment)) return reply.code(503).send({ error: { code: "recovery_operations_unavailable" } });
+    try {
+      await claimRecoveryOperationRateLimit(request, dependencies);
+      return reply.code(200).send(await requireStores(dependencies).accountLifecycle.acknowledgeRecoveryCodeIssue(parsed.data.operationId, request.userId!, request.expectedAuthorizationGeneration!));
+    } catch (error) {
+      if (recoveryOperationErrorResponse(error, reply)) return;
       throw error;
     }
   });

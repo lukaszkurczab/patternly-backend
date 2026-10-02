@@ -15,6 +15,9 @@ time-limited record must fail closed when its `expiresAt` is in the past.
 | `audit` below `contentReports` | Only a non-duplicate status transition | exact verified parent `contentReports.expiresAt` | inherits parent | TTL collection group | historic records without expiry are ODK081 recursive-purge scope |
 | `deletionProofs` | `status: deleted` | immutable `completedAt` | 3 years | TTL | no backfill |
 | `accountDeletionOperations` | `phase: complete` only | immutable `completedAt` | 3 years | TTL | application TTL writer; pending rows have no expiry |
+| `accountRecoveryOperations` | `acknowledged` or actually `superseded` | immutable `terminalAt` | 30 days | TTL | application writer; active operations and `delivery_unconfirmed` reissues have no `expiresAt` until actual supersession |
+| `accountRecoveryOperationResults` | encrypted, retryable operation result | immutable result deadline | at most 55 minutes; issue results are capped by the original reauthentication deadline | TTL | application writer; acknowledgement deletes the result immediately; independent of operation history |
+| `rateLimitBuckets` | expired content-report or recovery-request window | writer-set `expiresAt` | one request window for reports; at most two configured windows for recovery | TTL | shared bucket group; records without `expiresAt` are unaffected |
 | `deletedIdentities` | deletion tombstone | immutable `deletedAt` | 45 days | TTL | no backfill |
 | `accountDataExportAudits` | completed export audit | creation/completion timestamp | 30 days | TTL | no backfill |
 | `accountDataExportRateLimits` | rate-limit window | window start | request window | TTL | no backfill |
@@ -31,8 +34,9 @@ automatic delete path.
 
 ## Repository and cloud procedure
 
-1. Run `npm run firestore:ttl:check`. It asserts exactly the 20 approved
-   collection-group/`expiresAt` policies, including the shared `audit` group.
+1. Run `npm run firestore:ttl:check`. It asserts exactly the 34 approved
+   collection-group/`expiresAt` policies, including the shared `audit` and
+   `rateLimitBuckets` groups.
 2. Review the target project and its active TTL policies. The emulator verifies
    writer fields and transaction behavior; it does **not** prove the managed
    Firestore TTL service is enabled or has deleted any document.

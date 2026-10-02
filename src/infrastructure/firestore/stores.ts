@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type { FirestoreRuntime } from "./client.js";
 import { FirestoreContentVersionStore, type ContentVersionStore } from "../../modules/content/store.js";
 import { FirestoreContentReportStore } from "../../modules/content-reports/store.js";
@@ -12,6 +13,8 @@ import type { Environment } from "../../config/environment.js";
 import { createFirebaseAdminAuth } from "../firebase/adminAuth.js";
 import type { FirebaseAdminAuth } from "../firebase/adminAuth.js";
 import { FirestoreAccountLifecycleStore, type AccountLifecycleStore } from "../../modules/account-lifecycle/store.js";
+import { parseRecoveryOperationCipherKeyRing } from "../../modules/account-lifecycle/recoveryOperationCipher.js";
+import type { RecoveryOperationRuntime } from "../../modules/account-lifecycle/contracts.js";
 import { FirestoreAdminStore, type AdminStore } from "../../modules/admin/store.js";
 import { parsePseudonymKeyRing } from "../security/pseudonymKeyRing.js";
 import { FirestoreDataExportStore } from "../../modules/data-export/store.js";
@@ -41,6 +44,7 @@ export type BackendStores = Readonly<{
 
 export function createFirestoreStores(runtime: FirestoreRuntime, environment: Environment, authOverride?: FirebaseAdminAuth): BackendStores {
   const pseudonymKeyRing = parsePseudonymKeyRing(environment.deletionPseudonymKeysJson);
+  const recoveryOperationRuntime = createRecoveryOperationRuntime(environment);
   const firebaseAuth = authOverride ?? createFirebaseAdminAuth(runtime.app);
   const contentReports = new FirestoreContentReportStore(runtime.db, {
     rateLimitHashSecret: environment.reportRateLimitHashSecret,
@@ -56,7 +60,7 @@ export function createFirestoreStores(runtime: FirestoreRuntime, environment: En
     tracks: new FirestoreTrackStore(runtime.db),
     content: new FirestoreContentVersionStore(runtime.db),
     contentReports,
-    accountLifecycle: new FirestoreAccountLifecycleStore(runtime.db, firebaseAuth, pseudonymKeyRing),
+    accountLifecycle: new FirestoreAccountLifecycleStore(runtime.db, firebaseAuth, pseudonymKeyRing, recoveryOperationRuntime),
     admin: new FirestoreAdminStore(runtime.db, environment.adminContentRoot, environment.adminContentReleaseId),
     dataExport: new FirestoreDataExportStore(runtime.db, {
       rateLimitMax: environment.accountDataExportRateLimitMax,
@@ -68,4 +72,18 @@ export function createFirestoreStores(runtime: FirestoreRuntime, environment: En
     revenueCatWebhook: new FirestoreRevenueCatWebhookStore(runtime.db),
     legalRequests: new FirestoreLegalRequestStore(runtime.db, environment.privacyAuditHmacSecret),
   });
+}
+
+function createRecoveryOperationRuntime(environment: Environment): RecoveryOperationRuntime {
+  const recoveryKeysJson = environment.recoveryOperationKeysJson;
+  if (recoveryKeysJson === undefined) return Object.freeze({ cipher: null });
+
+  const cipher = parseRecoveryOperationCipherKeyRing(recoveryKeysJson);
+  const keyring = JSON.parse(recoveryKeysJson) as Readonly<{ keys: readonly Readonly<{ keyBase64: string }>[] }>;
+  const privacyKey = Buffer.from(environment.privacyResponseKeyBase64, "base64");
+  if (privacyKey.length === 32 && keyring.keys.some(({ keyBase64 }) => {
+    const recoveryKey = Buffer.from(keyBase64, "base64");
+    return recoveryKey.length === privacyKey.length && timingSafeEqual(recoveryKey, privacyKey);
+  })) throw new Error("recovery_operation_key_reuse_forbidden");
+  return Object.freeze({ cipher });
 }
