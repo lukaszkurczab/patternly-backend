@@ -3,12 +3,34 @@ import { Timestamp, type Firestore, type Transaction } from "firebase-admin/fire
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
 import { canonicalJson } from "../../infrastructure/identity/canonicalJson.js";
 import { asRecord, asTimestamp } from "../../infrastructure/firestore/values.js";
-import { incidentArtifactExpiry, incidentDeadline, incidentRetentionExpiry, type AuthorityDeliveryStatus, type IncidentClassification, type IncidentDecision, type SecurityIncidentAction, type SubjectNotificationStatus } from "./contracts.js";
+import { AUTHORITY_DELIVERY_STATUSES, INCIDENT_CLASSIFICATIONS, INCIDENT_DECISIONS, SUBJECT_DELIVERY_STATUSES, SUBJECT_NOTIFICATION_STATUSES, incidentArtifactExpiry, incidentDeadline, incidentRetentionExpiry, type AuthorityDeliveryStatus, type IncidentClassification, type IncidentDecision, type SecurityIncidentAction, type SubjectDeliveryStatus, type SubjectNotificationStatus } from "./contracts.js";
 
 type EncryptedValue = Readonly<{ ciphertext: string; iv: string; tag: string }>;
 const LIST_LIMIT = 100;
 const REMINDER_HOURS = [24, 48, 60, 70] as const;
 const DELIVERY_PENDING_TIMEOUT_MS = 15 * 60 * 1_000;
+
+function assertIncidentEnums(data: Record<string, unknown>): asserts data is Record<string, unknown> & {
+  classification: IncidentClassification;
+  authorityDecision: IncidentDecision;
+  authorityDeliveryStatus: AuthorityDeliveryStatus;
+  subjectDecision: IncidentDecision;
+  subjectNotificationStatus: SubjectNotificationStatus;
+} {
+  if (!INCIDENT_CLASSIFICATIONS.some((value) => value === data.classification)
+    || !INCIDENT_DECISIONS.some((value) => value === data.authorityDecision)
+    || !AUTHORITY_DELIVERY_STATUSES.some((value) => value === data.authorityDeliveryStatus)
+    || !INCIDENT_DECISIONS.some((value) => value === data.subjectDecision)
+    || !SUBJECT_NOTIFICATION_STATUSES.some((value) => value === data.subjectNotificationStatus)) {
+    throw new Error("security_incident_record_invalid");
+  }
+}
+
+function readSubjectDeliveryStatus(value: unknown): SubjectDeliveryStatus {
+  const status = SUBJECT_DELIVERY_STATUSES.find((candidate) => candidate === value);
+  if (!status) throw new Error("security_incident_record_invalid");
+  return status;
+}
 
 export type SecurityIncidentListItem = Readonly<{
   incidentId: string; classification: IncidentClassification; authorityDecision: IncidentDecision;
@@ -73,6 +95,7 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
 
   public async listAdmin(): Promise<readonly SecurityIncidentListItem[]> {
     const snapshot = await this.db.collection(COLLECTIONS.securityIncidents).orderBy("createdAt", "desc").limit(LIST_LIMIT).get();
+    for (const doc of snapshot.docs) assertIncidentEnums(asRecord(doc.data(), "security_incident"));
     await Promise.all(snapshot.docs.map((doc) => this.materializeReminders(doc.id)));
     return Object.freeze(snapshot.docs.map((doc) => this.toList(doc.id, asRecord(doc.data(), "security_incident"))));
   }
@@ -80,11 +103,15 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
   public async listOperatorQueue(actorId: string): Promise<SecurityIncidentOperatorQueue> {
     const snapshot = await this.db.collection(COLLECTIONS.securityIncidents).orderBy("createdAt", "desc").limit(LIST_LIMIT + 1).get();
     const selected = snapshot.docs.slice(0, LIST_LIMIT);
+    for (const document of selected) assertIncidentEnums(asRecord(document.data(), "security_incident"));
     if (selected.length > 0) {
       const occurredAt = new Date();
       await this.db.runTransaction(async (transaction) => {
-        for (const document of selected) {
-          const data = asRecord(document.data(), "security_incident");
+        const fresh = await transaction.getAll(...selected.map((document) => document.ref));
+        for (const document of fresh) assertIncidentEnums(asRecord(document.data(), "security_incident"));
+        for (let index = 0; index < selected.length; index += 1) {
+          const document = selected[index]!;
+          const data = asRecord(fresh[index]?.data(), "security_incident");
           const expiry = data.closedAt
             ? data.legalHold === true
               ? null
@@ -101,24 +128,34 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
   }
 
   public async readAdmin(incidentId: string, actorId: string): Promise<SecurityIncidentDetails | null> {
-    await this.materializeReminders(incidentId);
     const [incident, secret] = await Promise.all([this.incidentRef(incidentId).get(), this.secretRef(incidentId).get()]);
     if (!incident.exists || !secret.exists) return null;
     const data = asRecord(incident.data(), "security_incident");
+    assertIncidentEnums(data);
     const decrypted = JSON.parse(this.decrypt(asRecord(asRecord(secret.data(), "security_incident_secret").payload, "security_incident_payload"))) as { title?: unknown; details?: unknown; assessments?: unknown };
     const [notifications, preparedSnapshot, auditDocs] = await Promise.all([
       this.db.collection(COLLECTIONS.securityIncidentDeliveries).where("incidentId", "==", incidentId).limit(500).get(),
       typeof data.subjectNotificationVersion === "number" ? this.artifactRef(`subject_snapshot_${incidentId}_${Number(data.subjectNotificationVersion)}`).get() : Promise.resolve(null),
       this.incidentRef(incidentId).collection("audit").orderBy("at", "asc").limit(500).get(),
     ]);
+    for (const document of notifications.docs) readSubjectDeliveryStatus(asRecord(document.data(), "security_incident_delivery").status);
+    await this.materializeReminders(incidentId, true);
     const prepared = preparedSnapshot?.exists ? JSON.parse(this.decrypt(asRecord(asRecord(preparedSnapshot.data(), "security_incident_snapshot").payload, "security_incident_snapshot_payload"))) as { recipients?: unknown } : null;
     const recipients = Array.isArray(prepared?.recipients) ? prepared.recipients.filter((value): value is string => typeof value === "string") : [];
     const now = new Date();
-    await this.db.runTransaction(async (tx) => this.audit(tx, incidentId, actorId, "details_read", now, undefined, undefined, undefined, data.closedAt ? (data.legalHold ? null : Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(data.closedAt, "closed_at").toDate()))) : undefined));
+    await this.db.runTransaction(async (tx) => {
+      const freshIncident = await tx.get(this.incidentRef(incidentId));
+      if (!freshIncident.exists) throw new Error("security_incident_not_found");
+      const freshData = asRecord(freshIncident.data(), "security_incident");
+      assertIncidentEnums(freshData);
+      const freshNotifications = await tx.get(this.db.collection(COLLECTIONS.securityIncidentDeliveries).where("incidentId", "==", incidentId).limit(500));
+      for (const document of freshNotifications.docs) readSubjectDeliveryStatus(asRecord(document.data(), "security_incident_delivery").status);
+      this.audit(tx, incidentId, actorId, "details_read", now, undefined, undefined, undefined, freshData.closedAt ? (freshData.legalHold ? null : Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(freshData.closedAt, "closed_at").toDate()))) : undefined);
+    });
     const assessment = this.currentAssessment(decrypted);
     return Object.freeze({ ...this.toList(incidentId, data), title: typeof decrypted.title === "string" ? decrypted.title : "", details: typeof assessment.details === "string" ? assessment.details : "", assessment: Object.freeze(assessment), createdAt: asTimestamp(data.createdAt, "created_at").toDate().toISOString(), updatedAt: asTimestamp(data.updatedAt, "updated_at").toDate().toISOString(), authorityExportVersion: typeof data.authorityExportVersion === "number" ? data.authorityExportVersion : null, assessmentVersion: Number(data.assessmentVersion), authorityReason: this.decryptOptional(data.authorityReason), subjectReason: this.decryptOptional(data.subjectReason), authoritySubmissionReference: this.decryptOptional(data.authoritySubmissionReference), preparedRecipients: Object.freeze(recipients.map((email) => Object.freeze({ recipientPseudonym: this.recipientPseudonym(incidentId, email), snapshotVersion: Number(data.subjectNotificationVersion) }))), auditHistory: Object.freeze(auditDocs.docs.map((doc) => { const item = asRecord(doc.data(), "audit"); return Object.freeze({ event: String(item.event), actorPseudonym: String(item.actorPseudonym), at: asTimestamp(item.at, "audit_at").toDate().toISOString(), revision: typeof item.revision === "number" ? item.revision : null, assessmentVersion: typeof item.assessmentVersion === "number" ? item.assessmentVersion : null, snapshot: item.snapshot && typeof item.snapshot === "object" ? asRecord(item.snapshot, "audit_snapshot") : null }); })), subjectNotifications: Object.freeze(notifications.docs.map((doc) => {
       const value = asRecord(doc.data(), "security_incident_delivery");
-      return Object.freeze({ recipientPseudonym: String(value.recipientPseudonym), snapshotVersion: Number(value.snapshotVersion), status: value.status as "pending" | "sent" | "failed" | "unknown" | "superseded", deliveryId: doc.id });
+      return Object.freeze({ recipientPseudonym: String(value.recipientPseudonym), snapshotVersion: Number(value.snapshotVersion), status: readSubjectDeliveryStatus(value.status), deliveryId: doc.id });
     })) });
   }
 
@@ -127,9 +164,16 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
     if (!snapshot.exists || !incident.exists) return null;
     const data = asRecord(snapshot.data(), "security_incident_export");
     if (data.incidentId !== incidentId || data.kind !== "authority_export") return null;
-    const payload = this.decrypt(asRecord(data.payload, "security_incident_export_payload"));
     const incidentData = asRecord(incident.data(), "incident");
-    await this.db.runTransaction(async (tx) => this.audit(tx, incidentId, actorId, "authority_export_read", new Date(), undefined, undefined, undefined, incidentData.closedAt ? (incidentData.legalHold ? null : Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(incidentData.closedAt, "closed_at").toDate()))) : undefined));
+    assertIncidentEnums(incidentData);
+    const payload = this.decrypt(asRecord(data.payload, "security_incident_export_payload"));
+    await this.db.runTransaction(async (tx) => {
+      const freshIncident = await tx.get(this.incidentRef(incidentId));
+      if (!freshIncident.exists) throw new Error("security_incident_not_found");
+      const freshData = asRecord(freshIncident.data(), "security_incident");
+      assertIncidentEnums(freshData);
+      this.audit(tx, incidentId, actorId, "authority_export_read", new Date(), undefined, undefined, undefined, freshData.closedAt ? (freshData.legalHold ? null : Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(freshData.closedAt, "closed_at").toDate()))) : undefined);
+    });
     return Object.freeze({ payload, digest: String(data.digest), version });
   }
 
@@ -146,15 +190,18 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
     const [snapshot, secretSnapshot] = await tx.getAll(ref, this.secretRef(incidentId));
     if (!snapshot?.exists || !secretSnapshot?.exists) throw new Error("security_incident_not_found");
     const data = asRecord(snapshot.data(), "security_incident");
+    assertIncidentEnums(data);
+    const existingDeliveries = await tx.get(this.db.collection(COLLECTIONS.securityIncidentDeliveries).where("incidentId", "==", incidentId).limit(500));
+    for (const document of existingDeliveries.docs) readSubjectDeliveryStatus(asRecord(document.data(), "security_incident_delivery").status);
     if (Number(data.revision) !== action.expectedRevision) throw new Error("security_incident_revision_conflict");
     if (data.closedAt && action.action !== "set_legal_hold" && action.action !== "release_legal_hold") throw new Error("security_incident_closed");
     const now = new Date();
     const update: Record<string, unknown> = { revision: action.expectedRevision + 1, updatedAt: Timestamp.fromDate(now) };
     const secretData = asRecord(secretSnapshot.data(), "security_incident_secret");
     const decrypted = JSON.parse(this.decrypt(asRecord(secretData.payload, "security_incident_payload"))) as Record<string, unknown>;
-    const classification = data.classification as IncidentClassification;
-    const authorityDecision = data.authorityDecision as IncidentDecision;
-    const subjectDecision = data.subjectDecision as IncidentDecision;
+    const classification = data.classification;
+    const authorityDecision = data.authorityDecision;
+    const subjectDecision = data.subjectDecision;
     const event = action.action;
     if (action.action === "acknowledge_awareness") {
       if (data.awarenessAt) throw new Error("security_incident_awareness_immutable");
@@ -191,12 +238,15 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
       update.subjectNotificationVersion = version; update.subjectNotificationStatus = "prepared";
     } else if (action.action === "reconcile_subject_notifications") {
       const deliveries = await tx.get(this.db.collection(COLLECTIONS.securityIncidentDeliveries).where("incidentId", "==", incidentId).where("snapshotVersion", "==", Number(data.subjectNotificationVersion ?? 0)));
+      const statuses = deliveries.docs.map((delivery) => readSubjectDeliveryStatus(asRecord(delivery.data(), "security_incident_delivery").status));
       const cutoff = now.getTime() - DELIVERY_PENDING_TIMEOUT_MS;
-      for (const delivery of deliveries.docs) { const item = asRecord(delivery.data(), "delivery"); if (item.status === "pending" && asTimestamp(item.createdAt, "delivery_created").toMillis() <= cutoff) tx.set(delivery.ref, { status: "unknown", reconciledAt: Timestamp.fromDate(now) }, { merge: true }); }
+      for (let index = 0; index < deliveries.docs.length; index += 1) { const delivery = deliveries.docs[index]!; const item = asRecord(delivery.data(), "delivery"); if (statuses[index] === "pending" && asTimestamp(item.createdAt, "delivery_created").toMillis() <= cutoff) tx.set(delivery.ref, { status: "unknown", reconciledAt: Timestamp.fromDate(now) }, { merge: true }); }
       update.subjectNotificationStatus = "unknown";
     } else if (action.action === "resolve_subject_notification_unknown") {
       const delivery = await tx.get(this.deliveryRef(action.deliveryId));
-      if (!delivery.exists || asRecord(delivery.data(), "security_incident_delivery").incidentId !== incidentId || asRecord(delivery.data(), "security_incident_delivery").status !== "unknown") throw new Error("security_incident_delivery_resolution_invalid");
+      if (!delivery.exists) throw new Error("security_incident_delivery_resolution_invalid");
+      const deliveryData = asRecord(delivery.data(), "security_incident_delivery");
+      if (deliveryData.incidentId !== incidentId || readSubjectDeliveryStatus(deliveryData.status) !== "unknown") throw new Error("security_incident_delivery_resolution_invalid");
       tx.set(this.deliveryRef(action.deliveryId), { status: action.outcome, resolutionReason: this.encrypt(action.reason), resolvedAt: Timestamp.fromDate(now) }, { merge: true });
       update.subjectNotificationStatus = action.outcome;
     } else if (action.action === "set_legal_hold") {
@@ -216,7 +266,8 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
         const [snapshot, deliveries] = await Promise.all([tx.get(this.artifactRef(`subject_snapshot_${incidentId}_${version}`)), tx.get(this.db.collection(COLLECTIONS.securityIncidentDeliveries).where("incidentId", "==", incidentId).where("snapshotVersion", "==", version))]);
         const notification = snapshot.exists ? JSON.parse(this.decrypt(asRecord(asRecord(snapshot.data(), "snapshot").payload, "snapshot_payload"))) as { recipients?: unknown } : null;
         const count = Array.isArray(notification?.recipients) ? notification.recipients.length : 0;
-        subjectComplete = count > 0 && deliveries.docs.length === count && deliveries.docs.every((doc) => asRecord(doc.data(), "delivery").status === "sent");
+        const statuses = deliveries.docs.map((doc) => readSubjectDeliveryStatus(asRecord(doc.data(), "delivery").status));
+        subjectComplete = count > 0 && deliveries.docs.length === count && statuses.every((status) => status === "sent");
       }
       if (!authorityComplete || !subjectComplete) throw new Error("security_incident_close_incomplete");
       update.closedAt = Timestamp.fromDate(now); if (!data.legalHold) update.expiresAt = Timestamp.fromDate(incidentRetentionExpiry(now));
@@ -235,9 +286,12 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
       const [incident, artifact] = await tx.getAll(this.incidentRef(incidentId), this.artifactRef(`subject_snapshot_${incidentId}_${action.snapshotVersion}`));
       if (!incident?.exists || !artifact?.exists) throw new Error("security_incident_notification_snapshot_not_found");
       const data = asRecord(incident.data(), "security_incident");
+      assertIncidentEnums(data);
       if (Number(data.revision) !== action.expectedRevision) throw new Error("security_incident_revision_conflict");
       if (data.subjectDecision !== "required") throw new Error("security_incident_subject_decision_required");
       if (data.closedAt || Number(data.subjectNotificationVersion) !== action.snapshotVersion) throw new Error("security_incident_notification_snapshot_stale");
+      const existingDeliveries = await tx.get(this.db.collection(COLLECTIONS.securityIncidentDeliveries).where("incidentId", "==", incidentId).limit(500));
+      for (const document of existingDeliveries.docs) readSubjectDeliveryStatus(asRecord(document.data(), "security_incident_delivery").status);
       const snapshot = JSON.parse(this.decrypt(asRecord(asRecord(artifact.data(), "security_incident_artifact").payload, "security_incident_artifact_payload"))) as { recipients?: unknown; subject?: unknown; text?: unknown };
       const recipients = Array.isArray(snapshot.recipients) ? snapshot.recipients.filter((value): value is string => typeof value === "string") : [];
       email = recipients.find((value) => this.recipientPseudonym(incidentId, value) === action.recipientPseudonym) ?? "";
@@ -258,6 +312,7 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
       await sender.send({ recipient: email, incidentId, snapshotVersion: action.snapshotVersion, subject, text });
       await this.finishDelivery(incidentId, deliveryId, actorId, "sent");
     } catch (error) {
+      if (error instanceof Error && error.message === "security_incident_record_invalid") throw error;
       const code = error instanceof Error ? error.message : "";
       const terminal = code === "security_incident_email_rejected" || code === "security_incident_email_placeholder";
       await this.finishDelivery(incidentId, deliveryId, actorId, terminal ? "failed" : "unknown");
@@ -266,11 +321,56 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
   }
 
   private async finishDelivery(incidentId: string, deliveryId: string, actorId: string, status: "sent" | "failed" | "unknown"): Promise<void> {
-    await this.db.runTransaction(async (tx) => { const [delivery, incident] = await tx.getAll(this.deliveryRef(deliveryId), this.incidentRef(incidentId)); if (!delivery?.exists || !incident?.exists) return; const deliveryData = asRecord(delivery.data(), "security_incident_delivery"); const incidentData = asRecord(incident.data(), "security_incident"); const deliveries = await tx.get(this.db.collection(COLLECTIONS.securityIncidentDeliveries).where("incidentId", "==", incidentId).where("snapshotVersion", "==", Number(deliveryData.snapshotVersion))); const current = incidentData.subjectDecision === "required" && !incidentData.closedAt && Number(incidentData.subjectNotificationVersion) === Number(deliveryData.snapshotVersion) && Number(deliveryData.notificationGeneration) === Number(deliveryData.snapshotVersion); const now = new Date(); if (deliveryData.status !== "pending") return; if (!current) { tx.set(delivery.ref, { status: "superseded", completedAt: Timestamp.fromDate(now) }, { merge: true }); this.audit(tx, incidentId, actorId, "subject_notification_superseded", now); return; } const states = deliveries.docs.map((doc) => doc.id === deliveryId ? status : asRecord(doc.data(), "delivery").status); const aggregate = states.includes("unknown") ? "unknown" : states.includes("failed") ? "failed" : states.every((value) => value === "sent") ? "sent" : "pending"; tx.set(delivery.ref, { status, completedAt: Timestamp.fromDate(now) }, { merge: true }); tx.set(incident.ref, { subjectNotificationStatus: aggregate, revision: Number(incidentData.revision) + 1, updatedAt: Timestamp.fromDate(now) }, { merge: true }); this.audit(tx, incidentId, actorId, `subject_notification_${status}`, now, Number(incidentData.revision) + 1, Number(incidentData.assessmentVersion)); });
+    await this.db.runTransaction(async (tx) => {
+      const [delivery, incident] = await tx.getAll(this.deliveryRef(deliveryId), this.incidentRef(incidentId));
+      if (!delivery?.exists || !incident?.exists) return;
+      const deliveryData = asRecord(delivery.data(), "security_incident_delivery");
+      const incidentData = asRecord(incident.data(), "security_incident");
+      assertIncidentEnums(incidentData);
+      const deliveryStatus = readSubjectDeliveryStatus(deliveryData.status);
+      const deliveries = await tx.get(this.db.collection(COLLECTIONS.securityIncidentDeliveries).where("incidentId", "==", incidentId).where("snapshotVersion", "==", Number(deliveryData.snapshotVersion)));
+      const states = deliveries.docs.map((doc) => doc.id === deliveryId ? deliveryStatus : readSubjectDeliveryStatus(asRecord(doc.data(), "delivery").status));
+      if (deliveryStatus !== "pending") return;
+      const current = incidentData.subjectDecision === "required" && !incidentData.closedAt && Number(incidentData.subjectNotificationVersion) === Number(deliveryData.snapshotVersion) && Number(deliveryData.notificationGeneration) === Number(deliveryData.snapshotVersion);
+      const now = new Date();
+      if (!current) {
+        tx.set(delivery.ref, { status: "superseded", completedAt: Timestamp.fromDate(now) }, { merge: true });
+        this.audit(tx, incidentId, actorId, "subject_notification_superseded", now);
+        return;
+      }
+      const nextStates = states.map((value, index) => deliveries.docs[index]?.id === deliveryId ? status : value);
+      const aggregate = nextStates.includes("unknown") ? "unknown" : nextStates.includes("failed") ? "failed" : nextStates.every((value) => value === "sent") ? "sent" : "pending";
+      tx.set(delivery.ref, { status, completedAt: Timestamp.fromDate(now) }, { merge: true });
+      tx.set(incident.ref, { subjectNotificationStatus: aggregate, revision: Number(incidentData.revision) + 1, updatedAt: Timestamp.fromDate(now) }, { merge: true });
+      this.audit(tx, incidentId, actorId, `subject_notification_${status}`, now, Number(incidentData.revision) + 1, Number(incidentData.assessmentVersion));
+    });
   }
 
-  private async materializeReminders(incidentId: string): Promise<void> {
-    await this.db.runTransaction(async (tx) => { const incident = await tx.get(this.incidentRef(incidentId)); if (!incident.exists) return; const data = asRecord(incident.data(), "security_incident"); if (!data.awarenessAt || data.closedAt) return; const awareness = asTimestamp(data.awarenessAt, "awareness_at").toDate(); const now = new Date(); for (const hours of REMINDER_HOURS) { const dueAt = new Date(awareness.getTime() + hours * 60 * 60 * 1_000); if (now >= dueAt) { const ref = this.reminderRef(incidentId, hours); const existing = await tx.get(ref); if (!existing.exists) tx.create(ref, { incidentId, thresholdHours: hours, dueAt: Timestamp.fromDate(dueAt), createdAt: Timestamp.fromDate(now), expiresAt: data.legalHold ? null : Timestamp.fromDate(incidentArtifactExpiry(now)) }); } } });
+  private async materializeReminders(incidentId: string, validateDeliveries = false): Promise<void> {
+    await this.db.runTransaction(async (tx) => {
+      const incident = await tx.get(this.incidentRef(incidentId));
+      if (!incident.exists) return;
+      const data = asRecord(incident.data(), "security_incident");
+      assertIncidentEnums(data);
+      if (!data.awarenessAt || data.closedAt) return;
+
+      if (validateDeliveries) {
+        const notificationQuery = this.db.collection(COLLECTIONS.securityIncidentDeliveries).where("incidentId", "==", incidentId).limit(500);
+        const notifications = await tx.get(notificationQuery);
+        for (const document of notifications.docs) readSubjectDeliveryStatus(asRecord(document.data(), "security_incident_delivery").status);
+      }
+
+      const awareness = asTimestamp(data.awarenessAt, "awareness_at").toDate();
+      const now = new Date();
+      const due = REMINDER_HOURS.map((hours) => ({ hours, dueAt: new Date(awareness.getTime() + hours * 60 * 60 * 1_000) })).filter(({ dueAt }) => now >= dueAt);
+      const references = due.map(({ hours }) => this.reminderRef(incidentId, hours));
+      const existing = references.length > 0 ? await tx.getAll(...references) : [];
+      for (let index = 0; index < due.length; index += 1) {
+        if (existing[index]?.exists) continue;
+        const { hours, dueAt } = due[index]!;
+        tx.create(references[index]!, { incidentId, thresholdHours: hours, dueAt: Timestamp.fromDate(dueAt), createdAt: Timestamp.fromDate(now), expiresAt: data.legalHold ? null : Timestamp.fromDate(incidentArtifactExpiry(now)) });
+      }
+    });
   }
 
   private async setArtifactsHold(tx: Transaction, incidentId: string, hold: boolean, now: Date, closedAt: Date | null): Promise<void> {
@@ -291,7 +391,7 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
 
   private currentAssessment(value: Record<string, unknown>): Record<string, unknown> { const { assessments: _assessments, ...current } = value; return current; }
   private nextAction(data: Record<string, unknown>): SecurityIncidentListItem["nextAction"] { if (data.closedAt) return "none"; if (!data.awarenessAt) return "acknowledge_awareness"; if (data.classification === "triage") return "classify"; if (data.authorityDecision === "undecided") return "decide_authority"; if (data.authorityDecision === "required" && !data.authorityExportVersion) return "prepare_authority_export"; if (data.authorityDecision === "required" && data.authorityDeliveryStatus === "not_started") return "record_authority_submission"; if (data.subjectDecision === "undecided") return "decide_subject"; if (data.subjectDecision === "required" && !data.subjectNotificationVersion) return "prepare_subject_notification"; if (data.subjectNotificationStatus === "unknown") return "resolve_subject_notification_unknown"; if (data.subjectDecision === "required" && data.subjectNotificationStatus !== "sent") return "send_subject_notification"; return "close"; }
-  private toList(incidentId: string, data: Record<string, unknown>): SecurityIncidentListItem { return Object.freeze({ incidentId, classification: data.classification as IncidentClassification, authorityDecision: data.authorityDecision as IncidentDecision, authorityDeliveryStatus: data.authorityDeliveryStatus as AuthorityDeliveryStatus, subjectDecision: data.subjectDecision as IncidentDecision, subjectNotificationStatus: data.subjectNotificationStatus as SubjectNotificationStatus, awarenessAt: data.awarenessAt ? asTimestamp(data.awarenessAt, "awareness_at").toDate().toISOString() : null, authorityDeadlineAt: data.authorityDeadlineAt ? asTimestamp(data.authorityDeadlineAt, "authority_deadline").toDate().toISOString() : null, closedAt: data.closedAt ? asTimestamp(data.closedAt, "closed_at").toDate().toISOString() : null, revision: Number(data.revision), legalHold: data.legalHold === true, nextAction: this.nextAction(data) }); }
+  private toList(incidentId: string, data: Record<string, unknown>): SecurityIncidentListItem { assertIncidentEnums(data); return Object.freeze({ incidentId, classification: data.classification, authorityDecision: data.authorityDecision, authorityDeliveryStatus: data.authorityDeliveryStatus, subjectDecision: data.subjectDecision, subjectNotificationStatus: data.subjectNotificationStatus, awarenessAt: data.awarenessAt ? asTimestamp(data.awarenessAt, "awareness_at").toDate().toISOString() : null, authorityDeadlineAt: data.authorityDeadlineAt ? asTimestamp(data.authorityDeadlineAt, "authority_deadline").toDate().toISOString() : null, closedAt: data.closedAt ? asTimestamp(data.closedAt, "closed_at").toDate().toISOString() : null, revision: Number(data.revision), legalHold: data.legalHold === true, nextAction: this.nextAction(data) }); }
   private encrypt(value: string): EncryptedValue { const iv = randomBytes(12); const cipher = createCipheriv("aes-256-gcm", this.key, iv); const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]); return Object.freeze({ ciphertext: ciphertext.toString("base64"), iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64") }); }
   private decrypt(value: Record<string, unknown>): string { const decipher = createDecipheriv("aes-256-gcm", this.key, Buffer.from(String(value.iv), "base64")); decipher.setAuthTag(Buffer.from(String(value.tag), "base64")); return Buffer.concat([decipher.update(Buffer.from(String(value.ciphertext), "base64")), decipher.final()]).toString("utf8"); }
   private decryptOptional(value: unknown): string | null { return value && typeof value === "object" ? this.decrypt(asRecord(value, "encrypted")) : null; }

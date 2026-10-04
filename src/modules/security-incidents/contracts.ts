@@ -4,11 +4,13 @@ export const INCIDENT_CLASSIFICATIONS = ["triage", "breach_confirmed", "not_a_br
 export const INCIDENT_DECISIONS = ["undecided", "required", "not_required"] as const;
 export const AUTHORITY_DELIVERY_STATUSES = ["not_started", "submitted", "supplemented"] as const;
 export const SUBJECT_NOTIFICATION_STATUSES = ["not_started", "prepared", "pending", "sent", "failed", "unknown"] as const;
+export const SUBJECT_DELIVERY_STATUSES = ["pending", "sent", "failed", "unknown", "superseded"] as const;
 
 export type IncidentClassification = (typeof INCIDENT_CLASSIFICATIONS)[number];
 export type IncidentDecision = (typeof INCIDENT_DECISIONS)[number];
 export type AuthorityDeliveryStatus = (typeof AUTHORITY_DELIVERY_STATUSES)[number];
 export type SubjectNotificationStatus = (typeof SUBJECT_NOTIFICATION_STATUSES)[number];
+export type SubjectDeliveryStatus = (typeof SUBJECT_DELIVERY_STATUSES)[number];
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const revision = { expectedRevision: z.number().int().nonnegative() } as const;

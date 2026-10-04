@@ -3,7 +3,7 @@ import { FieldValue, Timestamp, type Firestore } from "firebase-admin/firestore"
 import { asRecord, asTimestamp } from "../../infrastructure/firestore/values.js";
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
 import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
-import { complaintResponseDueAt, retentionUntilFromClosure, type LegalRequestAdminAction, type LegalRequestKind, type LegalRequestStatus } from "./contracts.js";
+import { LEGAL_REQUEST_STATUSES, complaintResponseDueAt, legalRequestKindSchema, retentionUntilFromClosure, type LegalRequestAdminAction, type LegalRequestKind, type LegalRequestStatus } from "./contracts.js";
 
 export type LegalRequestItem = Readonly<{
   requestId: string;
@@ -111,22 +111,26 @@ export class FirestoreLegalRequestStore implements LegalRequestStore {
   public async listOperatorQueue(actorId: string): Promise<LegalRequestOperatorQueue> {
     const snapshot = await this.db.collection("legalRequests").orderBy("receivedAt", "desc").limit(101).get();
     const selected = snapshot.docs.slice(0, 100);
+    const items = Object.freeze(selected.map((document) => this.toOperatorItem(document.id, asRecord(document.data(), "legal_request"))));
     if (selected.length > 0) {
       const occurredAt = Timestamp.now();
-      const batch = this.db.batch();
-      for (const document of selected) {
-        const data = asRecord(document.data(), "legal_request");
-        batch.create(document.ref.collection("audit").doc(), {
-          action: "operator_queue_read",
-          actorPseudonym: this.actorPseudonym(actorId),
-          occurredAt,
-          expiresAt: data.expiresAt ?? null,
-        });
-      }
-      await batch.commit();
+      await this.db.runTransaction(async (transaction) => {
+        const fresh = await transaction.getAll(...selected.map((document) => document.ref));
+        for (const document of fresh) this.assertEnums(asRecord(document.data(), "legal_request"));
+        for (let index = 0; index < selected.length; index += 1) {
+          const document = selected[index]!;
+          const data = asRecord(fresh[index]?.data(), "legal_request");
+          transaction.create(document.ref.collection("audit").doc(), {
+            action: "operator_queue_read",
+            actorPseudonym: this.actorPseudonym(actorId),
+            occurredAt,
+            expiresAt: data.expiresAt ?? null,
+          });
+        }
+      });
     }
     return Object.freeze({
-      items: Object.freeze(selected.map((document) => this.toOperatorItem(document.id, asRecord(document.data(), "legal_request")))),
+      items,
       truncated: snapshot.docs.length > 100,
     });
   }
@@ -136,8 +140,15 @@ export class FirestoreLegalRequestStore implements LegalRequestStore {
     const snapshot = await ref.get();
     if (!snapshot.exists) return null;
     const data = asRecord(snapshot.data(), "legal_request");
+    this.assertEnums(data);
     const occurredAt = new Date();
-    await ref.collection("audit").doc().create({ action: "details_read", actorPseudonym: this.actorPseudonym(actorId), occurredAt: Timestamp.fromDate(occurredAt), expiresAt: data.expiresAt ?? null });
+    await this.db.runTransaction(async (transaction) => {
+      const fresh = await transaction.get(ref);
+      if (!fresh.exists) throw new Error("legal_request_not_found");
+      const freshData = asRecord(fresh.data(), "legal_request");
+      this.assertEnums(freshData);
+      transaction.create(ref.collection("audit").doc(), { action: "details_read", actorPseudonym: this.actorPseudonym(actorId), occurredAt: Timestamp.fromDate(occurredAt), expiresAt: freshData.expiresAt ?? null });
+    });
     return Object.freeze({ ...this.read(requestId, data), email: String(data.email), narrative: typeof data.narrative === "string" ? data.narrative : null, transactionId: typeof data.transactionId === "string" ? data.transactionId : null });
   }
 
@@ -151,8 +162,9 @@ export class FirestoreLegalRequestStore implements LegalRequestStore {
       const snapshot = await transaction.get(ref);
       if (!snapshot.exists) throw new Error("legal_request_not_found");
       const data = asRecord(snapshot.data(), "legal_request");
+      this.assertEnums(data);
       if (Number(data.revision) !== action.expectedRevision) throw new Error("legal_request_revision_conflict");
-      const status = data.status as LegalRequestStatus;
+      const status = data.status;
       const now = new Date();
       const actorPseudonym = this.actorPseudonym(actorId);
       const update: Record<string, unknown> = { revision: action.expectedRevision + 1, updatedAt: Timestamp.fromDate(now), lastActorPseudonym: actorPseudonym };
@@ -162,7 +174,7 @@ export class FirestoreLegalRequestStore implements LegalRequestStore {
       } else if (action.action === "answer") {
         if (status !== "received" && status !== "in_review") throw new Error("legal_request_transition_invalid");
         update.pendingResponse = action.response; update.answerDeliveryStatus = "pending";
-        recipient = String(data.email); kind = data.kind as LegalRequestKind; response = action.response;
+        recipient = String(data.email); kind = data.kind; response = action.response;
       } else if (action.action === "close") {
         if (status !== "answered") throw new Error("legal_request_transition_invalid");
         const retentionUntil = retentionUntilFromClosure(now);
@@ -183,13 +195,22 @@ export class FirestoreLegalRequestStore implements LegalRequestStore {
           const snapshot = await transaction.get(ref);
           if (!snapshot.exists) throw new Error("legal_request_not_found");
           const data = asRecord(snapshot.data(), "legal_request");
+          this.assertEnums(data);
           if (data.answerDeliveryStatus !== "pending" || data.pendingResponse !== response) throw new Error("legal_request_revision_conflict");
           const answeredAt = Timestamp.now();
           transaction.set(ref, { status: "answered", response, pendingResponse: FieldValue.delete(), answerDeliveryStatus: "sent", answerDeliveredAt: answeredAt, answeredAt, revision: Number(data.revision) + 1, updatedAt: answeredAt }, { merge: true });
           transaction.create(ref.collection("audit").doc(), { action: "answer_delivered", actorPseudonym: this.actorPseudonym(actorId), occurredAt: answeredAt, expiresAt: data.expiresAt ?? null });
         });
-      } catch {
-        await ref.set({ answerDeliveryStatus: "failed", pendingResponse: FieldValue.delete(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+      } catch (error) {
+        // A malformed stored enum is not an SMTP failure; do not overwrite the
+        // record's delivery state or mask the safe data-integrity category.
+        if (error instanceof Error && error.message === "legal_request_record_invalid") throw error;
+        await this.db.runTransaction(async (transaction) => {
+          const current = await transaction.get(ref);
+          if (!current.exists) throw new Error("legal_request_not_found");
+          this.assertEnums(asRecord(current.data(), "legal_request"));
+          transaction.set(ref, { answerDeliveryStatus: "failed", pendingResponse: FieldValue.delete(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+        });
         throw new Error("legal_request_email_unavailable");
       }
     }
@@ -216,17 +237,20 @@ export class FirestoreLegalRequestStore implements LegalRequestStore {
 
   private async alignAuditExpiry(requestId: string): Promise<void> {
     const ref = this.db.collection("legalRequests").doc(requestId);
-    const [request, audit] = await Promise.all([ref.get(), ref.collection("audit").get()]);
-    if (!request.exists) return;
-    const expiresAt = request.get("expiresAt") ?? null;
-    const batch = this.db.batch();
-    for (const document of audit.docs) batch.set(document.ref, { expiresAt }, { merge: true });
-    await batch.commit();
+    await this.db.runTransaction(async (transaction) => {
+      const [request, audit] = await Promise.all([transaction.get(ref), transaction.get(ref.collection("audit"))]);
+      if (!request.exists) return;
+      const data = asRecord(request.data(), "legal_request");
+      this.assertEnums(data);
+      const expiresAt = data.expiresAt ?? null;
+      for (const document of audit.docs) transaction.set(document.ref, { expiresAt }, { merge: true });
+    });
   }
 
   private read(requestId: string, data: Record<string, unknown>): LegalRequestItem {
+    this.assertEnums(data);
     return Object.freeze({
-      requestId, kind: data.kind as LegalRequestKind, status: data.status as LegalRequestStatus,
+      requestId, kind: data.kind, status: data.status,
       receivedAt: asTimestamp(data.receivedAt, "legal_request_received_at").toDate().toISOString(),
       responseDueAt: data.responseDueAt ? asTimestamp(data.responseDueAt, "legal_request_response_due_at").toDate().toISOString() : null,
       answeredAt: data.answeredAt ? asTimestamp(data.answeredAt, "legal_request_answered_at").toDate().toISOString() : null,
@@ -238,10 +262,11 @@ export class FirestoreLegalRequestStore implements LegalRequestStore {
   }
 
   private toOperatorItem(requestId: string, data: Record<string, unknown>): OperatorLegalRequestItem {
+    this.assertEnums(data);
     return Object.freeze({
       requestId,
-      kind: data.kind as LegalRequestKind,
-      status: data.status as LegalRequestStatus,
+      kind: data.kind,
+      status: data.status,
       receivedAt: asTimestamp(data.receivedAt, "legal_request_received_at").toDate().toISOString(),
       responseDueAt: data.responseDueAt ? asTimestamp(data.responseDueAt, "legal_request_response_due_at").toDate().toISOString() : null,
       answeredAt: data.answeredAt ? asTimestamp(data.answeredAt, "legal_request_answered_at").toDate().toISOString() : null,
@@ -249,5 +274,11 @@ export class FirestoreLegalRequestStore implements LegalRequestStore {
       legalHold: data.legalHold === true,
       revision: Number(data.revision),
     });
+  }
+
+  private assertEnums(data: Record<string, unknown>): asserts data is Record<string, unknown> & { kind: LegalRequestKind; status: LegalRequestStatus } {
+    if (!legalRequestKindSchema.safeParse(data.kind).success || !LEGAL_REQUEST_STATUSES.some((status) => status === data.status)) {
+      throw new Error("legal_request_record_invalid");
+    }
   }
 }

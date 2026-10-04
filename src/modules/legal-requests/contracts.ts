@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const legalRequestKindSchema = z.enum(["complaint", "withdrawal", "data_recovery", "suspension_appeal"]);
 export type LegalRequestKind = z.infer<typeof legalRequestKindSchema>;
+export const LEGAL_REQUEST_STATUSES = ["received", "in_review", "answered", "closed"] as const;
 
 const narrative = z.string().trim().min(1).max(4_000);
 const transactionId = z.string().trim().min(1).max(128).optional();
@@ -27,7 +28,7 @@ export const legalRequestAdminActionSchema = z.discriminatedUnion("action", [
 ]);
 export type LegalRequestAdminAction = z.infer<typeof legalRequestAdminActionSchema>;
 
-export type LegalRequestStatus = "received" | "in_review" | "answered" | "closed";
+export type LegalRequestStatus = (typeof LEGAL_REQUEST_STATUSES)[number];
 
 export function complaintResponseDueAt(receivedAt: Date, kind: LegalRequestKind): Date | null {
   if (kind !== "complaint") return null;
