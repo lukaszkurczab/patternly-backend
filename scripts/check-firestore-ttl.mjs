@@ -39,7 +39,7 @@ const expectedPolicies = [
   { collectionGroup: "audit", fieldPath: "expiresAt" },
 ];
 
-let config;
+export let config;
 try {
   config = JSON.parse(readFileSync(configPath, "utf8"));
 } catch (error) {

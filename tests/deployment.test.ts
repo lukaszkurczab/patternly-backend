@@ -1,7 +1,33 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import test from "node:test";
+
+test("TTL publication uses every approved policy and stops after a failed cloud operation", async () => {
+  const directory = await mkdtemp(resolve(tmpdir(), "patternly-ttl-deploy-"));
+  try {
+    const fakeCloud = resolve(directory, "gcloud");
+    const calls = resolve(directory, "calls.jsonl");
+    await writeFile(fakeCloud, `#!/usr/bin/env node\nconst fs = require("node:fs"); const args = process.argv.slice(2); fs.appendFileSync(process.env.TTL_TEST_CALLS, JSON.stringify(args) + "\\n"); if (process.env.TTL_TEST_FAIL === "true") process.exit(1);\n`, { mode: 0o700 });
+    const script = resolve(process.cwd(), "scripts/apply-firestore-ttl.mjs");
+    const env = { ...process.env, GCLOUD_BIN: fakeCloud, TTL_TEST_CALLS: calls };
+    const applied = spawnSync(process.execPath, [script, "--project", "demo-patternly-ttl"], { env, encoding: "utf8" });
+    assert.equal(applied.status, 0, applied.stderr);
+    const invocations = (await readFile(calls, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    const config = JSON.parse(await readFile(resolve(process.cwd(), "config/firestore-ttl.json"), "utf8")) as { policies: { collectionGroup: string }[] };
+    assert.deepEqual(invocations.map((args) => args.find((arg) => arg.startsWith("--collection-group="))), config.policies.map((policy) => `--collection-group=${policy.collectionGroup}`));
+    assert.equal(invocations.every((args) => args.includes("--project=demo-patternly-ttl") && args.includes("--enable-ttl")), true);
+    await writeFile(calls, "");
+    const failed = spawnSync(process.execPath, [script, "--project", "demo-patternly-ttl"], { env: { ...env, TTL_TEST_FAIL: "true" }, encoding: "utf8" });
+    assert.notEqual(failed.status, 0);
+    assert.match(failed.stderr, /TTL update failed for accountDataExportAudits/u);
+    assert.equal((await readFile(calls, "utf8")).trim().split("\n").length, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("Cloud Run container contract is immutable-image and non-root", async () => {
   const dockerfile = await readFile(resolve(process.cwd(), "Dockerfile"), "utf8");
