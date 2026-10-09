@@ -939,6 +939,49 @@ export class FirestoreProgressStore implements ProgressStore {
       if (newMutations.length > 0 && expectedAccountRevision !== accountRevision) return Object.freeze({ accountRevision, applied: Object.freeze([]), duplicates: Object.freeze(duplicates), conflicts: Object.freeze(conflicts), accountRevisionConflict: { code: "account_revision_conflict", currentAccountRevision: accountRevision } });
       for (const { mutation, current } of newMutations) if ((current?.version ?? null) !== mutation.expectedVersion) conflicts.push({ mutationId: mutation.mutationId, code: "version_conflict", current });
       if (conflicts.length > 0) return Object.freeze({ accountRevision, applied: Object.freeze([]), duplicates: Object.freeze(duplicates), conflicts: Object.freeze(conflicts) });
+
+      const changedGoalPlanTracks = new Set(newMutations
+        .map(({ mutation }) => mutation)
+        .filter((mutation) => mutation.recordType === "goal" || mutation.recordType === "learning_plan")
+        .map((mutation) => mutation.trackId));
+      if (changedGoalPlanTracks.size > 0) {
+        const incomingByTrack = new Map<string, Map<"goal" | "learning_plan", ProgressMutation[]>>();
+        for (const mutation of mutations) {
+          if (mutation.recordType !== "goal" && mutation.recordType !== "learning_plan") continue;
+          const trackMutations = incomingByTrack.get(mutation.trackId) ?? new Map<"goal" | "learning_plan", ProgressMutation[]>();
+          const sameTypeMutations = trackMutations.get(mutation.recordType) ?? [];
+          sameTypeMutations.push(mutation);
+          trackMutations.set(mutation.recordType, sameTypeMutations);
+          incomingByTrack.set(mutation.trackId, trackMutations);
+        }
+        const counterpartRefs: Array<{ trackId: string; recordType: "goal" | "learning_plan"; ref: DocumentReference }> = [];
+        for (const trackId of changedGoalPlanTracks) {
+          const incoming = incomingByTrack.get(trackId)!;
+          for (const recordType of ["goal", "learning_plan"] as const) {
+            if (incoming.has(recordType)) continue;
+            counterpartRefs.push({ trackId, recordType, ref: progressCollection.doc(progressDocumentId({ kind: "node", recordType, trackId, targetId: trackId })) });
+          }
+        }
+        const counterpartSnapshots = counterpartRefs.length > 0
+          ? await transaction.getAll(...counterpartRefs.map(({ ref }) => ref))
+          : [];
+        const counterpartByKey = new Map(counterpartRefs.map(({ trackId, recordType }, index) => [canonicalJson({ trackId, recordType }), counterpartSnapshots[index]! ]));
+        const prospectiveRecords: GuestMergeRecord[] = [];
+        for (const trackId of changedGoalPlanTracks) {
+          const incoming = incomingByTrack.get(trackId)!;
+          for (const recordType of ["goal", "learning_plan"] as const) {
+            const typeMutations = incoming.get(recordType);
+            if (typeMutations) {
+              for (const mutation of typeMutations) prospectiveRecords.push({ fingerprint: mutation.fingerprint, recordId: mutation.targetId, recordType, state: mutation.state, trackId, version: mutation.expectedVersion ?? 0 });
+              continue;
+            }
+            const snapshot = counterpartByKey.get(canonicalJson({ trackId, recordType }));
+            if (snapshot?.exists) prospectiveRecords.push(progressRecordToMergeRecord(toView(asRecord(snapshot.data(), "progress"))));
+          }
+        }
+        assertGoalPlanBundles(prospectiveRecords);
+      }
+
       for (const { mutation, current, index, ref } of newMutations) {
         const nextVersion = (current?.version ?? 0) + 1;
         const updatedAt = now();

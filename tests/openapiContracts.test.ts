@@ -329,6 +329,28 @@ async function runAdminReadFixture(wrapper: string, callsite: string): Promise<u
   }
 }
 
+async function runFrontendConsumerFixture(source: string): Promise<string> {
+  const root = await mkdtemp(join(process.env.TMPDIR ?? "/tmp", "patternly-gate02-lifecycle-request-"));
+  try {
+    const mobile = join(root, "mobile");
+    const web = join(root, "web");
+    await mkdir(join(mobile, "src"), { recursive: true });
+    await mkdir(join(web, "src"), { recursive: true });
+    await writeFile(join(web, "src", "AdminPanel.jsx"), source, "utf8");
+    try {
+      await execFileAsync(process.execPath, [resolve(process.cwd(), "scripts/check-frontend-client.mjs")], {
+        cwd: process.cwd(),
+        env: { ...process.env, PATTERNLY_FRONTEND_ROOT: mobile, PATTERNLY_WEB_ROOT: web },
+      });
+      return "";
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
 test("frontend checker binds useAdminRead callsites to the wrapper method", async () => {
   const wrapper = String.raw`function useAdminRead(user, path) { return fetch(\`/v1/admin/\${path}\`, { method: "POST" }); }`;
   await assert.rejects(
@@ -343,4 +365,45 @@ test("frontend checker rejects a useAdminRead callsite with no expected operatio
     runAdminReadFixture(wrapper, `useAdminRead(user, "does-not-exist", validate);`),
     (error: unknown) => error instanceof Error && error.message.includes("frontend_unknown_operation:web:GET /v1/admin/does-not-exist"),
   );
+});
+
+test("frontend checker extracts exact lifecycle request operations and direct admin export requests", async () => {
+  const output = await runFrontendConsumerFixture([
+    "function load(lifecycle, lease, item, selected, version, user) {",
+    '  lifecycle.request("/v1/admin/privacy-requests", {}, lease);',
+    '  lifecycle.request(`/v1/admin/privacy-requests/${encodeURIComponent(item.requestId)}`, {}, lease);',
+    '  lifecycle.request(`/v1/admin/privacy-requests/${encodeURIComponent(item.requestId)}`, { method: "PATCH", body: JSON.stringify({ action: "review" }) }, lease);',
+    '  lifecycle.request("/v1/admin/security-incidents", { method: "POST", body: JSON.stringify({ title: "Example" }) }, lease);',
+    '  requestAdminJson(user, `/v1/admin/security-incidents/${encodeURIComponent(selected.incidentId)}/authority-exports/${version}`, {}, {});',
+    "}",
+  ].join("\n"));
+  assert.doesNotMatch(output, /frontend_missing_consumer_operation:GET \/v1\/admin\/privacy-requests:web/u);
+  assert.doesNotMatch(output, /frontend_missing_consumer_operation:GET \/v1\/admin\/privacy-requests\/\{param0\}:web/u);
+  assert.doesNotMatch(output, /frontend_missing_consumer_operation:PATCH \/v1\/admin\/privacy-requests\/\{param0\}:web/u);
+  assert.doesNotMatch(output, /frontend_missing_consumer_operation:POST \/v1\/admin\/security-incidents:web/u);
+  assert.doesNotMatch(output, /frontend_missing_consumer_operation:GET \/v1\/admin\/security-incidents\/\{param0\}\/authority-exports\/\{param1\}:web/u);
+});
+
+test("frontend checker binds lifecycle methods and rejects ambiguous options and unknown paths", async () => {
+  const mismatch = await runFrontendConsumerFixture(String.raw`
+    function load(lifecycle, lease) {
+      lifecycle.request("/v1/admin/privacy-requests", { method: "POST" }, lease);
+    }
+  `);
+  assert.match(mismatch, /frontend_method_mismatch:web:POST \/v1\/admin\/privacy-requests/u);
+
+  const ambiguous = await runFrontendConsumerFixture(String.raw`
+    function load(lifecycle, lease, extraOptions) {
+      lifecycle.request("/v1/admin/privacy-requests", { ...extraOptions }, lease);
+      lifecycle.request("/v1/admin/privacy-requests", { ["method"]: "POST" }, lease);
+    }
+  `);
+  assert.match(ambiguous, /frontend_unknown_method:web:\/v1\/admin\/privacy-requests/u);
+
+  const unknown = await runFrontendConsumerFixture(String.raw`
+    function load(lifecycle, lease) {
+      lifecycle.request("/v1/admin/not-a-real-operation", {}, lease);
+    }
+  `);
+  assert.match(unknown, /frontend_unknown_operation:web:GET \/v1\/admin\/not-a-real-operation/u);
 });

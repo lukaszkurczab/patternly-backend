@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   buildGuestMergePreview,
+  assertGoalPlanRecordShapes,
+  assertGoalPlanBundles,
   createMergeRecordFingerprint,
   goalPlanConflictGroupSchema,
   goalPlanGroupChoiceSchema,
@@ -59,6 +61,53 @@ test("preview identifies upload, restore, deduplication and divergent records", 
 test("active sessions and recovery journals block adoption", () => {
   assert.equal(previewFor([], [], { activeSession: true }).plan.blockingReason, "active_session");
   assert.equal(previewFor([], [], { pendingJournal: true }).plan.blockingReason, "journal_recovery");
+});
+
+test("learning plan v2 sync requires explicit positive per-track daily availability", () => {
+  const base = planRecord();
+  const state = base.state as Record<string, any>;
+  const plan = state.plan as Record<string, any>;
+  const v2Plan = { ...plan, schemaVersion: 2, minutesPerStudyDay: 25, executionPolicy: { policyVersion: "patternly-learning-execution-v1", initialDiagnosis: null, practice: { modeId: "coding-interview-guided-practice", requestedLength: 10 } }, planningPolicyIdentity: { contentVersion: "policy-v2", artifactSha256: "b".repeat(64), policyVersion: "patternly-learning-planning-v1" } };
+  const validState = { ...state, plan: v2Plan };
+  const validRecordBase = { recordId: track, recordType: "learning_plan" as const, state: validState, trackId: track };
+  const validRecord = { ...validRecordBase, fingerprint: createMergeRecordFingerprint(validRecordBase), version: 1 };
+  assert.equal(guestMergeRecordSchema.safeParse(validRecord).success, true);
+  assert.doesNotThrow(() => assertGoalPlanRecordShapes([validRecord]));
+  for (const invalidAvailability of [undefined, 0, -1, 1.5, 1441]) {
+    const invalidPlan = invalidAvailability === undefined
+      ? Object.fromEntries(Object.entries(v2Plan).filter(([key]) => key !== "minutesPerStudyDay"))
+      : { ...v2Plan, minutesPerStudyDay: invalidAvailability };
+    const invalidState = { ...state, plan: invalidPlan };
+    const invalidBase = { recordId: track, recordType: "learning_plan" as const, state: invalidState, trackId: track };
+    const invalidRecord = { ...invalidBase, fingerprint: createMergeRecordFingerprint(invalidBase), version: 1 };
+    assert.equal(guestMergeRecordSchema.safeParse(invalidRecord).success, true);
+    assert.throws(() => assertGoalPlanRecordShapes([invalidRecord]), { message: "goal_plan_bundle_invalid" });
+  }
+  const { planningPolicyIdentity: _missingIdentity, ...missingIdentityPlan } = v2Plan;
+  const missingIdentityBase = { recordId: track, recordType: "learning_plan" as const, state: { ...state, plan: missingIdentityPlan }, trackId: track };
+  const missingIdentityRecord = { ...missingIdentityBase, fingerprint: createMergeRecordFingerprint(missingIdentityBase), version: 1 };
+  assert.equal(guestMergeRecordSchema.safeParse(missingIdentityRecord).success, true);
+  assert.throws(() => assertGoalPlanRecordShapes([missingIdentityRecord]), { message: "goal_plan_bundle_invalid" });
+});
+
+test("v2 goal-plan bundles require exact revisions and target semantics while legacy v1 remains readable", () => {
+  const goal = goalRecord("prepare_for_an_interview", 3);
+  const sourcePlan = planRecord("18:00", 3);
+  const state = sourcePlan.state as Record<string, any>;
+  const basePlan = state.plan as Record<string, any>;
+  const validPlan = { ...basePlan, schemaVersion: 2, minutesPerStudyDay: 25,
+    executionPolicy: { policyVersion: "patternly-learning-execution-v1", initialDiagnosis: null, practice: { modeId: "coding-interview-guided-practice", requestedLength: 10 } },
+    planningPolicyIdentity: { contentVersion: "policy-v2", artifactSha256: "b".repeat(64), policyVersion: "patternly-learning-planning-v1" } };
+  const bundle = (plan: Record<string, unknown>) => {
+    const planState = { ...state, plan };
+    const payload = { recordId: track, recordType: "learning_plan" as const, state: planState, trackId: track };
+    const planRecordValue = { ...payload, fingerprint: createMergeRecordFingerprint(payload), version: 1 };
+    return [goal, planRecordValue] as GuestMergeRecord[];
+  };
+  assert.doesNotThrow(() => assertGoalPlanBundles(bundle(validPlan)));
+  assert.throws(() => assertGoalPlanBundles(bundle({ ...validPlan, goalRevision: 2 })), { message: "goal_plan_bundle_invalid" });
+  assert.throws(() => assertGoalPlanBundles(bundle({ ...validPlan, acceptedTarget: { meaning: "event", targetDate: null } })), { message: "goal_plan_bundle_invalid" });
+  assert.doesNotThrow(() => assertGoalPlanBundles([goal, planRecord("18:00", 2)]), "v1 data keeps its established compatibility reader");
 });
 
 test("confirmation requires every conflict and every goal plan group", () => {

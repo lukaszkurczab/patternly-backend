@@ -31,13 +31,28 @@ const goalSchema = z.object({
     if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month! - 1 || date.getUTCDate() !== day) context.addIssue({ code: z.ZodIssueCode.custom, message: "goal_target_date_invalid" });
   }
 });
-const planSchema = z.object({
-  schemaVersion: z.literal(1), planId: z.string().min(1), trackId, goalRevision: revision,
+const planFieldsSchema = z.object({
+  planId: z.string().min(1), trackId, goalRevision: revision,
   status: z.enum(["accepted", "paused", "completed"]), timezone: z.string().min(1), contentVersion: z.string().min(1), artifactSha256: z.string().regex(/^[a-f0-9]{64}$/u),
   acceptedTarget: z.object({ meaning: z.enum(["event", "deadline", "checkpoint", "none"]), targetDate: z.string().nullable() }).strict(),
   createdAt: z.string().datetime({ offset: true }), updatedAt: z.string().datetime({ offset: true }), planRevision: revision, commandId: z.string().min(1),
   slots: z.array(z.object({ slotId: z.string().min(1), day: days, localTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/u), sessionLength: z.number().int().positive() }).strict()).min(1).max(7),
 }).strict();
+const executionModeSchema = z.object({ modeId: z.string().min(1), requestedLength: z.number().int().positive() }).strict();
+const executionPolicySchema = z.object({
+  policyVersion: z.literal("patternly-learning-execution-v1"),
+  initialDiagnosis: executionModeSchema.nullable(),
+  practice: executionModeSchema,
+}).strict();
+const planningPolicyIdentitySchema = z.object({
+  contentVersion: z.string().min(1),
+  artifactSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  policyVersion: z.string().min(1),
+}).strict();
+const planSchema = z.union([
+  planFieldsSchema.extend({ schemaVersion: z.literal(1) }).strict(),
+  planFieldsSchema.extend({ schemaVersion: z.literal(2), minutesPerStudyDay: z.number().int().positive().max(1440), executionPolicy: executionPolicySchema, planningPolicyIdentity: planningPolicyIdentitySchema }).strict(),
+]);
 const goalStateSchema = z.object({ schemaVersion: z.literal(1), revision, record: goalSchema }).strict();
 const planStateSchema = z.object({ schemaVersion: z.literal(1), revision, plan: planSchema }).strict();
 const tombstoneSchema = z.object({ deleted: z.literal(true) }).strict();
@@ -148,8 +163,16 @@ export function assertGoalPlanBundles(records: readonly GuestMergeRecord[]): voi
       const goalState = goalStateSchema.parse(goal.state);
       const planState = planStateSchema.parse(plan.state);
       if (planState.plan.goalRevision > goalState.revision) throw new Error("goal_plan_bundle_invalid");
+      if (planState.plan.schemaVersion === 2 && (planState.plan.goalRevision !== goalState.revision || !acceptedTargetMatchesGoal(planState.plan.acceptedTarget, goalState.record))) throw new Error("goal_plan_bundle_invalid");
     }
   }
+}
+
+function acceptedTargetMatchesGoal(target: Readonly<{ meaning: "event" | "deadline" | "checkpoint" | "none"; targetDate: string | null }>, goal: Readonly<{ goalType: string; targetDate?: string | undefined }>): boolean {
+  const meaning = goal.goalType === "prepare_for_an_interview" || goal.goalType === "prepare_for_a_certification" ? "event"
+    : goal.goalType === "build_foundations" ? "deadline"
+      : goal.goalType === "refresh_and_maintain_skills" ? "checkpoint" : "none";
+  return target.meaning === meaning && target.targetDate === (meaning === "none" ? null : goal.targetDate ?? null);
 }
 
 export function assertGoalPlanRecordShapes(records: readonly GuestMergeRecord[]): void {

@@ -1,6 +1,7 @@
 import { access, readFile, readdir } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import ts from "typescript";
 
 const backendRoot = resolve(process.cwd());
 const mobileRoot = resolve(process.env.PATTERNLY_FRONTEND_ROOT ?? join(backendRoot, "../patternly"));
@@ -110,8 +111,78 @@ function adminReadWrapperMethod(source) {
   return wrapper.match(/\bmethod\s*:\s*([`'”"])(GET|POST|PUT|DELETE|PATCH)\1/u)?.[2] ?? "GET";
 }
 
+function scriptKindFor(file) {
+  if (file.endsWith(".tsx")) return ts.ScriptKind.TSX;
+  if (file.endsWith(".jsx")) return ts.ScriptKind.JSX;
+  if (file.endsWith(".ts")) return ts.ScriptKind.TS;
+  return ts.ScriptKind.JS;
+}
+
+function pathFromArgument(node, sourceFile) {
+  const value = node;
+  if (!value) return null;
+  if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) return value.text;
+  if (ts.isTemplateExpression(value)) return value.getText(sourceFile).slice(1, -1);
+  return null;
+}
+
+function methodFromOptions(options) {
+  if (!options) return "GET";
+  if (!ts.isObjectLiteralExpression(options)) return null;
+  let method = null;
+  for (const property of options.properties) {
+    if (property.name && ts.isComputedPropertyName(property.name)) return null;
+    if (ts.isSpreadAssignment(property)) return null;
+    const name = property.name && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name) || ts.isNumericLiteral(property.name))
+      ? property.name.text
+      : null;
+    if (name !== "method") continue;
+    if (method !== null || !ts.isPropertyAssignment(property) || !ts.isStringLiteralLike(property.initializer)) return null;
+    method = property.initializer.text.toUpperCase();
+  }
+  return method ?? "GET";
+}
+
+function extractLifecycleRequestOperations(source, file, scope) {
+  const operations = [];
+  const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, scriptKindFor(file));
+
+  function visit(node) {
+    if (ts.isCallExpression(node)) {
+      const expression = node.expression;
+      let callKind = null;
+      let pathArgument = null;
+      let optionsArgument = null;
+      if (ts.isPropertyAccessExpression(expression)
+        && expression.name.text === "request"
+        && ts.isIdentifier(expression.expression)
+        && expression.expression.text === "lifecycle") {
+        callKind = "lifecycle.request";
+        pathArgument = node.arguments[0];
+        optionsArgument = node.arguments[1];
+      } else if (ts.isIdentifier(expression) && expression.text === "requestAdminJson") {
+        callKind = "requestAdminJson";
+        pathArgument = node.arguments[1];
+        optionsArgument = node.arguments[2];
+      }
+
+      if (callKind && pathArgument) {
+        const rawPath = pathFromArgument(pathArgument, sourceFile);
+        if (rawPath !== null) {
+          const method = methodFromOptions(optionsArgument);
+          addOperation(operations, scope, file, method, rawPath, source, node.getStart(sourceFile), method === null ? `${callKind}:method-ambiguous` : callKind);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  return operations;
+}
+
 function extractOperations(source, file, scope) {
   const operations = [];
+  operations.push(...extractLifecycleRequestOperations(source, file, scope));
   const adminReadMethod = adminReadWrapperMethod(source);
   const variableValues = new Map();
   const variablePattern = /\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*(?:\s*:\s*[^=;\n]+)?\s*=\s*([\s\S]*?);/gu;
@@ -213,6 +284,10 @@ for (const candidate of extracted) {
   const exact = candidate.method === null ? undefined : documented.get(operationKey(candidate.method, candidate.path));
   if (candidate.method === null) {
     const pathMatches = [...documented.values()].filter((entry) => entry.path === candidate.path);
+    if (candidate.reason.endsWith(":method-ambiguous")) {
+      failures.push(`frontend_unknown_method:${candidate.scope}:${candidate.path}:${relative(backendRoot, candidate.file)}:${candidate.line}`);
+      continue;
+    }
     if (pathMatches.length === 0) failures.push(`frontend_unknown_path:${candidate.scope}:${candidate.path}:${relative(backendRoot, candidate.file)}:${candidate.line}`);
     continue;
   }
