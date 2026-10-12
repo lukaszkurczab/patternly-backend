@@ -13,7 +13,7 @@ import { authenticateIdentity, authenticateRequest } from "../modules/auth/reque
 import type { AuthenticatedIdentity } from "../modules/auth/contracts.js";
 import type { BackendStores } from "../infrastructure/firestore/stores.js";
 import type { PrivacyRequestDetails } from "../modules/privacy-requests/store.js";
-import { createProgressPageToken, isSyncRequestWithinBudget, parseProgressPageToken, syncRequestSchema, type ProgressRecord } from "../modules/progress/contracts.js";
+import { isSyncRequestWithinBudget, parseProgressPageToken, syncRequestSchema } from "../modules/progress/contracts.js";
 import { guestMergeConfirmationSchema, guestMergeSnapshotSchema } from "../modules/users/merge.js";
 import { contentReportStatusSchema, createContentReportSchema, transitionContentReportSchema, type ContentReportStatus, type ContentReportView, type OperatorContentReportDetail } from "../modules/content-reports/contracts.js";
 import { accountRecoveryCodeConsumeSchema, accountRecoveryCodeIssueSchema, accountRecoveryCodeIssueStatusSchema, accountRecoveryCodeSavedAckSchema, accountRecoveryOperationAckSchema, accountRecoveryOperationStatusSchema, accountSessionRevokeSchema, accountDeletionRequestSchema, publicDeletionStatusSchema } from "../modules/account-lifecycle/contracts.js";
@@ -25,7 +25,6 @@ import { revenueCatEventSchema, verifyRevenueCatAuthorization } from "../modules
 import { createLegalRequestSchema, createPublicLegalRequestSchema, legalRequestAdminActionSchema } from "../modules/legal-requests/contracts.js";
 import { adoptionTransferApplySchema, adoptionTransferConfirmSchema, adoptionTransferPreviewSchema, adoptionTransferSealSchema, adoptionTransferStartSchema, adoptionTransferStatusSchema, adoptionTransferUploadSchema } from "../modules/users/adoptionTransfer.js";
 import { z } from "zod";
-import { canonicalJson } from "../infrastructure/identity/canonicalJson.js";
 import { runtimeRoute, type RuntimeRouteDescriptor } from "./openapi-validator.js";
 import { normalizeRoutePath, type RouteGuard } from "./route-contract.js";
 import type { ContentPackageService } from "../modules/content/packages.js";
@@ -89,14 +88,6 @@ const LEGAL_REQUEST_ID_PATTERN = /^lr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab
 const legalRequestId = (value: unknown): string | null => typeof value === "string" && LEGAL_REQUEST_ID_PATTERN.test(value) ? value : null;
 const ADOPTION_TRANSFER_SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/u;
 const adoptionTransferSessionId = (value: unknown): string | null => typeof value === "string" && ADOPTION_TRANSFER_SESSION_ID_PATTERN.test(value) ? value : null;
-
-function progressRecordIdentity(record: Pick<ProgressRecord, "recordType" | "targetId" | "trackId">): string {
-  return canonicalJson({ recordId: record.targetId, recordType: record.recordType, trackId: record.trackId });
-}
-
-function progressRecordOrder(left: ProgressRecord, right: ProgressRecord): number {
-  return progressRecordIdentity(left).localeCompare(progressRecordIdentity(right));
-}
 
 const authErrorStatus = (error: unknown): number => {
   const message = error instanceof Error ? error.message : "";
@@ -841,40 +832,23 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     if (Object.keys(query).some((key) => key !== "pageSize" && key !== "pageToken")) {
       return reply.code(400).send({ error: { code: "invalid_request" } });
     }
-    let snapshot;
-    try {
-      snapshot = await requireStores(dependencies).progress.readSnapshot(request.userId!);
-    } catch (error) {
-      if (error instanceof Error && error.message === "content_identity_schema_conflict") {
-        return reply.code(409).send({ error: { code: "content_identity_schema_conflict" } });
-      }
-      throw error;
-    }
-    if (query.pageSize === undefined && query.pageToken === undefined) return { accountRevision: snapshot.accountRevision, generation: snapshot.generation ?? 0, records: snapshot.records };
     const pageSize = query.pageSize === undefined ? 100 : Number(query.pageSize);
     if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) return reply.code(400).send({ error: { code: "invalid_request" } });
-    let cursor: string | null = null;
+    let token = null;
     if (query.pageToken !== undefined) {
       if (typeof query.pageToken !== "string") return reply.code(400).send({ error: { code: "progress_pagination_token_invalid" } });
-      try {
-        const token = parseProgressPageToken(query.pageToken);
-        if (token.userId !== request.userId || token.accountRevision !== snapshot.accountRevision || token.generation !== (snapshot.generation ?? 0)) return reply.code(409).send({ error: { code: "progress_generation_conflict" } });
-        cursor = token.cursor;
-      } catch (error) {
-        if (error instanceof Error && error.message === "progress_pagination_token_invalid") return reply.code(400).send({ error: { code: "progress_pagination_token_invalid" } });
-        throw error;
-      }
+      try { token = parseProgressPageToken(query.pageToken); }
+      catch { return reply.code(400).send({ error: { code: "progress_pagination_token_invalid" } }); }
     }
-    const records = [...snapshot.records].sort(progressRecordOrder);
-    const cursorIndex = cursor === null ? -1 : records.findIndex((record) => progressRecordIdentity(record) === cursor);
-    if (cursor !== null && cursorIndex < 0) return reply.code(409).send({ error: { code: "progress_generation_conflict" } });
-    const start = cursorIndex + 1;
-    const page = records.slice(start, start + pageSize);
-    const last = page.at(-1);
-    const nextPageToken = start + page.length < records.length && last
-      ? createProgressPageToken({ version: 1, userId: request.userId!, generation: snapshot.generation ?? 0, accountRevision: snapshot.accountRevision, cursor: progressRecordIdentity(last) })
-      : null;
-    return { accountRevision: snapshot.accountRevision, generation: snapshot.generation ?? 0, records: page, nextPageToken };
+    try {
+      return await requireStores(dependencies).progress.readPage(request.userId!, request.expectedAuthorizationGeneration!, pageSize, token);
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === "progress_generation_conflict" || code === "content_identity_schema_conflict") return reply.code(409).send({ error: { code } });
+      const status = authErrorStatus(error);
+      if (status !== 500) return reply.code(status).send({ error: { code } });
+      throw error;
+    }
   });
 
   app.get("/v1/account-data/export", { preHandler: createAccountExportGuard(dependencies) }, async (request, reply) => {

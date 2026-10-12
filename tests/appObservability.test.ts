@@ -409,3 +409,30 @@ test("conflict event codes are allowlisted, unknown values are literal unknown, 
   assert.deepEqual(events.map((entry) => entry.code), ["version_conflict", "unknown"]);
   assert.doesNotMatch(JSON.stringify(events), /private-backend-code|private-mutation/u);
 });
+
+test("progress queries validate before storage and default to a bounded page", async () => {
+  const calls: unknown[][] = [];
+  const app = application({ readPage: async (...args) => { calls.push(args); return { accountRevision: 0, generation: 0, records: [], nextPageToken: null }; } }, []);
+  try {
+    for (const query of ["?pageSize=0", "?pageSize=101", "?pageSize=oops", "?pageToken=invalid", "?unexpected=true"]) {
+      const response = await app.inject({ method: "GET", url: `/v1/progress${query}`, headers });
+      assert.equal(response.statusCode, 400);
+    }
+    assert.equal(calls.length, 0);
+    const response = await app.inject({ method: "GET", url: "/v1/progress", headers });
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json(), { accountRevision: 0, generation: 0, records: [], nextPageToken: null });
+    assert.deepEqual(calls, [["server-user", 1, 100, null]]);
+  } finally { await app.close(); }
+});
+
+test("progress read races return explicit bounded error codes", async () => {
+  for (const [code, status] of [["progress_generation_conflict", 409], ["authorization_generation_conflict", 409], ["account_deleted", 401], ["content_identity_schema_conflict", 409]] as const) {
+    const app = application({ readPage: async () => { throw new Error(code); } }, []);
+    try {
+      const response = await app.inject({ method: "GET", url: "/v1/progress?pageSize=100", headers });
+      assert.equal(response.statusCode, status);
+      assert.equal(response.json().error.code, code);
+    } finally { await app.close(); }
+  }
+});
