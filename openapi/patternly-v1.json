@@ -1300,7 +1300,8 @@
             "schema": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 100
+              "maximum": 100,
+              "default": 100
             }
           },
           {
@@ -1315,7 +1316,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Canonical progress state and account revision; paged responses include generation and nextPageToken",
+            "description": "Bounded progress page; omitted pageSize defaults to 100. Every response includes generation and nextPageToken. Tokens are opaque and valid only for one account revision and generation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1324,7 +1325,8 @@
                   "required": [
                     "accountRevision",
                     "generation",
-                    "records"
+                    "records",
+                    "nextPageToken"
                   ],
                   "properties": {
                     "accountRevision": {
@@ -1337,6 +1339,7 @@
                     },
                     "records": {
                       "type": "array",
+                      "maxItems": 100,
                       "items": {
                         "type": "object",
                         "additionalProperties": false,

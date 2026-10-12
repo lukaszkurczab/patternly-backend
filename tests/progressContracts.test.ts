@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHash } from "node:crypto";
 
 import {
   createProgressPageToken,
@@ -141,8 +142,8 @@ test("sync and state limits are enforced without a compatibility branch", () => 
 });
 
 test("pagination tokens contain only generation, revision and cursor identity", () => {
-  const token = createProgressPageToken({ version: 1, userId, generation: 2, accountRevision: 3, cursor: "cursor" });
-  assert.deepEqual(parseProgressPageToken(token), { version: 1, userId, generation: 2, accountRevision: 3, cursor: "cursor" });
+  const token = createProgressPageToken({ version: 2, userId, generation: 2, accountRevision: 3, cursor: "a".repeat(64) });
+  assert.deepEqual(parseProgressPageToken(token), { version: 2, userId, generation: 2, accountRevision: 3, cursor: "a".repeat(64) });
   const [encoded, checksum] = token.split(".");
   const payload = JSON.parse(Buffer.from(encoded!, "base64url").toString("utf8")) as Record<string, unknown>;
   payload.protocolVersion = 4;
@@ -155,4 +156,16 @@ test("canonical JSON uses NFC normalization and UTF-8 byte accounting", () => {
   assert.throws(() => canonicalJson({ "e\u0301": 1, "é": 2 }), /canonical_json_duplicate_key/u);
   assert.throws(() => canonicalJson({ value: Number.NaN }), /canonical_json_non_finite_number/u);
   assert.ok(canonicalJsonBytes({ value: "🙂" }) > JSON.stringify({ value: "🙂" }).length);
+});
+
+
+test("pagination rejects old, ambiguous and open-shaped tokens", () => {
+  const valid = { version: 2 as const, userId, generation: 0, accountRevision: 0, cursor: "a".repeat(64) };
+  const token = createProgressPageToken(valid);
+  assert.throws(() => parseProgressPageToken(`${token}.ignored`), /progress_pagination_token_invalid/u);
+  for (const candidate of [{ ...valid, version: 1 }, { ...valid, generation: -1 }, { ...valid, accountRevision: -1 }, { ...valid, cursor: "logical-id" }, { ...valid, unexpected: true }]) {
+    const encoded = Buffer.from(JSON.stringify(candidate), "utf8").toString("base64url");
+    const checksum = createHash("sha256").update(`${candidate.userId}:${canonicalJsonBytes(candidate)}:${encoded}`, "utf8").digest("hex").slice(0, 32);
+    assert.throws(() => parseProgressPageToken(`${encoded}.${checksum}`), /progress_pagination_token_invalid/u);
+  }
 });

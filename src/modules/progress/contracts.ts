@@ -193,9 +193,25 @@ export type ProgressSnapshot = Readonly<{
   generation?: number;
 }>;
 
-export type ProgressPageToken = Readonly<{ version: 1; userId: string; generation: number; accountRevision: number; cursor: string }>;
+const progressPageTokenSchema = z.object({
+  version: z.literal(2),
+  userId: z.string().min(1).max(128),
+  generation: z.number().int().nonnegative().safe(),
+  accountRevision: z.number().int().nonnegative().safe(),
+  // First document not yet returned, queried inclusively on the next page.
+  cursor: z.string().regex(/^[a-f0-9]{64}$/u),
+}).strict();
+
+export type ProgressPageToken = z.infer<typeof progressPageTokenSchema>;
+export type ProgressPage = Readonly<{
+  accountRevision: number;
+  generation: number;
+  records: readonly ProgressRecord[];
+  nextPageToken: string | null;
+}>;
 
 export function createProgressPageToken(value: ProgressPageToken): string {
+  if (!progressPageTokenSchema.safeParse(value).success) throw new Error("progress_pagination_token_invalid");
   const payload = canonicalJsonBytes(value);
   const serialized = Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
   const checksum = createHash("sha256").update(`${value.userId}:${payload}:${serialized}`, "utf8").digest("hex").slice(0, 32);
@@ -203,14 +219,15 @@ export function createProgressPageToken(value: ProgressPageToken): string {
 }
 
 export function parseProgressPageToken(token: string): ProgressPageToken {
-  const [encoded, checksum] = token.split(".");
-  if (!encoded || !checksum || !/^[a-f0-9]{32}$/u.test(checksum)) throw new Error("progress_pagination_token_invalid");
+  if (token.length > 1024) throw new Error("progress_pagination_token_invalid");
+  const parts = token.split(".");
+  const [encoded, checksum] = parts;
+  if (parts.length !== 2 || !encoded || !/^[A-Za-z0-9_-]+$/u.test(encoded) || !checksum || !/^[a-f0-9]{32}$/u.test(checksum)) throw new Error("progress_pagination_token_invalid");
   let parsed: unknown;
   try { parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")); } catch { throw new Error("progress_pagination_token_invalid"); }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("progress_pagination_token_invalid");
-  const value = parsed as Record<string, unknown>;
-  if (value.version !== 1 || typeof value.userId !== "string" || !Number.isSafeInteger(value.generation) || !Number.isSafeInteger(value.accountRevision) || typeof value.cursor !== "string") throw new Error("progress_pagination_token_invalid");
-  const candidate = value as unknown as ProgressPageToken;
+  const result = progressPageTokenSchema.safeParse(parsed);
+  if (!result.success) throw new Error("progress_pagination_token_invalid");
+  const candidate = result.data;
   const payload = canonicalJsonBytes(candidate);
   const expected = createHash("sha256").update(`${candidate.userId}:${payload}:${encoded}`, "utf8").digest("hex").slice(0, 32);
   if (expected !== checksum) throw new Error("progress_pagination_token_invalid");
@@ -240,6 +257,7 @@ export type SyncBatchResult = Readonly<{
 export interface ProgressStore {
   read(userId: string): Promise<readonly ProgressRecord[]>;
   readSnapshot(userId: string): Promise<ProgressSnapshot>;
+  readPage(userId: string, expectedAuthorizationGeneration: number, pageSize: number, token: ProgressPageToken | null): Promise<ProgressPage>;
   previewAdoption(userId: string, guestSnapshot: GuestMergeSnapshot): Promise<AdoptionPreview>;
   confirmAdoption(userId: string, expectedAuthorizationGeneration: number, deviceId: string, guestSnapshot: GuestMergeSnapshot, confirmation: GuestMergeConfirmation): Promise<AdoptionExecution>;
   applyBatch(userId: string, expectedAuthorizationGeneration: number, deviceId: string, expectedAccountRevision: number, mutations: readonly ProgressMutation[], metadata: SyncBatchMetadata): Promise<SyncBatchResult>;

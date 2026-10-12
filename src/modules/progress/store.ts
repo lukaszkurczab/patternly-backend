@@ -1,4 +1,4 @@
-import { FieldValue, Timestamp, type Firestore, type DocumentReference, type CollectionReference, type DocumentSnapshot } from "firebase-admin/firestore";
+import { FieldPath, FieldValue, Timestamp, type Firestore, type DocumentReference, type CollectionReference, type DocumentSnapshot } from "firebase-admin/firestore";
 import { createHash } from "node:crypto";
 import { canonicalJson, canonicalJsonBytes } from "../../infrastructure/identity/canonicalJson.js";
 import {
@@ -63,9 +63,12 @@ import {
 import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
 import {
   assertContentIdentityState,
+  createProgressPageToken,
   progressMutationSchema,
   syncableRecordTypeSchema,
   type ProgressMutation,
+  type ProgressPage,
+  type ProgressPageToken,
   type ProgressRecord,
   type ProgressSnapshot,
   type ProgressStore,
@@ -294,6 +297,37 @@ export class FirestoreProgressStore implements ProgressStore {
     const snapshot = await progressCollectionRef(this.db, userId, generation).get();
     const records = snapshot.docs.map((document) => toView(asRecord(document.data(), "progress")));
     return Object.freeze({ accountRevision: readAccountRevision(metadata), generation, records: Object.freeze(records) });
+  }
+
+  public async readPage(userId: string, expectedAuthorizationGeneration: number, pageSize: number, token: ProgressPageToken | null): Promise<ProgressPage> {
+    if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) throw new Error("invalid_request");
+    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+    const metaRef = accountMetadataRef(this.db, userId);
+    const [user, meta] = await this.db.getAll(userRef, metaRef);
+    if (!user?.exists) throw new Error("account_deleted");
+    assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
+    const metadata = meta!.data();
+    if (hasActiveAdoptionPromotionLease(metadata)) throw new Error("progress_generation_conflict");
+    const generation = readAccountGeneration(metadata);
+    const accountRevision = readAccountRevision(metadata);
+    if (token && (token.userId !== userId || token.accountRevision !== accountRevision || token.generation !== generation)) throw new Error("progress_generation_conflict");
+    let query = progressCollectionRef(this.db, userId, generation).orderBy(FieldPath.documentId()).limit(pageSize + 1);
+    if (token) query = query.startAt(token.cursor);
+    const snapshot = await query.get();
+    const [currentUser, currentMeta] = await this.db.getAll(userRef, metaRef);
+    if (!currentUser?.exists) throw new Error("account_deleted");
+    assertExpectedAuthorizationGeneration(asRecord(currentUser.data(), "user"), expectedAuthorizationGeneration);
+    const currentMetadata = currentMeta!.data();
+    if (readAccountRevision(currentMetadata) !== accountRevision || readAccountGeneration(currentMetadata) !== generation
+      || hasActiveAdoptionPromotionLease(currentMetadata)
+      || meta!.exists !== currentMeta!.exists
+      || (meta!.exists && !meta!.updateTime!.isEqual(currentMeta!.updateTime!))) throw new Error("progress_generation_conflict");
+    if (token && snapshot.docs[0]?.id !== token.cursor) throw new Error("progress_generation_conflict");
+    // Validate the lookahead too; malformed persisted facts never become a token.
+    const validated = snapshot.docs.map((document) => toView(asRecord(document.data(), "progress")));
+    const lookahead = snapshot.docs[pageSize];
+    return Object.freeze({ accountRevision, generation, records: Object.freeze(validated.slice(0, pageSize)),
+      nextPageToken: lookahead ? createProgressPageToken({ version: 2, userId, generation, accountRevision, cursor: lookahead.id }) : null });
   }
 
   public async previewAdoption(userId: string, guestSnapshot: GuestMergeSnapshot): Promise<AdoptionPreview> {

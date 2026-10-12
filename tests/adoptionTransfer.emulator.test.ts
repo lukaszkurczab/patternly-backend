@@ -76,9 +76,22 @@ test("canonical transfer persists chunks, applies one generation, and retries sa
   assert.equal(Object.hasOwn(status.json(), "protocolVersion"), false);
   assert.equal(Object.hasOwn(status.json(), "contentIdentitySchema"), false);
 
-  const progress = await context.app.inject({ method: "GET", url: "/v1/progress", headers });
-  assert.equal(progress.statusCode, 200);
-  assert.equal(progress.json().records.length, records.length);
+  const restored = [];
+  let pageToken: string | null = null;
+  let revision: number | null = null;
+  do {
+    const progress: Awaited<ReturnType<typeof context.app.inject>> = await context.app.inject({ method: "GET", url: `/v1/progress${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ""}`, headers });
+    assert.equal(progress.statusCode, 200);
+    const page = progress.json();
+    assert.ok(page.records.length <= 100);
+    assert.equal(page.generation, 1);
+    if (revision === null) revision = page.accountRevision;
+    assert.equal(page.accountRevision, revision);
+    restored.push(...page.records);
+    pageToken = page.nextPageToken;
+  } while (pageToken);
+  assert.equal(restored.length, records.length);
+  assert.deepEqual(restored.map((record) => record.targetId).sort(), records.map((record) => record.recordId).sort());
   const operation = (await firestore().collection("accounts").doc(accountId).collection("adoptionTransfers").doc(sessionId).get()).data();
   assert.ok(operation);
   assert.equal(Object.hasOwn(operation!, "protocolVersion"), false);
