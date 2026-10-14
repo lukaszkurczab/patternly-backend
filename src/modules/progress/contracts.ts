@@ -1,3 +1,4 @@
+import { isAccountWireState } from "./accountWireState.js";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import type { AdoptionExecution, AdoptionPreview, GuestMergeConfirmation, GuestMergeSnapshot } from "../users/merge.js";
@@ -65,8 +66,8 @@ function contentIdentityConflict(): never {
 
 /**
  * Validate identity-bearing leaves without adding a schema marker to the
- * payload. Opaque progress fields remain application-owned, while arbitrary
- * resolved reference or tombstone is required to have the exact shape above.
+ * payload. This helper checks identity only; the record-type wire guard below
+ * closes all accepted state fields before a record can be written or read.
  */
 export function assertContentIdentityState(value: unknown): void {
   const seen = new Set<unknown>();
@@ -135,6 +136,7 @@ const progressMutationShape = {
 } as const;
 
 export const progressMutationSchema = z.object({ ...progressMutationShape, recordType: syncableRecordTypeSchema }).strict().superRefine((value, context) => {
+  if (!isAccountWireState(value.recordType, value.targetId, value.trackId, value.state)) context.addIssue({ code: z.ZodIssueCode.custom, message: "account_wire_state_invalid", path: ["state"] });
   const expectedKind = value.recordType === "training_attempt" || value.recordType === "review_queue_entry" ? "item" : "node";
   if (value.kind !== expectedKind) context.addIssue({ code: z.ZodIssueCode.custom, message: "progress_kind_record_type_mismatch", path: ["kind"] });
 });

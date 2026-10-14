@@ -1,3 +1,4 @@
+import { attemptState } from "./progressFixtures.js";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import test from "node:test";
@@ -204,13 +205,13 @@ const validSyncPayload = {
   highWatermark: 1,
   mutations: [{
     mutationId: "mutation-1234567",
-    kind: "node",
-    recordType: "active_track",
+    kind: "item",
+    recordType: "training_attempt",
     trackId: "track-private",
     targetId: "record-private",
     expectedVersion: null,
     fingerprint: "a".repeat(64),
-    state: { email: "private@example.com", idToken: "secret-id-token" },
+    state: attemptState("record-private", "track-private", "private@example.com secret-id-token"),
   }],
 };
 const validConfirmPayload = {
@@ -310,7 +311,7 @@ test("production Fastify logs only allowlisted request diagnostics and never can
       },
       payload: {
         ...validSyncPayload,
-        mutations: [{ ...validSyncPayload.mutations[0], state: { email: "private-body@example.invalid", nested: { operationSecret: "nested-operation-secret" } } }],
+        mutations: [{ ...validSyncPayload.mutations[0], state: attemptState("record-private", "track-private", "private-body@example.invalid nested-operation-secret") }],
       },
     });
     assert.equal(safe.statusCode, 200);

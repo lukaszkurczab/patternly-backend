@@ -10,7 +10,8 @@ time-limited record must fail closed when its `expiresAt` is in the past.
 | Collection group | Terminality/status | Expiry source | Period | Mechanism | Legacy/backfill owner |
 | --- | --- | --- | --- | --- | --- |
 | `syncOperations` | Created only after a confirmed adoption is materialized | immutable `createdAt` | 30 days | TTL | application TTL writer; user recursive lifecycle owns descendant deletion |
-| `syncMutations` | Created only for an applied batch/adoption mutation; conflicts create none | immutable `createdAt` | 30 days | TTL | application TTL writer; user recursive lifecycle owns descendant deletion |
+| `syncMutations` | Created only for an applied batch/adoption mutation; conflicts create none | immutable `createdAt` | 30 days | TTL | application TTL writer; user recursive lifecycle owns descendant deletion; [legacy receipt resolution](sync-mutation-receipts.md) never deletes/backfills an incomplete row |
+| `syncBatches` | Immutable successful batch result, including verified duplicates | immutable `createdAt` | 30 days | TTL | application writer; replay does not renew expiry |
 | `contentReports` | Set once at creation; status/unlink does not change it | immutable `createdAt` | 30 days anonymous; 180 days with `accountId` or `contactEmail` at creation | TTL | no automatic backfill |
 | `audit` below `contentReports` | Only a non-duplicate status transition | exact verified parent `contentReports.expiresAt` | inherits parent | TTL collection group | historic records without expiry are ODK081 recursive-purge scope |
 | `deletionProofs` | `status: deleted` | immutable `completedAt` | 3 years | TTL | no backfill |

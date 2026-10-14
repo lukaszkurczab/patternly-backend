@@ -1,3 +1,4 @@
+import { isAccountWireState } from "../progress/accountWireState.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { canonicalJson, canonicalJsonBytes, CANONICAL_JSON_VERSION } from "../../infrastructure/identity/canonicalJson.js";
@@ -33,6 +34,7 @@ export const adoptionTransferRecordSchema = z.object({
   }),
   version: z.number().int().nonnegative(),
 }).strict().superRefine((value, context) => {
+  if (!isAccountWireState(value.recordType, value.recordId, value.trackId, value.state)) context.addIssue({ code: z.ZodIssueCode.custom, message: "account_wire_state_invalid", path: ["state"] });
   try {
     if (JSON.stringify(value.state).length > 128 * 1024 || canonicalJsonBytes(value.state) > ADOPTION_TRANSFER_MAX_CANONICAL_BYTES) context.addIssue({ code: z.ZodIssueCode.custom, message: "adoption_transfer_record_too_large", path: ["state"] });
   } catch {

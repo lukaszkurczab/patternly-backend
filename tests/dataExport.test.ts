@@ -1,3 +1,4 @@
+import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -59,8 +60,10 @@ async function seedDataset(): Promise<void> {
   await db.collection(COLLECTIONS.users).doc(otherUserId).set({ createdAt: now, updatedAt: now });
   await db.collection(COLLECTIONS.identityMappings).doc("identity-a").set({ userId, provider: "firebase", subject: "raw-subject-a", email: "account-a@example.com", emailVerified: true, createdAt: now });
   await db.collection(COLLECTIONS.identityMappings).doc("identity-b").set({ userId: otherUserId, provider: "firebase", subject: "raw-subject-b", email: "account-b@example.com", emailVerified: true, createdAt: now });
-  await db.collection(COLLECTIONS.users).doc(userId).collection("progress").doc("progress-a").set({ kind: "item", recordType: "training_attempt", trackId: "track-a", targetId: "item-a", version: 2, fingerprint: "a".repeat(64), state: { nestedTimestamp: now, mastery: "learning" }, lastMutationId: "mutation-a", updatedAt: now });
-  await db.collection(COLLECTIONS.users).doc(otherUserId).collection("progress").doc("progress-b").set({ kind: "item", recordType: "training_attempt", trackId: "track-b", targetId: "item-b", version: 1, fingerprint: "b".repeat(64), state: { private: true }, lastMutationId: "mutation-b", updatedAt: now });
+  for (const [owner, track] of [[userId, "track-a"], [otherUserId, "track-b"]] as const) {
+    const record = { recordId: "current", recordType: "active_track" as const, trackId: track, state: { trackId: track } };
+    await db.collection(COLLECTIONS.users).doc(owner!).collection("progress").doc(`progress-${track}`).set({ kind: "node", recordType: record.recordType, trackId: track, targetId: "current", version: 2, fingerprint: createMergeRecordFingerprint(record), state: record.state, lastMutationId: "mutation-export-fixture", updatedAt: now });
+  }
   await db.collection(COLLECTIONS.users).doc(userId).collection("devices").doc("device-hash-a").set({ deviceKey: "raw-device-key-a", platform: "ios", appVersion: "1.2.3", lastSeenAt: now, updatedAt: now });
   await db.collection(COLLECTIONS.users).doc(userId).collection("trackAccess").doc("track-a").set({ trackId: "track-a", source: "subscription", status: "active", updatedAt: now });
   await db.collection(COLLECTIONS.users).doc(userId).collection("entitlements").doc("premium").set({ entitlement: "premium", status: "active", source: "revenuecat", expiresAt: now, updatedAt: now });
@@ -118,7 +121,7 @@ test("account export contract is complete, isolated, timestamp-portable and reda
     const profile = portable.profile as Record<string, unknown>;
     assert.deepEqual(profile.identity, { provider: "firebase", email: "account-a@example.com", emailVerified: true });
     assert.equal("subject" in (profile.identity as Record<string, unknown>), false);
-    assert.deepEqual((portable.progress as Array<Record<string, unknown>>)[0]?.state, { nestedTimestamp: now.toDate().toISOString(), mastery: "learning" });
+    assert.deepEqual((portable.progress as Array<Record<string, unknown>>)[0]?.state, { trackId: "track-a" });
     assert.equal((portable.linkedContentReports as Array<Record<string, unknown>>).length, 1);
     const report = (portable.linkedContentReports as Array<Record<string, unknown>>)[0] ?? {};
     assert.equal("contactEmail" in report, false);

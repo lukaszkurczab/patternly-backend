@@ -1,10 +1,9 @@
 /**
  * The closed JSON profile used by the account synchronisation protocol.
  *
- * This is intentionally kept separate from the historical progress
- * fingerprint helper.  Existing records have already been fingerprinted and
- * must remain readable with their original identity; new request envelopes and
- * protocol-v3 digests use this profile.
+ * Request envelopes and protocol-v3 digests use this NFC profile. Account
+ * record fingerprints use the separate exact-string recordFingerprintPayload
+ * profile, preserving existing APP record and retry identities.
  */
 export const CANONICAL_JSON_VERSION = "canonical-json-v1" as const;
 

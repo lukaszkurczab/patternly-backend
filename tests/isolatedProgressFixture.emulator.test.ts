@@ -1,3 +1,4 @@
+import { attemptState, reviewState } from "./progressFixtures.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -89,7 +90,7 @@ test("ordinary progress sync is rejected during a live adoption promotion lease"
       sessionId,
       batchId,
       highWatermark: ordinal,
-      mutations: [fixtureMutation("training_attempt", `lease-attempt-${ordinal}`, { result: "correct" }, ordinal)],
+      mutations: [fixtureMutation("training_attempt", `lease-attempt-${ordinal}`, attemptState(`lease-attempt-${ordinal}`, trackId), ordinal)],
     });
 
     await metadataRef.set({ accountRevision: 0, adoptionPromotionSessionId: "different-session", adoptionPromotionLeaseExpiresAt: leaseExpiry });
@@ -195,13 +196,9 @@ test("isolated emulator fixture preserves canonical progress across service rein
     assert.deepEqual(empty.records, []);
     assert.equal(empty.accountRevision, 0);
 
-    const identity = {
-      kind: "resolved" as const,
-      ref: { trackId, questionId: "two-sum-001", contentVersion: "2026.09.1", artifactSha256: "a".repeat(64) },
-    };
     const mutations = [
-      fixtureMutation("training_attempt", "fixture-attempt-001", { result: "correct", identity }, 1),
-      fixtureMutation("review_queue_entry", "fixture-review-001", { status: "due", dueAt: "2026-09-25T09:00:00.000Z", identity }, 2),
+      fixtureMutation("training_attempt", "fixture-attempt-001", attemptState("fixture-attempt-001", trackId), 1),
+      fixtureMutation("review_queue_entry", "fixture-review-001", reviewState("fixture-review-001", trackId), 2),
     ];
     const request = syncRequestSchema.parse({
       canonicalVersion: "canonical-json-v1",
@@ -234,8 +231,8 @@ test("isolated emulator fixture preserves canonical progress across service rein
     const secondRead = await new FirestoreProgressStore(refreshedDb).readSnapshot(authUid);
     assert.equal(firstRead.accountRevision, 2);
     assert.deepEqual(firstRead.records.map((record) => [record.recordType, record.targetId, record.state]).sort(), [
-      ["review_queue_entry", "fixture-review-001", { status: "due", dueAt: "2026-09-25T09:00:00.000Z", identity }],
-      ["training_attempt", "fixture-attempt-001", { result: "correct", identity }],
+      ["review_queue_entry", "fixture-review-001", reviewState("fixture-review-001", trackId)],
+      ["training_attempt", "fixture-attempt-001", attemptState("fixture-attempt-001", trackId)],
     ]);
     assert.deepEqual(secondRead, firstRead);
   } finally {

@@ -1,3 +1,4 @@
+import { attemptState } from "./progressFixtures.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -15,9 +16,9 @@ const store = new FirestoreProgressStore(db);
 const accounts: string[] = [];
 const deviceId = "00000000-0000-4000-8000-000000000000";
 const mutation = (index: number): ProgressMutation => {
-  const state = { result: "correct", index };
   const targetId = `attempt-${String(index).padStart(5, "0")}`;
   const trackId = "coding-interview-dsa-problem-solving";
+  const state = attemptState(targetId, trackId, `answer-${index}`);
   return { mutationId: `mutation-${String(index).padStart(16, "0")}`, kind: "item", recordType: "training_attempt", trackId, targetId, expectedVersion: null, state, fingerprint: createMergeRecordFingerprint({ recordId: targetId, recordType: "training_attempt", trackId, state }) };
 };
 async function account(count = 2) {

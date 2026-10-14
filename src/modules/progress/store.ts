@@ -103,6 +103,22 @@ function adoptionApplyLeaseIsValid(metadata: Record<string, unknown> | undefined
 }
 function expiresAfterSyncRetention(createdAt: Timestamp): Timestamp { return Timestamp.fromMillis(createdAt.toMillis() + SYNC_RETENTION_MS); }
 
+function mutationReceiptBinding(mutation: ProgressMutation) {
+  return { fingerprint: mutation.fingerprint, targetId: mutation.targetId, recordType: mutation.recordType, trackId: mutation.trackId };
+}
+
+function assertMutationReplay(mutation: ProgressMutation, receipt: Record<string, unknown>, current: ProgressRecord | null): void {
+  const binding = Object.entries(mutationReceiptBinding(mutation));
+  // A present field is evidence, even when malformed. Never replace it with
+  // the incoming request or the latest record's identity.
+  if (binding.some(([key, value]) => receipt[key] !== undefined && receipt[key] !== value)) throw new Error("mutation_id_reuse");
+  if (binding.every(([key]) => receipt[key] !== undefined)) return;
+  // Old receipts (or TTL-deleted receipts) need an exact surviving witness.
+  // A newer record cannot prove what the old mutation ID originally wrote.
+  if (!current || current.lastMutationId !== mutation.mutationId
+    || binding.some(([key, value]) => current[key as keyof ProgressRecord] !== value)) throw new Error("mutation_id_reuse");
+}
+
 function rejectRetiredMarkers(data: Record<string, unknown>): void {
   if (Object.prototype.hasOwnProperty.call(data, "protocolVersion") || Object.prototype.hasOwnProperty.call(data, "contentIdentitySchema")) throw new Error("content_identity_schema_conflict");
 }
@@ -398,7 +414,7 @@ export class FirestoreProgressStore implements ProgressStore {
       assertGoalPlanBundles([...resolved.values()]);
       for (const write of progressWrites) {
         transaction.set(write.ref, { kind: write.mutation.kind, recordType: write.mutation.recordType, trackId: write.mutation.trackId, targetId: write.mutation.targetId, version: write.nextVersion, fingerprint: write.mutation.fingerprint, state: write.mutation.state, lastMutationId: write.mutation.mutationId, updatedAt: write.updatedAt });
-        transaction.create(write.mutationRef, { deviceId, mutationId: write.mutation.mutationId, recordType: write.mutation.recordType, appliedVersion: write.nextVersion, createdAt: write.updatedAt, expiresAt: expiresAfterSyncRetention(write.updatedAt), operationId: parsedConfirmation.operationId });
+        transaction.create(write.mutationRef, { deviceId, mutationId: write.mutation.mutationId, ...mutationReceiptBinding(write.mutation), appliedVersion: write.nextVersion, createdAt: write.updatedAt, expiresAt: expiresAfterSyncRetention(write.updatedAt), operationId: parsedConfirmation.operationId });
       }
       const nextAccountRevision = accountRevision + progressWrites.length;
       if (progressWrites.length > 0) transaction.set(metaRef, { accountRevision: nextAccountRevision, updatedAt: now() }, { merge: true });
@@ -963,8 +979,7 @@ export class FirestoreProgressStore implements ProgressStore {
         const mutationSnapshot = snapshots[mutations.length + index]!;
         if (mutationSnapshot.exists || current?.lastMutationId === mutation.mutationId) {
           const stored = mutationSnapshot.exists ? asRecord(mutationSnapshot.data(), "sync_mutation") : {};
-          if (stored.fingerprint !== undefined && (stored.fingerprint !== mutation.fingerprint || stored.targetId !== mutation.targetId || stored.recordType !== mutation.recordType)) throw new Error("mutation_id_reuse");
-          if (current && (current.fingerprint !== mutation.fingerprint || current.targetId !== mutation.targetId || current.recordType !== mutation.recordType)) throw new Error("mutation_id_reuse");
+          assertMutationReplay(mutation, stored, current);
           duplicates.push(mutation.mutationId);
           continue;
         }
@@ -1021,7 +1036,7 @@ export class FirestoreProgressStore implements ProgressStore {
         const updatedAt = now();
         const updated: ProgressRecord = Object.freeze({ kind: mutation.kind, recordType: mutation.recordType, trackId: mutation.trackId, targetId: mutation.targetId, version: nextVersion, fingerprint: mutation.fingerprint, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt: updatedAt.toDate().toISOString() });
         transaction.set(ref, { kind: mutation.kind, recordType: mutation.recordType, trackId: mutation.trackId, targetId: mutation.targetId, version: nextVersion, fingerprint: mutation.fingerprint, state: mutation.state, lastMutationId: mutation.mutationId, updatedAt, ...(activeGeneration === 0 ? {} : { generation: activeGeneration }) });
-        transaction.create(mutationRefs[index]!, { deviceId, mutationId: mutation.mutationId, recordType: mutation.recordType, appliedVersion: nextVersion, createdAt: updatedAt, expiresAt: expiresAfterSyncRetention(updatedAt) });
+        transaction.create(mutationRefs[index]!, { deviceId, mutationId: mutation.mutationId, ...mutationReceiptBinding(mutation), appliedVersion: nextVersion, createdAt: updatedAt, expiresAt: expiresAfterSyncRetention(updatedAt) });
         applied.push(updated);
       }
       const nextAccountRevision = accountRevision + applied.length;

@@ -1,3 +1,4 @@
+import { attemptState } from "./progressFixtures.js";
 import assert from "node:assert/strict";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import test from "node:test";
@@ -872,8 +873,8 @@ test("Firestore transaction preserves sync CAS and idempotency under concurrent 
     trackId: "coding-interview-dsa-problem-solving",
     targetId: "item-1",
     expectedVersion: null,
-    state: { mastery: "learning" },
-    fingerprint: createMergeRecordFingerprint({ recordId: "item-1", recordType: "training_attempt", state: { mastery: "learning" }, trackId: "coding-interview-dsa-problem-solving" }),
+    state: attemptState("item-1", "coding-interview-dsa-problem-solving", "learning"),
+    fingerprint: createMergeRecordFingerprint({ recordId: "item-1", recordType: "training_attempt", state: attemptState("item-1", "coding-interview-dsa-problem-solving", "learning"), trackId: "coding-interview-dsa-problem-solving" }),
   };
   const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
   const userId = (await context.app.inject({ method: "GET", url: "/v1/me", headers })).json().user.id as string;
@@ -897,19 +898,19 @@ test("Firestore transaction preserves sync CAS and idempotency under concurrent 
   const replayedMutation = (await firestore().collection("users").doc(userId).collection("syncMutations").doc(mutation.mutationId).get()).data();
   assert.equal(replayedMutation?.createdAt.toMillis(), retryCreatedAt);
   assert.equal(replayedMutation?.expiresAt.toMillis(), retryExpiresAt);
-  const conflictState = { mastery: "mastered" };
+  const conflictState = attemptState("item-1", mutation.trackId, "mastered");
   const conflict = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(1, [{ ...mutation, mutationId: `${mutation.mutationId}-conflict`, expectedVersion: null, state: conflictState, fingerprint: createMergeRecordFingerprint({ recordId: "item-1", recordType: "training_attempt", state: conflictState, trackId: mutation.trackId }) }]) });
   assert.equal(conflict.statusCode, 409);
   assert.equal(conflict.json().conflicts[0].current.version, 1);
-  assert.equal(conflict.json().conflicts[0].current.state.mastery, "learning");
+  assert.equal(conflict.json().conflicts[0].current.state.response.optionId, "learning");
 });
 
 test("progress sync rejects fresh writes and batch replays when authorization rotates after the request guard", async () => {
   const auth = await createRegisteredAuthUser(context);
   const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
   const userRef = firestore().collection(COLLECTIONS.users).doc(auth.userId);
-  const state = { mastery: "learning" };
   const trackId = "coding-interview-dsa-problem-solving";
+  const state = attemptState("generation-race-attempt", trackId, "learning");
   const syncMutation = {
     mutationId: `generation-race-sync-${Date.now()}`,
     kind: "item" as const,
@@ -982,7 +983,7 @@ test("one-shot adoption rejects fresh confirmation and operation replay when aut
   const snapshot = {
     guestSnapshotVersion: 1,
     guestUserId,
-    records: [{ fingerprint: createMergeRecordFingerprint({ recordId: "generation-race-active", recordType: "active_track", state, trackId: state.trackId }), recordId: "generation-race-active", recordType: "active_track" as const, state, trackId: state.trackId, version: 0 }],
+    records: [{ fingerprint: createMergeRecordFingerprint({ recordId: "current", recordType: "active_track", state, trackId: state.trackId }), recordId: "current", recordType: "active_track" as const, state, trackId: state.trackId, version: 0 }],
     activeSession: false,
     pendingJournal: false,
   };
@@ -1053,8 +1054,8 @@ test("sync rejects duplicate mutations before writing and applies distinct targe
     trackId: "coding-interview-dsa-problem-solving",
     targetId,
     expectedVersion: null,
-    state: { mastery },
-    fingerprint: createMergeRecordFingerprint({ recordId: targetId, recordType: "training_attempt", state: { mastery }, trackId: "coding-interview-dsa-problem-solving" }),
+    state: attemptState(targetId, "coding-interview-dsa-problem-solving", mastery),
+    fingerprint: createMergeRecordFingerprint({ recordId: targetId, recordType: "training_attempt", state: attemptState(targetId, "coding-interview-dsa-problem-solving", mastery), trackId: "coding-interview-dsa-problem-solving" }),
   });
   const original = mutation(`duplicate-id-${Date.now()}-001`, "item-1", "learning");
   const duplicateId = { ...mutation(`duplicate-id-${Date.now()}-002`, "item-2", "mastered"), mutationId: original.mutationId };
@@ -1690,7 +1691,7 @@ test("account deletion removes owned Firestore documents, preserves a tombstone,
   const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
   const userId = me.json().user.id as string;
-  const state = { value: true };
+  const state = attemptState("delete-item", "coding-interview-dsa-problem-solving");
   const mutation = { mutationId: `mutation-${Date.now()}-delete`, kind: "item" as const, recordType: "training_attempt" as const, trackId: "coding-interview-dsa-problem-solving", targetId: "delete-item", expectedVersion: null, state, fingerprint: createMergeRecordFingerprint({ recordId: "delete-item", recordType: "training_attempt", state, trackId: "coding-interview-dsa-problem-solving" }) };
   await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: canonicalSyncPayload(0, [mutation], "deletion-batch") });
   const linked = createContentReportSchema.parse({ ...reportBody("9f61e3f3-f23e-467c-b92a-9b8fd0514f25"), linkAccount: true, contactEmail: "learner@example.com" });

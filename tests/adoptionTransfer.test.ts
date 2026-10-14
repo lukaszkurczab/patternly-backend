@@ -1,3 +1,4 @@
+import { attemptState } from "./progressFixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -40,7 +41,7 @@ test("canonical transfer requests reject retired marker fields", () => {
   assert.equal(adoptionTransferStartSchema.safeParse(start).success, true);
   assert.equal(adoptionTransferStartSchema.safeParse({ ...start, protocolVersion: 4 }).success, false);
 
-  const item = record("training_attempt", "attempt-1", { result: "correct" });
+  const item = record("training_attempt", "attempt-1", attemptState("attempt-1", trackId));
   const chunkBase = { chunkId: "chunk-0", index: 0, recordKeys: [adoptionTransferRecordKey(item)], bytes: 128 } as const;
   const upload = { canonicalVersion: "canonical-json-v1" as const, deviceId, chunk: { ...chunkBase, fingerprint: createAdoptionTransferChunkFingerprint(chunkBase) }, records: [item] };
   assert.equal(adoptionTransferRecordSchema.safeParse(item).success, true);
@@ -54,7 +55,7 @@ test("canonical transfer requests reject retired marker fields", () => {
 test("transfer identity fields accept long IDs while chunk and envelope budgets remain bounded", () => {
   const longRecordId = "record-" + "r".repeat(500);
   const longTrackId = "track-" + "t".repeat(300);
-  const item = record("training_attempt", longRecordId, { result: "correct" }, longTrackId);
+  const item = record("training_attempt", longRecordId, attemptState(longRecordId, longTrackId), longTrackId);
   const identity = { recordType: item.recordType, recordId: item.recordId, trackId: item.trackId };
   assert.equal(adoptionTransferIdentitySchema.safeParse(identity).success, true);
   assert.equal(adoptionTransferRecordSchema.safeParse(item).success, true);

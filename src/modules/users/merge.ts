@@ -1,3 +1,4 @@
+import { isAccountWireState } from "../progress/accountWireState.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
@@ -8,6 +9,7 @@ import {
 } from "../progress/contracts.js";
 import { MAX_SERIALIZED_JSON_UTF16_CODE_UNITS } from "../progress/serializedJsonLimits.js";
 import { canonicalJson } from "../../infrastructure/identity/canonicalJson.js";
+import { recordFingerprintPayload } from "../../infrastructure/identity/recordFingerprint.js";
 
 const uuid = z.string().uuid();
 const id = z.string().min(1);
@@ -58,7 +60,9 @@ const planStateSchema = z.object({ schemaVersion: z.literal(1), revision, plan: 
 const tombstoneSchema = z.object({ deleted: z.literal(true) }).strict();
 
 const recordShape = { fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), recordId: id, state: stateSchema, trackId, version: z.number().int().nonnegative() } as const;
-export const guestMergeRecordSchema = z.object({ ...recordShape, recordType: syncableRecordTypeSchema }).strict();
+export const guestMergeRecordSchema = z.object({ ...recordShape, recordType: syncableRecordTypeSchema }).strict().superRefine((value, context) => {
+  if (!isAccountWireState(value.recordType, value.recordId, value.trackId, value.state)) context.addIssue({ code: z.ZodIssueCode.custom, message: "account_wire_state_invalid", path: ["state"] });
+});
 const snapshotShape = { guestSnapshotVersion: z.number().int().nonnegative(), guestUserId: uuid, activeSession: z.boolean(), pendingJournal: z.boolean() } as const;
 export const guestMergeSnapshotSchema = z.object({ ...snapshotShape, records: z.array(guestMergeRecordSchema).max(1_000) }).strict();
 export const guestMergeConflictSchema = z.object({ accountVersion: z.number().int().nonnegative(), conflictId: z.string().min(1), guestVersion: z.number().int().nonnegative(), recordId: id, recordType: syncableRecordTypeSchema }).strict();
@@ -146,7 +150,7 @@ export function progressRecordToMergeRecord(record: ProgressRecord): GuestMergeR
 }
 
 export function createMergeRecordFingerprint(record: Readonly<{ recordId: string; recordType: SyncableRecordType; state: Readonly<Record<string, unknown>>; trackId: string }>): string {
-  return sha256(canonicalJson({ recordId: record.recordId, recordType: record.recordType, state: record.state, trackId: record.trackId }));
+  return sha256(recordFingerprintPayload(record));
 }
 
 export function assertGoalPlanBundles(records: readonly GuestMergeRecord[]): void {
@@ -208,6 +212,7 @@ function buildGroups(local: readonly GuestMergeRecord[], account: readonly Guest
 function isGoalPlan(record: GuestMergeRecord): boolean { return record.recordType === "goal" || record.recordType === "learning_plan"; }
 function live(record: GuestMergeRecord | undefined): GuestMergeRecord | undefined { return record?.state.deleted === true ? undefined : record; }
 function assertIntegrity(record: GuestMergeRecord): void {
+  if (!isAccountWireState(record.recordType, record.recordId, record.trackId, record.state)) throw new Error("account_wire_state_invalid");
   try { assertContentIdentityState(record.state); } catch { throw new Error("content_identity_schema_conflict"); }
   if (createMergeRecordFingerprint(record) !== record.fingerprint) throw new Error("progress_fingerprint_mismatch");
 }

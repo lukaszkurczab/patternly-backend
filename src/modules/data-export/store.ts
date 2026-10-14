@@ -1,3 +1,4 @@
+import { FirestoreProgressStore } from "../progress/store.js";
 import { randomBytes } from "node:crypto";
 import { Timestamp, type DocumentReference, type Firestore } from "firebase-admin/firestore";
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
@@ -22,7 +23,6 @@ import { projectContentReportContext } from "../content-reports/contracts.js";
 import { activeAuthorizationGeneration, assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
 
 const USER_COLLECTIONS = Object.freeze({
-  progress: "progress",
   devices: "devices",
   trackAccess: "trackAccess",
   entitlements: "entitlements",
@@ -198,7 +198,7 @@ export class FirestoreDataExportStore implements DataExportStore {
     const [userSnapshot, identitiesSnapshot, progressSnapshot, devicesSnapshot, trackAccessSnapshot, entitlementsSnapshot, legalAcceptancesSnapshot, purchaseConfirmationsSnapshot, syncMetadataSnapshot, reportsSnapshot, consumerCasesSnapshot, auditSnapshot] = await Promise.all([
       userRef.get(),
       this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId).get(),
-      userRef.collection(USER_COLLECTIONS.progress).get(),
+      new FirestoreProgressStore(this.db).readSnapshot(userId),
       userRef.collection(USER_COLLECTIONS.devices).get(),
       userRef.collection(USER_COLLECTIONS.trackAccess).get(),
       userRef.collection(USER_COLLECTIONS.entitlements).get(),
@@ -213,8 +213,7 @@ export class FirestoreDataExportStore implements DataExportStore {
     if (!userSnapshot.exists || asRecord(userSnapshot.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
     const user = asRecord(userSnapshot.data(), "user");
     const identity = readSafeIdentity(identitiesSnapshot.docs.map((document) => ({ id: document.id, data: asRecord(document.data(), "identity_mapping") })));
-    const progress = progressSnapshot.docs
-      .map((document) => readProgressRecord(asRecord(document.data(), "progress")))
+    const progress = [...progressSnapshot.records]
       .sort(compareBy((record) => `${record.recordType}:${record.targetId}:${record.trackId}`));
     const linkedContentReports = reportsSnapshot.docs
       .map((document) => readLinkedContentReport(asRecord(document.data(), "content_report")))
@@ -301,30 +300,6 @@ function readSafeIdentity(documents: readonly Readonly<{ id: string; data: Recor
     provider: identity.provider,
     email: typeof identity.email === "string" ? identity.email : null,
     emailVerified: identity.emailVerified,
-  });
-}
-
-function readProgressRecord(row: Record<string, unknown>): DataExportProgressRecord {
-  const kind = row.kind;
-  const recordType = row.recordType;
-  const trackId = row.trackId;
-  const targetId = row.targetId;
-  const version = row.version;
-  const fingerprint = row.fingerprint;
-  const lastMutationId = row.lastMutationId;
-  if ((kind !== "node" && kind !== "item") || typeof recordType !== "string" || typeof trackId !== "string" || typeof targetId !== "string" || typeof version !== "number" || !Number.isSafeInteger(version) || version < 0 || typeof fingerprint !== "string" || typeof lastMutationId !== "string") throw new Error("progress_record_invalid");
-  const state = row.state;
-  if (!isRecordLike(state)) throw new Error("progress_state_record_invalid");
-  return Object.freeze({
-    kind,
-    recordType,
-    trackId,
-    targetId,
-    version,
-    fingerprint,
-    state: asJsonRecord(state, "progress_state"),
-    lastMutationId,
-    updatedAt: asIsoString(row.updatedAt, "progress_updated_at"),
   });
 }
 
@@ -417,14 +392,6 @@ function isAuthorizationError(error: unknown): boolean {
 
 function isRecordLike(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) && !(value instanceof Date) && !(value instanceof Timestamp) && !Buffer.isBuffer(value);
-}
-
-function asJsonRecord(value: Record<string, unknown>, field: string): Readonly<Record<string, unknown>> {
-  try {
-    return Object.freeze(toJsonValue(value) as Record<string, unknown>);
-  } catch {
-    throw new Error(`${field}_not_serializable`);
-  }
 }
 
 function toJsonValue(value: unknown): unknown {

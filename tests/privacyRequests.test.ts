@@ -1,3 +1,5 @@
+import { attemptState } from "./progressFixtures.js";
+import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test, { after, beforeEach } from "node:test";
@@ -41,7 +43,12 @@ test("account request has an isolated lifecycle and serves a prepared response o
 
   const start = await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${requestId}`, headers: adminHeaders, payload: { action: "start_review", expectedRevision: 0 } });
   assert.equal(start.statusCode, 200);
-  await getFirestore().collection("users").doc(subject.userId).collection("progress").doc("large-state").set({ kind: "item", recordType: "training_attempt", trackId: "track", targetId: "large", version: 1, fingerprint: "a".repeat(64), state: { notes: "x".repeat(200_000) }, lastMutationId: "large-mutation", updatedAt: new Date() });
+  for (let index = 0; index < 3; index++) {
+    const targetId = `large-${index}`, trackId = "track";
+    const state = attemptState(targetId, trackId, "x".repeat(90_000));
+    await getFirestore().collection("users").doc(subject.userId).collection("progress").doc(targetId).set({ kind: "item", recordType: "training_attempt", trackId, targetId, version: 1,
+      fingerprint: createMergeRecordFingerprint({ recordId: targetId, recordType: "training_attempt", trackId, state }), state, lastMutationId: `large-mutation-${index}`, updatedAt: new Date() });
+  }
   const falseFulfilment = await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${requestId}`, headers: adminHeaders, payload: { action: "prepare_response", expectedRevision: 1, outcome: "fulfilled", response: "Article 15 response", reason: "Request fulfilled", complaintInformationIncluded: true, executionEvidence: "data-export:fixture" } });
   assert.equal(falseFulfilment.statusCode, 409);
   const prepare = await context.app.inject({ method: "PATCH", url: `/v1/admin/privacy-requests/${requestId}`, headers: adminHeaders, payload: { action: "execute_export", expectedRevision: 1 } });

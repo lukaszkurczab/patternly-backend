@@ -1,3 +1,4 @@
+import { attemptState } from "./progressFixtures.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -57,7 +58,7 @@ test.after(async () => {
 
 test("canonical sync persists exact identity records and replays by batch metadata", async () => {
   const userId = await account();
-  const state = { identity: { kind: "resolved", ref: { trackId, questionId: "question-1", contentVersion: "2026.09.1", artifactSha256: "a".repeat(64) } }, result: "correct" };
+  const state = attemptState("attempt-1", trackId);
   const firstMutation = mutation("training_attempt", "attempt-1", state);
   const first = await store.applyBatch(userId, 1, deviceId, 0, [firstMutation], metadata());
   assert.equal(first.applied.length, 1);
@@ -77,7 +78,7 @@ test("long sync identities persist through hashed Firestore document keys", asyn
   const userId = await account();
   const longTrackId = "track".repeat(60);
   const longTargetId = "target".repeat(100);
-  const state = { result: "correct" };
+  const state = attemptState(longTargetId, longTrackId);
   const base = { recordId: longTargetId, recordType: "training_attempt" as const, trackId: longTrackId, state };
   const longMutation = {
     mutationId: `mutation-${randomUUID()}`,
@@ -115,7 +116,7 @@ test("read fails closed for malformed persisted progress identity records", asyn
 
 test("one-shot adoption uses the same exact identity and explicit group choice shape", async () => {
   const userId = await account();
-  const state = { result: "mastered" };
+  const state = attemptState("attempt-1", trackId, "mastered");
   const guestUserId = randomUUID();
   const snapshot = { guestSnapshotVersion: 1, guestUserId, records: [{ recordId: "attempt-1", recordType: "training_attempt" as const, trackId, state, version: 0, fingerprint: createMergeRecordFingerprint({ recordId: "attempt-1", recordType: "training_attempt", trackId, state }) }], activeSession: false, pendingJournal: false };
   const preview = await store.previewAdoption(userId, snapshot);

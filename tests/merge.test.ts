@@ -1,3 +1,4 @@
+import { attemptState } from "./progressFixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -21,8 +22,8 @@ const accountUserId = "11111111-1111-4111-8111-111111111111";
 const guestUserId = "22222222-2222-4222-8222-222222222222";
 const track = "coding-interview-dsa-problem-solving";
 
-function record(input: Readonly<{ recordId: string; state: Readonly<Record<string, unknown>>; trackId?: string; version?: number; recordType?: GuestMergeRecord["recordType"] }>): GuestMergeRecord {
-  const base = { recordId: input.recordId, recordType: input.recordType ?? "training_attempt", state: input.state, trackId: input.trackId ?? track };
+function record(input: Readonly<{ recordId: string; answer: string; trackId?: string; version?: number }>): GuestMergeRecord {
+  const base = { recordId: input.recordId, recordType: "training_attempt" as const, state: attemptState(input.recordId, input.trackId ?? track, input.answer), trackId: input.trackId ?? track };
   return { ...base, fingerprint: createMergeRecordFingerprint(base), version: input.version ?? 0 };
 }
 
@@ -47,13 +48,13 @@ function planRecord(time = "18:00", goalRevision = 3, version = 0): GuestMergeRe
 }
 
 test("preview identifies upload, restore, deduplication and divergent records", () => {
-  const local = record({ recordId: "attempt-1", state: { result: "correct" } });
-  const remote = record({ recordId: "attempt-2", state: { result: "incorrect" }, version: 2 });
+  const local = record({ recordId: "attempt-1", answer: "correct" });
+  const remote = record({ recordId: "attempt-2", answer: "incorrect", version: 2 });
   assert.equal(previewFor([], []).plan.caseId, "emptyLocalEmptyRemote");
   assert.deepEqual(previewFor([local], []).plan.uploadRecordIds, [mergeRecordKey(local)]);
   assert.deepEqual(previewFor([], [remote]).plan.restoreRecordIds, [mergeRecordKey(remote)]);
   assert.deepEqual(previewFor([local], [local]).plan.deduplicatedRecordIds, [mergeRecordKey(local)]);
-  const divergent = previewFor([local], [record({ recordId: local.recordId, state: { result: "incorrect" }, version: 3 })]);
+  const divergent = previewFor([local], [record({ recordId: local.recordId, answer: "incorrect", version: 3 })]);
   assert.equal(divergent.plan.caseId, "divergentRecord");
   assert.deepEqual(divergent.plan.conflictRecordIds, [mergeRecordKey(local)]);
 });
@@ -80,13 +81,13 @@ test("learning plan v2 sync requires explicit positive per-track daily availabil
     const invalidState = { ...state, plan: invalidPlan };
     const invalidBase = { recordId: track, recordType: "learning_plan" as const, state: invalidState, trackId: track };
     const invalidRecord = { ...invalidBase, fingerprint: createMergeRecordFingerprint(invalidBase), version: 1 };
-    assert.equal(guestMergeRecordSchema.safeParse(invalidRecord).success, true);
+    assert.equal(guestMergeRecordSchema.safeParse(invalidRecord).success, invalidAvailability === 1441);
     assert.throws(() => assertGoalPlanRecordShapes([invalidRecord]), { message: "goal_plan_bundle_invalid" });
   }
   const { planningPolicyIdentity: _missingIdentity, ...missingIdentityPlan } = v2Plan;
   const missingIdentityBase = { recordId: track, recordType: "learning_plan" as const, state: { ...state, plan: missingIdentityPlan }, trackId: track };
   const missingIdentityRecord = { ...missingIdentityBase, fingerprint: createMergeRecordFingerprint(missingIdentityBase), version: 1 };
-  assert.equal(guestMergeRecordSchema.safeParse(missingIdentityRecord).success, true);
+  assert.equal(guestMergeRecordSchema.safeParse(missingIdentityRecord).success, false);
   assert.throws(() => assertGoalPlanRecordShapes([missingIdentityRecord]), { message: "goal_plan_bundle_invalid" });
 });
 
@@ -111,7 +112,7 @@ test("v2 goal-plan bundles require exact revisions and target semantics while le
 });
 
 test("confirmation requires every conflict and every goal plan group", () => {
-  const adoption = previewFor([record({ recordId: "attempt-1", state: { result: "correct" } })], [record({ recordId: "attempt-1", state: { result: "incorrect" }, version: 2 })]);
+  const adoption = previewFor([record({ recordId: "attempt-1", answer: "correct" })], [record({ recordId: "attempt-1", answer: "incorrect", version: 2 })]);
   const conflictId = adoption.preview.conflicts[0]!.conflictId;
   const confirmation = guestMergeConfirmationSchema.parse({ operationId: adoption.preview.operationId, previewFingerprint: adoption.preview.fingerprint, resolutions: [{ conflictId, resolution: "keep_guest" }], groupChoices: [] });
   assert.equal(validateGuestMergeConfirmation(adoption.preview, confirmation).status, "ready_to_execute");
@@ -124,8 +125,8 @@ test("confirmation requires every conflict and every goal plan group", () => {
 });
 
 test("full identity keys remain collision safe across tracks", () => {
-  const first = record({ recordId: "a:b", state: { track: "c:d" } });
-  const second = record({ recordId: "a", state: { track: "b:c:d" } });
+  const first = record({ recordId: "a:b", answer: "c:d" });
+  const second = record({ recordId: "a", answer: "b:c:d" });
   assert.notEqual(mergeRecordKey(first), mergeRecordKey(second));
   assert.equal(previewFor([first, second], []).plan.uploadRecordIds.length, 2);
 });
@@ -133,8 +134,8 @@ test("full identity keys remain collision safe across tracks", () => {
 test("merge identity fields accept long IDs through preview and confirmation", () => {
   const longRecordId = "record-" + "r".repeat(500);
   const longTrackId = "track-" + "t".repeat(300);
-  const local = record({ recordId: longRecordId, state: { result: "correct" }, trackId: longTrackId });
-  const remote = record({ recordId: longRecordId, state: { result: "incorrect" }, trackId: longTrackId, version: 2 });
+  const local = record({ recordId: longRecordId, answer: "correct", trackId: longTrackId });
+  const remote = record({ recordId: longRecordId, answer: "incorrect", trackId: longTrackId, version: 2 });
 
   assert.equal(guestMergeRecordSchema.safeParse(local).success, true);
   const preview = previewFor([local], [remote]);

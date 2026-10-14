@@ -29,7 +29,8 @@
     "test:operator:emulator": "node scripts/run-operator-emulator-tests.mjs",
     "test:recovery:emulator": "node scripts/run-recovery-emulator-tests.mjs",
     "test:operator:acceptance": "node scripts/run-operator-acceptance-tests.mjs",
-    "test:progress-paging:client": "node scripts/run-progress-paging-client.mjs"
+    "test:progress-paging:client": "node scripts/run-progress-paging-client.mjs",
+    "test:terminal-wire:emulator": "node scripts/run-terminal-wire-tests.mjs"
   },
   "dependencies": {
     "fastify": "^5.12.1",
