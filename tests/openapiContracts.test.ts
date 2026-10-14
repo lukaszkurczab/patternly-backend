@@ -407,3 +407,20 @@ test("frontend checker binds lifecycle methods and rejects ambiguous options and
   `);
   assert.match(unknown, /frontend_unknown_operation:web:GET \/v1\/admin\/not-a-real-operation/u);
 });
+
+test("sync 409 narrows the mandatory common envelope; anyOf cannot bypass it", () => {
+  const document = documentCopy();
+  const responses = operation(document, "POST /v1/progress/sync").responses as Record<string, Record<string, unknown>>;
+  const response = responses["409"]!;
+  assert.deepEqual(response.content, { "application/json": { schema: { allOf: [
+    { $ref: "#/components/schemas/ErrorEnvelope" }, { $ref: "#/components/schemas/SyncConflictEnvelope" },
+  ] } } });
+  assert.deepEqual(collectOpenApiContractErrors(document), []);
+  for (const schema of [
+    { anyOf: [{ $ref: "#/components/schemas/ErrorEnvelope" }, { type: "object" }] },
+    { allOf: [{ $ref: "#/components/schemas/SyncConflictEnvelope" }] },
+  ]) {
+    response.content = { "application/json": { schema } };
+    assert.match(collectOpenApiContractErrors(document).join("\n"), /POST \/v1\/progress\/sync:error_schema_not_common_envelope:409/u);
+  }
+});

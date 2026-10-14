@@ -4,6 +4,11 @@ import type { SecurityIncidentEmailSender } from "../../modules/security-inciden
 import type { LegalRequestEmailSender } from "../../modules/legal-requests/store.js";
 import type { PurchaseReceiptDelivery } from "../../modules/billing/revenuecatWebhookStore.js";
 
+/** Only a definite provider refusal permits an automatic receipt retry. */
+export class PurchaseReceiptEmailRejectedError extends Error {
+  constructor() { super("purchase_receipt_email_rejected"); }
+}
+
 export interface PurchaseReceiptEmailSender {
   send(input: PurchaseReceiptDelivery): Promise<void>;
 }
@@ -127,9 +132,22 @@ export function createSmtpPurchaseReceiptEmailSender(
         ? `Potwierdzenie zakupu usługi Patternly Premium\n\nCena wyświetlona w App Store: ${input.storefrontPrice}\nOkres rozliczeniowy: miesiąc\nOdnowienie: automatyczne do chwili anulowania w ustawieniach App Store\nIdentyfikator produktu: ${input.productIdentifier}\nIdentyfikator transakcji: ${input.transactionId}\nWersja zaakceptowanego Regulaminu: ${input.termsVersion}\n\nNa Twoje wyraźne żądanie dostęp do usługi cyfrowej rozpoczął się natychmiast po zakupie.`
         : `Patternly Premium purchase confirmation\n\nPrice shown in the App Store: ${input.storefrontPrice}\nBilling period: monthly\nRenewal: automatic until cancelled in App Store settings\nProduct identifier: ${input.productIdentifier}\nTransaction identifier: ${input.transactionId}\nAccepted Terms version: ${input.termsVersion}\n\nAt your express request, access to the digital service started immediately after purchase.`;
       const messageIdDomain = configuration.fromEmail.split("@")[1] ?? "patternly.invalid";
-      const result = await transport.sendMail({ from, to: input.recipient, ...(configuration.replyTo ? { replyTo: configuration.replyTo } : {}), messageId: `<patternly-receipt-${input.receiptId}@${messageIdDomain}>`, subject, text });
+      let result;
+      try {
+        result = await transport.sendMail({ from, to: input.recipient, ...(configuration.replyTo ? { replyTo: configuration.replyTo } : {}), messageId: `<patternly-receipt-${input.receiptId}@${messageIdDomain}>`, subject, text });
+      } catch (error) {
+        const smtp = error as { responseCode?: unknown; command?: unknown } | null;
+        if (smtp && typeof smtp.responseCode === "number" && smtp.responseCode >= 400 && smtp.responseCode < 600
+          && ["MAIL FROM", "RCPT TO", "DATA"].includes(String(smtp.command))) throw new PurchaseReceiptEmailRejectedError();
+        // A disconnect/timeout can follow acceptance of DATA; do not infer refusal.
+        throw new Error("purchase_receipt_email_unknown");
+      }
       const accepted = Array.isArray(result.accepted) ? result.accepted.map(String) : [];
-      if (!accepted.includes(input.recipient)) throw new Error("purchase_receipt_email_rejected");
+      if (!accepted.includes(input.recipient)) {
+        const rejected = Array.isArray(result.rejected) ? result.rejected.map(String) : [];
+        if (rejected.includes(input.recipient)) throw new PurchaseReceiptEmailRejectedError();
+        throw new Error("purchase_receipt_email_unknown");
+      }
     },
   });
 }

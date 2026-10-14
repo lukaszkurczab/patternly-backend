@@ -394,11 +394,11 @@ test("conflict event codes are allowlisted, unknown values are literal unknown, 
   try {
     const conflict = await app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: validSyncPayload });
     assert.equal(conflict.statusCode, 409);
-    assert.equal(conflict.json().conflicts[0].code, "version_conflict");
+    assert.deepEqual(conflict.json(), { error: { code: "version_conflict" } });
     mode = "unknown";
     const unknown = await app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: validSyncPayload });
     assert.equal(unknown.statusCode, 409);
-    assert.equal(unknown.json().conflicts[0].code, "private-backend-code");
+    assert.deepEqual(unknown.json(), { error: { code: "private-backend-code" } });
     mode = "success";
     const success = await app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: validSyncPayload });
     assert.equal(success.statusCode, 200);

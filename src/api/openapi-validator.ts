@@ -303,7 +303,12 @@ export function collectOpenApiContractErrors(documentValue: unknown): readonly s
           const successResponse = asRecord(responses["200"]);
           const successSchema = asRecord(asRecord(asRecord(successResponse?.content)?.["application/json"])?.schema);
           if (JSON.stringify(schema) !== JSON.stringify(successSchema)) failures.push(`${identity}:unavailable_schema_must_match_ready_response:${status}`);
-        } else if (schema?.$ref !== COMMON_ERROR_REF) failures.push(`${identity}:error_schema_not_common_envelope:${status}`);
+        } else {
+          // allOf may narrow a common error contract, but cannot make the envelope optional.
+          const requiresCommonEnvelope = schema?.$ref === COMMON_ERROR_REF
+            || (Array.isArray(schema?.allOf) && schema.allOf.some((part) => asRecord(part)?.$ref === COMMON_ERROR_REF));
+          if (!requiresCommonEnvelope) failures.push(`${identity}:error_schema_not_common_envelope:${status}`);
+        }
       }
     }
   }

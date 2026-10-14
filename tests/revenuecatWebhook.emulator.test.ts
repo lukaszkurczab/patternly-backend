@@ -29,7 +29,7 @@ test("RevenueCat store is idempotent and monotonic across lifecycle events", asy
     const store = new FirestoreRevenueCatWebhookStore(db);
     const first = await store.process(event("purchase", "INITIAL_PURCHASE", 1_000), "app-1", "SANDBOX", "premium", "monthly");
     assert.equal(first.outcome, "processed"); assert.equal(first.duplicate, false); assert.equal(first.receipt?.transactionId, "tx-purchase");
-    assert.deepEqual(await store.process(event("purchase", "INITIAL_PURCHASE", 1_000), "app-1", "SANDBOX", "premium", "monthly"), { outcome: "processed", duplicate: true });
+    assert.deepEqual(await store.process(event("purchase", "INITIAL_PURCHASE", 1_000), "app-1", "SANDBOX", "premium", "monthly"), { outcome: "processed", duplicate: true, receiptDeliveryState: "pending" });
     assert.equal(await store.markReceiptDelivery(userId, first.receipt!.receiptId, first.receipt!.deliveryClaimId, "failed"), true);
     const retried = (await store.process(event("purchase", "INITIAL_PURCHASE", 1_000), "app-1", "SANDBOX", "premium", "monthly")).receipt;
     assert.equal(retried?.receiptId, first.receipt!.receiptId);

@@ -901,8 +901,10 @@ test("Firestore transaction preserves sync CAS and idempotency under concurrent 
   const conflictState = attemptState("item-1", mutation.trackId, "mastered");
   const conflict = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(1, [{ ...mutation, mutationId: `${mutation.mutationId}-conflict`, expectedVersion: null, state: conflictState, fingerprint: createMergeRecordFingerprint({ recordId: "item-1", recordType: "training_attempt", state: conflictState, trackId: mutation.trackId }) }]) });
   assert.equal(conflict.statusCode, 409);
-  assert.equal(conflict.json().conflicts[0].current.version, 1);
-  assert.equal(conflict.json().conflicts[0].current.state.response.optionId, "learning");
+  assert.deepEqual(conflict.json(), { error: { code: "version_conflict" } });
+  const latest = await context.stores.progress.readSnapshot(userId);
+  assert.equal(latest.records[0]?.version, 1);
+  assert.equal((latest.records[0]?.state.response as { optionId: string }).optionId, "learning");
 });
 
 test("progress sync rejects fresh writes and batch replays when authorization rotates after the request guard", async () => {

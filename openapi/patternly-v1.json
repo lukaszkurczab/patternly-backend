@@ -2449,15 +2449,26 @@
             }
           },
           "409": {
-            "description": "Progress, account revision, authorization generation, or adoption promotion conflict",
+            "description": "Sync rejected without acknowledging mutations. Conflicts use ErrorEnvelope; account_revision_conflict includes currentAccountRevision. Record payloads are omitted: resolution requires fresh GET /v1/progress.",
             "x-patternly-error-codes": [
+              "version_conflict",
+              "account_revision_conflict",
+              "content_identity_schema_conflict",
+              "mutation_id_reuse",
               "authorization_generation_conflict",
               "progress_generation_conflict"
             ],
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SyncConflictEnvelope"
+                    }
+                  ]
                 }
               }
             }
@@ -12751,6 +12762,7 @@
           },
           "applied": {
             "type": "array",
+            "maxItems": 100,
             "items": {
               "type": "object",
               "additionalProperties": false,
@@ -12820,107 +12832,28 @@
           },
           "duplicates": {
             "type": "array",
+            "maxItems": 100,
             "items": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,128}$"
             }
           },
           "conflicts": {
             "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "mutationId",
-                "code",
-                "current"
-              ],
-              "properties": {
-                "mutationId": {
-                  "type": "string",
-                  "minLength": 16,
-                  "maxLength": 128
-                },
-                "code": {
-                  "const": "version_conflict"
-                },
-                "current": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "kind",
-                        "recordType",
-                        "trackId",
-                        "targetId",
-                        "version",
-                        "fingerprint",
-                        "state",
-                        "lastMutationId",
-                        "updatedAt"
-                      ],
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": [
-                            "node",
-                            "item"
-                          ]
-                        },
-                        "recordType": {
-                          "type": "string",
-                          "enum": [
-                            "active_track",
-                            "training_session_summary",
-                            "training_session_result",
-                            "training_attempt",
-                            "review_queue_entry",
-                            "goal",
-                            "learning_plan"
-                          ]
-                        },
-                        "trackId": {
-                          "type": "string",
-                          "minLength": 1
-                        },
-                        "targetId": {
-                          "type": "string",
-                          "minLength": 1
-                        },
-                        "version": {
-                          "type": "integer",
-                          "minimum": 0
-                        },
-                        "fingerprint": {
-                          "type": "string",
-                          "pattern": "^[a-f0-9]{64}$"
-                        },
-                        "state": {
-                          "type": "object",
-                          "additionalProperties": true,
-                          "properties": {}
-                        },
-                        "lastMutationId": {
-                          "type": "string",
-                          "minLength": 16,
-                          "maxLength": 128
-                        },
-                        "updatedAt": {
-                          "type": "string",
-                          "format": "date-time"
-                        }
-                      }
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "accountRevisionConflict": {
-            "anyOf": [
+            "maxItems": 0,
+            "items": false
+          }
+        }
+      },
+      "SyncConflictEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "oneOf": [
               {
                 "type": "object",
                 "additionalProperties": false,
@@ -12930,17 +12863,50 @@
                 ],
                 "properties": {
                   "code": {
-                    "type": "string",
                     "const": "account_revision_conflict"
                   },
                   "currentAccountRevision": {
                     "type": "integer",
-                    "minimum": 0
+                    "minimum": 0,
+                    "maximum": 9007199254740991
                   }
                 }
               },
               {
-                "type": "null"
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "const": "content_identity_schema_conflict"
+                  },
+                  "issues": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "enum": [
+                      "version_conflict",
+                      "mutation_id_reuse",
+                      "progress_generation_conflict",
+                      "authorization_generation_conflict"
+                    ]
+                  }
+                }
               }
             ]
           }

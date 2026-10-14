@@ -53,7 +53,7 @@ export type EmulatorContext = Readonly<{
   deletedSubjects: readonly string[];
 }>;
 
-export function createEmulatorContext(options: Readonly<{ projectId?: string; revenueCatEntitlementReader?: import("../src/infrastructure/revenuecat/client.js").RevenueCatEntitlementReader | null; contentPackages?: import("../src/modules/content/packages.js").ContentPackageService | null; createContentPackages?: (db: import("firebase-admin/firestore").Firestore) => import("../src/modules/content/packages.js").ContentPackageService }> = {}): EmulatorContext {
+export function createEmulatorContext(options: Readonly<{ projectId?: string; purchaseReceiptEmailSender?: import("../src/infrastructure/email/smtpPrivacyEmailSender.js").PurchaseReceiptEmailSender | null; revenueCatEntitlementReader?: import("../src/infrastructure/revenuecat/client.js").RevenueCatEntitlementReader | null; contentPackages?: import("../src/modules/content/packages.js").ContentPackageService | null; createContentPackages?: (db: import("firebase-admin/firestore").Firestore) => import("../src/modules/content/packages.js").ContentPackageService }> = {}): EmulatorContext {
   const environment = options.projectId ? Object.freeze({ ...testEnvironment, firebaseProjectId: options.projectId, firebaseAuthIssuer: `https://securetoken.google.com/${options.projectId}` }) : testEnvironment;
   const runtime = createFirestoreRuntime(environment);
   const privacyLinks: Array<Readonly<{ recipient: string; purpose: "verify" | "response" | "extension"; requestId: string; token: string; code: string; extensionReason?: string }>> = [];
@@ -88,7 +88,7 @@ export function createEmulatorContext(options: Readonly<{ projectId?: string; re
       if (!token) throw new Error("privacy_test_code_invalid");
       privacyLinks.push({ ...input, token });
     } },
-    purchaseReceiptEmailSender: { send: async (input) => { purchaseReceipts.push(input); } },
+    purchaseReceiptEmailSender: options.purchaseReceiptEmailSender === undefined ? { send: async (input) => { purchaseReceipts.push(input); } } : options.purchaseReceiptEmailSender,
   });
   return Object.freeze({ app, db: runtime.db, stores, privacyLinks, purchaseReceipts, customTokenSubjects, customTokenClaims, revokedSubjects, deletedSubjects, close: async () => { await app.close(); await runtime.close(); } });
 }

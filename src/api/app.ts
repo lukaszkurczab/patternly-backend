@@ -21,6 +21,7 @@ import { createLogger } from "../infrastructure/logging/logger.js";
 import { DataExportRateLimitError, DataExportTooLargeError } from "../modules/data-export/contracts.js";
 import { createAccountPrivacyRequestSchema, createGuestPrivacyRequestSchema, exchangeGuestPrivacyCodeSchema, privacyRequestAdminActionSchema, publicPrivacySessionSchema, resendGuestPrivacyCodeSchema, PRIVACY_RIGHT_POLICIES } from "../modules/privacy-requests/contracts.js";
 import { createSecurityIncidentSchema, securityIncidentActionSchema } from "../modules/security-incidents/contracts.js";
+import { PurchaseReceiptEmailRejectedError } from "../infrastructure/email/smtpPrivacyEmailSender.js";
 import { revenueCatEventSchema, verifyRevenueCatAuthorization } from "../modules/billing/revenuecatWebhook.js";
 import { createLegalRequestSchema, createPublicLegalRequestSchema, legalRequestAdminActionSchema } from "../modules/legal-requests/contracts.js";
 import { adoptionTransferApplySchema, adoptionTransferConfirmSchema, adoptionTransferPreviewSchema, adoptionTransferSealSchema, adoptionTransferStartSchema, adoptionTransferStatusSchema, adoptionTransferUploadSchema } from "../modules/users/adoptionTransfer.js";
@@ -634,17 +635,34 @@ function createWebhookHandler(dependencies: ApplicationDependencies): RouteHandl
     try {
       const store = requireStores(dependencies).revenueCatWebhook;
       const result = await store.process(parsed.data, configuration.revenueCatAppId, configuration.revenueCatWebhookEnvironment, configuration.revenueCatEntitlementId, configuration.revenueCatProductId);
+      if (result.receiptDeliveryState) return reply.code(503).send({ error: { code: result.receiptDeliveryState === "unknown" ? "purchase_receipt_reconciliation_required" : "purchase_receipt_delivery_pending" } });
       if (result.receipt) {
+        const receipt = result.receipt;
+        const mark = (status: "sent" | "failed" | "unknown") => store.markReceiptDelivery(receipt.userId, receipt.receiptId, receipt.deliveryClaimId, status);
+        // Failure here leaves the already committed pending attempt as the resend fence.
+        const recordUncertainty = async () => { try { await mark("unknown"); } catch { /* Reconcile the durable pending attempt after its lease expires. */ } };
         if (!dependencies.purchaseReceiptEmailSender) {
-          await store.markReceiptDelivery(result.receipt.userId, result.receipt.receiptId, result.receipt.deliveryClaimId, "failed");
-          return reply.code(503).send({ error: { code: "purchase_receipt_delivery_unavailable" } });
+          const finalized = await mark("failed");
+          return reply.code(503).send({ error: { code: finalized ? "purchase_receipt_delivery_unavailable" : "purchase_receipt_reconciliation_required" } });
         }
         try {
-          await dependencies.purchaseReceiptEmailSender.send(result.receipt);
-          await store.markReceiptDelivery(result.receipt.userId, result.receipt.receiptId, result.receipt.deliveryClaimId, "sent");
+          await dependencies.purchaseReceiptEmailSender.send(receipt);
+        } catch (error) {
+          if (error instanceof PurchaseReceiptEmailRejectedError) {
+            const finalized = await mark("failed");
+            return reply.code(503).send({ error: { code: finalized ? "purchase_receipt_delivery_failed" : "purchase_receipt_reconciliation_required" } });
+          }
+          await recordUncertainty();
+          return reply.code(503).send({ error: { code: "purchase_receipt_reconciliation_required" } });
+        }
+        try {
+          if (!await mark("sent")) {
+            await recordUncertainty();
+            return reply.code(503).send({ error: { code: "purchase_receipt_reconciliation_required" } });
+          }
         } catch {
-          await store.markReceiptDelivery(result.receipt.userId, result.receipt.receiptId, result.receipt.deliveryClaimId, "failed");
-          return reply.code(503).send({ error: { code: "purchase_receipt_delivery_failed" } });
+          await recordUncertainty();
+          return reply.code(503).send({ error: { code: "purchase_receipt_reconciliation_required" } });
         }
       }
       return reply.code(200).send({ outcome: result.outcome, duplicate: result.duplicate });
@@ -1012,7 +1030,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       const result = await requireStores(dependencies).progress.applyBatch(request.userId!, request.expectedAuthorizationGeneration!, parsed.data.deviceId, parsed.data.expectedAccountRevision, parsed.data.mutations, metadata);
       if (result.conflicts.length > 0 || result.accountRevisionConflict) {
         logAccountSyncRejection(request, "sync", result.accountRevisionConflict?.code ?? result.conflicts[0]?.code);
-        return reply.code(409).send(result.accountRevisionConflict ? { error: result.accountRevisionConflict } : result);
+        return reply.code(409).send({ error: result.accountRevisionConflict ?? { code: result.conflicts[0]!.code } });
       }
       return reply.code(200).send(result);
     } catch (error) {
