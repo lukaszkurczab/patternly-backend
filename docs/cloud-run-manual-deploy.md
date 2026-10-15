@@ -26,16 +26,34 @@ Cloud Run service configuration:
 - `SMTP_PASSWORD` — a Secret Manager value available only to the Cloud Run
   runtime service account. Do not store it in source control or ordinary
   deployment variables;
-- `REVENUECAT_APP_ID`, `REVENUECAT_ENTITLEMENT_ID`, `REVENUECAT_PRODUCT_ID`
+- `REVENUECAT_PROJECT_ID=proj8ae78267`, `REVENUECAT_APP_ID=app7b06e9a4c1`,
+  `REVENUECAT_ENTITLEMENT_ID=premium`, `REVENUECAT_PRODUCT_ID=com.lkurczab.patternly.premium.monthly`
   and `REVENUECAT_WEBHOOK_ENVIRONMENT=PRODUCTION` must match the production
   RevenueCat project and App Store product exactly;
 - `REVENUECAT_WEBHOOK_SECRET` — the exact Authorization value configured in
   RevenueCat, supplied through Secret Manager and never stored in source;
-- `REVENUECAT_READ_API_KEY` — a server-only RevenueCat API key with customer-read permission, supplied through Secret Manager. Without it the authenticated `/v1/entitlements` refresh returns `503`; a webhook projection is not presented as a fresh provider read;
+- `REVENUECAT_READ_API_KEY` — the server reader credential, supplied through Secret Manager. The existing sandbox value is an Apple public key and a real v1 subscriber read succeeded on 15 October 2026; it is not evidence of a secret server key or an active purchase. The intended separate server-key configuration remains a PREMIUM-RC-01 residual. Without a usable key the authenticated `/v1/entitlements` refresh returns `503`; a webhook projection is not presented as a fresh provider read;
 - `DELETION_PSEUDONYM_KEYS_JSON` — a Secret Manager value containing exactly one `active` HMAC key and any `verify_only` predecessors. Grant the Cloud Run runtime service account only `roles/secretmanager.secretAccessor` on this secret; never expose its material in source control, build logs or ordinary environment files;
 - `RECOVERY_OPERATION_KEYS_JSON` — a dedicated Secret Manager keyring for recovery operation results, with exactly one `active` 32-byte AES-256 key and any retained `decrypt_only` predecessors. Generate independent random key material and never reuse the privacy-response encryption key or deletion pseudonym keys. The backend rejects recovery key reuse against the privacy-response key. If this secret is absent, recovery operations fail closed with `503`; there is no privacy-key fallback;
 - `RECOVERY_OPERATION_RATE_LIMIT_MAX` and `RECOVERY_OPERATION_RATE_LIMIT_WINDOW_SECONDS` — optional bounded controls for durable recovery-request rate limits; defaults are 30 requests per 60 seconds. Rate-limit requester identities are domain-separated HMACs, never raw IP addresses or recovery codes;
 - `LOG_LEVEL` and `NODE_ENV`.
+
+The existing sandbox uses `NODE_ENV=production` (server hardening) with
+`FIREBASE_PROJECT_ID=patternly-app-sandbox` and `REVENUECAT_WEBHOOK_ENVIRONMENT=SANDBOX`
+(store transaction environment). Preserve this distinction. Production store
+transactions require a separate production deployment and secret references;
+never point a production client at this sandbox.
+
+Premium package readiness requires `CONTENT_PACKAGE_BUCKET` and the paired
+`CONTENT_PACKAGE_READINESS_TRACK_ID=aws-certified-solutions-architect-associate` /
+`CONTENT_PACKAGE_READINESS_NODE_ID=identity_federation_and_root_access`.
+Configure them only after a private GCS object, exact admitted Firestore pointer,
+runtime object-read permission and signing authority are verified. The runtime
+does not need bucket write/list or public access. See
+[transport contract](content-package-transport.md#prepared-configuration-not-deployed)
+and the [prompt20 service diff and blockers](../../patternly/docs/reports/premium-rc20-2026-10-15.md).
+An older deployed `/ready=200` without `checks.contentPackages` does not prove
+this source version or package readiness.
 
 Local question-bank inspection uses the checksum-verified immutable content
 release configured by `npm run dev:admin`. Cloud Run does not serve the panel.
