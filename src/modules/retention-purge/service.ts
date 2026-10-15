@@ -6,6 +6,7 @@ export type RetentionPurgeResult = Readonly<{
   dryRun: boolean; execute: boolean; complete: boolean;
   parents: Readonly<{ examined: number; eligible: number; attempted: number; confirmed: number }>;
   audits: Readonly<{ examined: number; orphanEligible: number; attempted: number; confirmed: number; ignored: number }>;
+  purchases: Readonly<{ examined: number; eligible: number; attempted: number; confirmed: number }>;
   remainingDue: boolean; unresolved: number;
 }>;
 export type RetentionPurgeHooks = Readonly<{ afterPrimaryScan?: () => Promise<void> | void }>;
@@ -15,7 +16,7 @@ const MAX_PAGE_SIZE = 1_000;
 const DEFAULT_MAX_DELETES = 100;
 const MAX_DELETES = 1_000;
 
-/** Narrow ODK081 cleanup: only content-report parents and their direct audit children. */
+/** Content-report cleanup and bounded purchase-payload compaction; immutable purchase evidence is retained. */
 export class RetentionPurgeService {
   public constructor(private readonly db: Firestore, private readonly hooks: RetentionPurgeHooks = {}) {}
 
@@ -25,6 +26,7 @@ export class RetentionPurgeService {
     const maxDeletes = normalizedMaxDeletes(options.maxDeletes);
     const nowMillis = (options.now ?? new Date()).getTime();
     const parents = { examined: 0, eligible: 0, attempted: 0, confirmed: 0 };
+    const purchases = { examined: 0, eligible: 0, attempted: 0, confirmed: 0 };
     const audits = { examined: 0, orphanEligible: 0, attempted: 0, confirmed: 0, ignored: 0 };
     let unresolved = 0;
     let deletesAttempted = 0;
@@ -85,11 +87,61 @@ export class RetentionPurgeService {
       if (snapshot.size < pageSize) break;
     }
 
+    // Billing payload compaction never releases a purchase lock or deletes immutable consent/receipt evidence.
+    for (const collection of ["purchaseAttempts", "revenueCatTransactions", "revenueCatEvents", "resolutions"]) {
+      let cursor: QueryDocumentSnapshot | undefined;
+      for (;;) {
+        let query = this.db.collectionGroup(collection).orderBy(FieldPath.documentId()).limit(pageSize);
+        if (cursor) query = query.startAfter(cursor);
+        const rows = await query.get();
+        for (const row of rows.docs) {
+          const until = row.get("payloadUntil");
+          const resolveBy = row.get("resolveBy");
+          const expire = ["purchaseAttempts", "revenueCatTransactions"].includes(collection) && resolveBy instanceof Timestamp && resolveBy.toMillis() <= nowMillis && !["bound", "cancelled", "closed_unresolved", "expired_unresolved"].includes(String(row.get(collection === "purchaseAttempts" ? "outcome" : "status")));
+          const compact = until instanceof Timestamp && until.toMillis() <= nowMillis && row.get("compacted") !== true;
+          if (!expire && !compact) continue;
+          purchases.examined += 1; purchases.eligible += 1;
+          if (!execute || deletesAttempted >= maxDeletes) continue;
+          deletesAttempted += 1; purchases.attempted += 1;
+          await this.db.runTransaction(async tx => {
+            const fresh = await tx.get(row.ref);
+            if (!fresh.exists) return;
+            const data = fresh.data()!;
+            const freshExpire = ["purchaseAttempts", "revenueCatTransactions"].includes(collection) && data.resolveBy instanceof Timestamp && data.resolveBy.toMillis() <= nowMillis && !["bound", "cancelled", "closed_unresolved", "expired_unresolved"].includes(String(data[collection === "purchaseAttempts" ? "outcome" : "status"]));
+            const freshCompact = data.payloadUntil instanceof Timestamp && data.payloadUntil.toMillis() <= nowMillis && data.compacted !== true;
+            if (freshExpire) data[collection === "purchaseAttempts" ? "outcome" : "status"] = "expired_unresolved";
+            if (freshCompact) {
+              const keep = collection === "purchaseAttempts" ? ["ownerAccountId", "confirmationId", "acceptedAt", "startExpiresAt", "initiatedAt", "resolveBy", "outcome", "resolutionReason", "boundTransactionKey", "candidateTransactionKey"] : collection === "revenueCatTransactions" ? ["ownerAccountId", "attemptId", "resolveBy", "projectId", "appId", "store", "environment", "productId", "purchasedAtMs", "boundConfirmationId", "receiptId", "identityConflict", "status", "resolutionReason", "revision", "createdAt"] : collection === "revenueCatEvents" ? ["eventId", "fingerprint", "outcome", "resolutionReason", "createdAt"] : ["fingerprint", "action", "createdAt"];
+              tx.set(row.ref, { ...Object.fromEntries(keep.filter(key => data[key] !== undefined).map(key => [key, data[key]])), compacted: true });
+            } else if (freshExpire) tx.update(row.ref, { [collection === "purchaseAttempts" ? "outcome" : "status"]: "expired_unresolved" });
+          });
+          purchases.confirmed += 1;
+        }
+        cursor = rows.docs.at(-1);
+        if (rows.size < pageSize) break;
+      }
+    }
     await this.hooks.afterPrimaryScan?.();
     const postcheck = await this.observeDueAtCutoff(nowMillis, pageSize);
-    const eligible = parents.eligible + audits.orphanEligible;
-    const remainingDue = (!execute ? eligible > 0 : deletesAttempted < eligible) || postcheck.dueParent || postcheck.dueOrphan;
-    return Object.freeze({ dryRun: !execute, execute, complete: !remainingDue && unresolved === 0, parents: Object.freeze(parents), audits: Object.freeze(audits), remainingDue, unresolved });
+    let duePurchase = false;
+    for (const collection of ["purchaseAttempts", "revenueCatTransactions", "revenueCatEvents", "resolutions"]) {
+      let cursor: QueryDocumentSnapshot | undefined;
+      for (;;) {
+        let query = this.db.collectionGroup(collection).orderBy(FieldPath.documentId()).limit(pageSize);
+        if (cursor) query = query.startAfter(cursor);
+        const rows = await query.get();
+        duePurchase ||= rows.docs.some(row => {
+          const until = row.get("payloadUntil"), resolveBy = row.get("resolveBy");
+          const status = row.get(collection === "purchaseAttempts" ? "outcome" : "status");
+          return (until instanceof Timestamp && until.toMillis() <= nowMillis && row.get("compacted") !== true) || (["purchaseAttempts", "revenueCatTransactions"].includes(collection) && resolveBy instanceof Timestamp && resolveBy.toMillis() <= nowMillis && !["bound", "cancelled", "closed_unresolved", "expired_unresolved"].includes(String(status)));
+        });
+        cursor = rows.docs.at(-1);
+        if (rows.size < pageSize) break;
+      }
+    }
+    const eligible = parents.eligible + audits.orphanEligible + purchases.eligible;
+    const remainingDue = (!execute ? eligible > 0 : deletesAttempted < eligible) || postcheck.dueParent || postcheck.dueOrphan || duePurchase;
+    return Object.freeze({ dryRun: !execute, execute, complete: !remainingDue && unresolved === 0, parents: Object.freeze(parents), audits: Object.freeze(audits), purchases: Object.freeze(purchases), remainingDue, unresolved });
   }
 
   private async deleteExactOrphanInTransaction(reference: DocumentReference, nowMillis: number): Promise<boolean> {

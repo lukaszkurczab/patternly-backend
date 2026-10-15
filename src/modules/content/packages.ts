@@ -45,7 +45,7 @@ export function validateContentNodePackageManifest(value: unknown): ContentNodeP
   if (Object.keys(row).sort().join("\0") !== [...keys].sort().join("\0")
     || row.schemaVersion !== CONTENT_PACKAGE_SCHEMA || !isPackageId(row.trackId) || !isPackageId(row.nodeId)
     || !isPackageId(row.contentVersion) || !isPackageId(row.contentReleaseId)
-    || typeof row.minimumAppVersion !== "string" || !/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/u.test(row.minimumAppVersion)
+    || typeof row.minimumAppVersion !== "string" || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.test(row.minimumAppVersion)
     || row.packageFormat !== "gzip" || typeof row.artifactSha256 !== "string" || !SHA256.test(row.artifactSha256)
     || typeof row.packageSha256 !== "string" || !SHA256.test(row.packageSha256)
     || !Number.isSafeInteger(row.compressedSizeBytes) || Number(row.compressedSizeBytes) < 1 || Number(row.compressedSizeBytes) > CONTENT_PACKAGE_LIMITS.compressedBytes
@@ -72,7 +72,16 @@ export interface ContentPackagePointerStore {
   readCurrent(trackId: string, nodeId: string): Promise<ContentNodePackageManifest | null>;
 }
 
+export type ContentPackageDownloadDescriptor = Readonly<{
+  schemaVersion: "patternly-content-download-v1";
+  manifest: ContentNodePackageManifest;
+  object: Readonly<{ bucket: string; path: string; generation: string }>;
+  downloadUrl: string;
+  expiresAt: string;
+}>;
+
 export interface ContentPackageStorage {
+  describe?(manifest: ContentNodePackageManifest): Promise<ContentPackageDownloadDescriptor>;
   writeImmutable(packagePath: string, bytes: Buffer): Promise<void>;
   read(packagePath: string): Promise<Buffer>;
 }
@@ -137,14 +146,12 @@ export class ContentPackageService {
     return manifest;
   }
 
-  public async readCurrent(trackId: string, nodeId: string): Promise<Readonly<{ manifest: ContentNodePackageManifest; bytes: Buffer }> | null> {
-    const manifest = await this.pointers.readCurrent(trackId, nodeId);
-    if (!manifest) return null;
-    try {
-      const bytes = await this.storage.read(manifest.packagePath);
-      verifyContentNodePackage(manifest, bytes);
-      return Object.freeze({ manifest, bytes });
-    } catch { throw new Error("content_package_unavailable"); }
+  public async describeCurrent(trackId: string, nodeId: string): Promise<ContentPackageDownloadDescriptor | null> {
+    const value = await this.pointers.readCurrent(trackId, nodeId);
+    if (!value) return null;
+    const manifest = validateContentNodePackageManifest(value);
+    if (manifest.trackId !== trackId || manifest.nodeId !== nodeId || !this.storage.describe) throw new Error("content_package_unavailable");
+    return this.storage.describe(manifest);
   }
 }
 

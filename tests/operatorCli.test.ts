@@ -481,3 +481,23 @@ for (const confirmed of [false, true]) {
     } finally { await fixture.close(); await config.cleanup(); }
   });
 }
+
+test("purchase case show/action use canonical hashed ID, revision and exact operator payload", async () => {
+  const key = "a".repeat(64);
+  const item = { transactionKey: key, revision: 0, status: "reconciliation_required", resolutionReason: "missing_exact_binding", confirmationId: null, receiptId: null };
+  let mutations = 0;
+  const payload = { operationId: "11111111-1111-4111-8111-111111111111", expectedRevision: 0, attemptId: "22222222-2222-4222-8222-222222222222", action: "close_unresolved", evidenceReference: "checked/provider/reference", releaseLock: true };
+  const fixture = await createTlsFixture((request, response) => {
+    assert.equal(request.url, `/v1/operator/purchase-cases/${key}`);
+    if (request.method === "PATCH") { mutations++; response.end(JSON.stringify({ item: { ...item, revision: 1, status: "closed_unresolved" } })); }
+    else response.end(JSON.stringify({ item }));
+  });
+  const config = await configFile(fixture.origin);
+  try {
+    await withTrustedTls(fixture.caCertificatePath, async () => {
+      const cli = createIo({ token: signedToken(), payload: JSON.stringify(payload), confirmation: `apply purchase-cases close_unresolved to ${key}` });
+      assert.equal(await runOperatorCli(args(fixture.origin, config.path, "action", "purchase-cases", key, "--payload-fd", "3"), cli.io), 0, cli.output());
+      assert.equal(mutations, 1);
+    });
+  } finally { await fixture.close(); await config.cleanup(); }
+});

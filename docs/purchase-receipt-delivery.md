@@ -2,13 +2,15 @@
 
 14.10.2026. Odbiór dotyczy lokalnego kodu osiągalnego przez `POST /v1/webhooks/revenuecat`. Nie jest odbiorem usług ani wydania. Historyczny raport solo M10 jest niedostępny; defekt potwierdzono w źródłach: wspólny catch obejmował SMTP i finalizację, a retry przejmował wygasłe `sending`.
 
+Aktualizacja17, 15.10.2026: [odbiór korelacji](../../patternly/docs/reports/premium-rc17-2026-10-15.md). Zasady niepewnej dostawy M10 pozostają; snapshot kodu i dowód06 poniżej odnoszą się do14.10.
+
 ## Trwały kontrakt
 
-Store zapisuje atomowo event, receipt oraz `users/{userId}/purchaseReceipts/{receiptId}/deliveryAttempts/{deliveryClaimId}` przed zwróceniem pracy do sendera. Próba ma pełny snapshot `PurchaseReceiptDelivery` (odbiorca, transaction/confirmation/product, cena, locale, terms, żądanie natychmiastowego rozpoczęcia, receipt/claim identity), status `pending` i czas utworzenia. Zawartość maila jest deterministycznie budowana z tego payloadu. `receiptId` jest hashem transaction ID; `deliveryClaimId` identyfikuje jedną próbę. Message-ID pozostaje stabilny dla receipt; nie zapewnia deduplikacji SMTP.
+Webhook utrwala zaufaną obserwację transakcji; wspólny resolver atomowo zużywa zgodę, wiąże transactionKey i tworzy jeden receipt `ready`. Następnie atomowy claim aktualizuje receipt do `sending` oraz tworzy `users/{userId}/purchaseReceipts/{receiptId}/deliveryAttempts/{deliveryClaimId}` przed zwróceniem pracy do sendera. Replay zawsze wraca do resolvera/claimu, także po wcześniejszym ACK sprawy. Webhook, kandydat i operator używają jednego dispatchera; awaria między etapami jest ponawiana bez kolejnego efektu zakupu. Próba ma pełny snapshot `PurchaseReceiptDelivery` (odbiorca, transaction/confirmation/product, cena, locale, terms, żądanie natychmiastowego rozpoczęcia, receipt/claim identity), status `pending` i czas utworzenia. Zawartość maila jest deterministycznie budowana z tego payloadu. `receiptId` jest hashem transaction ID; `deliveryClaimId` identyfikuje jedną próbę. Message-ID pozostaje stabilny dla receipt; nie zapewnia deduplikacji SMTP.
 
 | Stan / dowód | Zachowanie |
 | --- | --- |
-| Nowa próba lub potwierdzone `failed` | Transakcja tworzy nowy trwały rekord próby przed SMTP. Historia poprzednich prób pozostaje. |
+| `ready` albo potwierdzone `failed` | Transakcja tworzy nowy trwały rekord próby przed SMTP. Historia poprzednich prób pozostaje. |
 | `sending` z aktywną lease | Duplicate nie dostaje payloadu do wysłania; HTTP 503 `purchase_receipt_delivery_pending`. |
 | `sending` po wygaśnięciu lease | Transakcja uzgadnia receipt i istniejącą próbę do `unknown`, zachowuje identity/payload; HTTP 503 `purchase_receipt_reconciliation_required`. Nie tworzy nowej próby. |
 | `unknown` / nierozpoznany stan | Brak automatycznego resend; HTTP 503 wymagający reconciliation. |
@@ -17,6 +19,8 @@ Store zapisuje atomowo event, receipt oraz `users/{userId}/purchaseReceipts/{rec
 | Commit `sent` wykonany, odpowiedź utracona | Best effort unknown nie zmienia terminalnego sent; retry zwraca 200 bez wysyłki. |
 | Potwierdzone odrzucenie / brak sendera | `failed` dopuszcza nową próbę przy webhook retry. |
 | Wygasły/zastąpiony claim albo nieaktywne konto podczas finalizacji | Finalizacja zwraca false; bieżący handler nie zwraca sukcesu. |
+
+Przed claimem wymagane są aktywny owner, brak konfliktu tożsamości i aktualny zweryfikowany kontakt. Brak kontaktu daje `receipt_contact_required`.
 
 Finalizacja wymaga aktywnego konta, zgodności claim ID, niewygasłej lease oraz istniejącej próby `pending`; aktualizuje receipt i próbę w jednej transakcji. Claim ID pozostaje po finalizacji. Stary claimant nie zmienia nowej próby. Wygasła lease nie stanowi dowodu odrzucenia maila.
 

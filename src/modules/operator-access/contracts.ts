@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 export const OPERATOR_ACTIONS = [
+  "purchase_cases:read",
+  "purchase_cases:resolve",
   "content_reports:read",
   "content_reports:transition",
   "privacy_requests:read",

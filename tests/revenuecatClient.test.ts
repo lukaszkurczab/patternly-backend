@@ -201,3 +201,9 @@ test("RevenueCat network, HTTP, non-JSON and timeout failures are typed and secr
   }) as unknown as Response });
   await assert.rejects(bodyTimeoutReader.read("user-1"), (error: unknown) => error instanceof RevenueCatProviderUnavailableError && error.kind === "timeout");
 });
+
+for (const store of ["play_store", "test_store", "stripe", "APP_STORE", ""]) {
+  test(`RevenueCat reader rejects unsupported store ${store}`, async () => {
+    assert.equal((await readerFor(payload({ subscription: { store } })).read("user-1")).state, "unavailable");
+  });
+}

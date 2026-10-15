@@ -1,3 +1,4 @@
+import { transactionKey } from "../src/modules/billing/purchaseCorrelation.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Timestamp } from "firebase-admin/firestore";
@@ -8,16 +9,17 @@ import { clearFirestore, createEmulatorContext, type EmulatorContext } from "./s
 
 // Contexts share the default Admin SDK client; close each app, terminate that client once in after().
 const context = createEmulatorContext();
-const userId = "receipt-fault-user";
-const payload = { event: revenueCatEventSchema.parse({ id: "receipt-fault", type: "INITIAL_PURCHASE", app_user_id: userId, event_timestamp_ms: 1000, expiration_at_ms: 60000, purchased_at_ms: 1000, transaction_id: "receipt-fault-tx", app_id: "app-1", entitlement_ids: ["premium"], product_id: "monthly", environment: "SANDBOX" }) };
+const userId = "00000000-0000-4000-8000-000000000070";
+const baseTime = Date.now() - 2000;
+const payload = { event: revenueCatEventSchema.parse({ id: "receipt-fault", type: "INITIAL_PURCHASE", app_user_id: userId, original_app_user_id: userId, store: "APP_STORE", event_timestamp_ms: baseTime + 1000, expiration_at_ms: 60000, purchased_at_ms: baseTime + 1000, transaction_id: "receipt-fault-tx", app_id: "app-1", entitlement_ids: ["premium"], product_id: "monthly", environment: "SANDBOX" }) };
 const args = [payload.event, "app-1", "SANDBOX", "premium", "monthly"] as const;
 const userRef = () => context.db.collection("users").doc(userId);
 const receiptRef = async () => (await userRef().collection("purchaseReceipts").get()).docs[0]!.ref;
 const webhook = (ctx: EmulatorContext) => ctx.app.inject({ method: "POST", url: "/v1/webhooks/revenuecat", headers: { authorization: "Bearer test-revenuecat-secret" }, payload });
 async function seed() {
   await userRef().set({ contactEmail: "receipt@example.com", contactEmailVerified: true });
-  await userRef().collection("purchaseConfirmations").doc("confirmation").set({ productIdentifier: "monthly", storefrontPrice: "29.99 PLN", locale: "pl", termsVersion: "v1" });
-  await userRef().collection("purchaseAttempts").doc("active").set({ confirmationId: "confirmation", productIdentifier: "monthly", expiresAt: Timestamp.fromMillis(900000), consumedAt: null });
+  await userRef().collection("purchaseConfirmations").doc("confirmation").set({ productIdentifier: "monthly", storefrontPrice: "29.99 PLN", locale: "pl", termsVersion: "v1", immediateStartRequested: true });
+  await userRef().collection("purchaseAttempts").doc("confirmation").set({ ownerAccountId: userId, confirmationId: "confirmation", projectId: "projtest", appId: "app-1", environment: "SANDBOX", productIdentifier: "monthly", acceptedAt: Timestamp.fromMillis(baseTime), initiatedAt: Timestamp.fromMillis(baseTime), startExpiresAt: Timestamp.fromMillis(baseTime + 900000), resolveBy: Timestamp.fromMillis(baseTime + 30 * 86400000), outcome: "initiated", boundTransactionKey: null, candidateTransactionKey: transactionKey({ projectId: "projtest", appId: "app-1", environment: "SANDBOX", productId: "monthly" }, "receipt-fault-tx") });
 }
 test.beforeEach(async () => { await clearFirestore(); await seed(); });
 test.after(async () => { await clearFirestore(); await context.close(); });
@@ -103,7 +105,7 @@ test("missing sender is a definite no-effect failure and remains retryable", asy
 });
 
 test("expired claim cannot finalize or be reclaimed; reconciliation preserves the payload and identity", async () => {
-  const store = new FirestoreRevenueCatWebhookStore(context.db);
+  const store = new FirestoreRevenueCatWebhookStore(context.db, "projtest");
   const first = (await store.process(...args)).receipt!;
   const ref = await receiptRef();
   await ref.update({ deliveryLeaseUntil: Timestamp.fromMillis(0) });
@@ -178,7 +180,7 @@ test("initial store failure before commit cannot invoke the sender", async () =>
 });
 
 test("concurrent initial and refused-attempt claims each grant exactly one sender identity", async () => {
-  const store = new FirestoreRevenueCatWebhookStore(context.db);
+  const store = new FirestoreRevenueCatWebhookStore(context.db, "projtest");
   const initial = await Promise.all(Array.from({ length: 5 }, () => store.process(...args)));
   const first = initial.flatMap(result => result.receipt ? [result.receipt] : []);
   assert.equal(first.length, 1);

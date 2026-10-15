@@ -14,6 +14,7 @@ export const DATA_EXPORT_INCLUDED = Object.freeze([
   "accountContext.entitlements",
   "accountContext.legalAcceptances",
   "accountContext.purchaseConfirmations",
+  "accountContext.purchaseHistory",
   "accountContext.consumerCases",
   "accountContext.devices",
   "accountContext.syncMetadata",
@@ -113,6 +114,7 @@ export type DataExportDocument = Readonly<{
     entitlements: readonly Readonly<Record<string, unknown>>[];
     legalAcceptances: readonly Readonly<Record<string, unknown>>[];
     purchaseConfirmations: readonly Readonly<Record<string, unknown>>[];
+    purchaseHistory: readonly Readonly<Record<string, unknown>>[];
     consumerCases: readonly Readonly<Record<string, unknown>>[];
     devices: readonly Readonly<Record<string, unknown>>[];
     syncMetadata: Readonly<Record<string, unknown>>;

@@ -1,0 +1,358 @@
+{
+  "schema": "patternly-content-transport19-evidence-v1",
+  "date": "2026-10-15",
+  "overall": "PARTIAL",
+  "localImplementation": "PASS",
+  "providerAcceptance": "NOT_RUN",
+  "deviceAcceptance": "NOT_RUN",
+  "releaseAcceptance": "NOT_RUN",
+  "nextPrompt": "19 residual; do not run20 automatically",
+  "contract": {
+    "transport": "GCS V4 GET JSON descriptor only",
+    "schema": "patternly-content-download-v1",
+    "maximumSignedUrlSeconds": 60,
+    "generation": "per-download snapshot, signed query; not Firestore/session pin migration",
+    "productionOffers": 0,
+    "producerProof": "existing explicit smoke fixture only"
+  },
+  "repositoryHeads": {
+    "patternly": "830c1bc1daf1e49a44cb79c72cf2d1ae95ab1c29",
+    "patternly-backend": "32b409384b68f83a18972d2a4e145d202712bd6f",
+    "patternly-content": "71b0096f99a0afef8891e8e1b3d591575661ad88"
+  },
+  "review": {
+    "model": "gpt-6-luna",
+    "reasoning": "high",
+    "designMinimum": 0.85,
+    "finalLocalVerdict": "PASS with full-objective evidence gap",
+    "independentTargetedChecks": {
+      "backendPackageTests": 6,
+      "staleProfileRejectionTest": 1
+    },
+    "resolvedFindings": [
+      "signed expiry derived from SDK URL fields",
+      "metadata collision checked before producer pointer",
+      "stale profile wins over rejected awaits",
+      "minimum app version grammar aligned"
+    ]
+  },
+  "tests": [
+    {
+      "cwd": "patternly-backend",
+      "command": "node --import tsx --test tests/contentPackages.test.ts tests/environment.test.ts tests/openapiContracts.test.ts",
+      "passed": 41,
+      "failed": 0
+    },
+    {
+      "cwd": "patternly",
+      "command": "node --import tsx --test src/infrastructure/clients/patternlyApiClient.test.ts src/content/runtime/nodeContentPackage.test.ts src/content/runtime/nodePackageStorage.test.ts src/content/application/nodePackageStoreComposition.test.ts src/content/application/premiumNodeOfferPresentation.test.ts src/application/premiumNodeOfferRuntime.test.ts",
+      "passed": 60,
+      "failed": 0
+    },
+    {
+      "cwd": "patternly",
+      "command": "node --import tsx --test src/content/application/premiumNodeOfferPresentation.test.ts",
+      "passed": 3,
+      "failed": 0,
+      "reason": "after7 locale additions"
+    },
+    {
+      "cwd": "patternly-backend",
+      "command": "node scripts/run-content-package-tests.mjs",
+      "routeTestsPassed": 1,
+      "crossRepoIntegration": "PASS",
+      "sessionItems": 1,
+      "activations": 1,
+      "negativeCases": 5,
+      "limits": "modeled GCS + memory pointer, actual Auth/Firestore route + Node filesystem + production client/verifier/runtime, smoke producer"
+    },
+    {
+      "cwd": "patternly-backend",
+      "commands": [
+        "npm run typecheck",
+        "npm run lint",
+        "npm run build",
+        "npm run openapi:check",
+        "npm run frontend:client:check"
+      ],
+      "result": "PASS",
+      "operations": 81,
+      "consumerOperations": 57
+    },
+    {
+      "cwd": "patternly",
+      "commands": [
+        "npm run typecheck",
+        "npm run validate:content-boundary",
+        "npm run validate:runtime-privacy-boundary"
+      ],
+      "result": "PASS"
+    }
+  ],
+  "inputWorkPreservation": {
+    "inputStatusEntries": 108,
+    "existingFiles": 107,
+    "unchangedHashCount": 96,
+    "extendedWip": [
+      "patternly/docs/specs/engineering/premium-revenuecat.md",
+      "patternly/src/application/account/accountLifecycle.test.ts",
+      "patternly/src/infrastructure/clients/PatternlyApiClientAdapter.ts",
+      "patternly/src/infrastructure/clients/patternlyApiClient.test.ts",
+      "patternly-backend/.env.example",
+      "patternly-backend/openapi/patternly-v1.json",
+      "patternly-backend/src/api/app.ts",
+      "patternly-backend/src/api/openapi.ts",
+      "patternly-backend/src/config/environment.ts",
+      "patternly-backend/tests/environment.test.ts",
+      "patternly-backend/tests/openapiContracts.test.ts"
+    ],
+    "missingFiles": [],
+    "priorDeletionPreserved": "patternly-backend/src/modules/billing/revenuecatBoundary.ts"
+  },
+  "unchangedPins": {
+    "patternly/integration/contracts/content-release/release.lock.json": "22f3ef64cb3801bc0345b8d8bf6f8b656bd6579c6a46816b5ce9c0b30f5e8823",
+    "patternly/src/content/generated/canonical-content/content-lock.json": "4e27acc32ee463f6ee1f61e838d766a3cdb8057c63c5e1aa64a5e4c96c393cb8",
+    "patternly/app.config.js": "b68ce2a8ba195e03dc88e4edf81d18c027f22cf74552950ddc1b8914f35c7fe1",
+    "patternly/eas.json": "ed092a8be59bf56cc51dbdfa8919906675cacbe22eee9b8fb108fbd27dbd97ea"
+  },
+  "changedFiles": [
+    {
+      "path": "patternly-backend/.env.example",
+      "sha256": "b0e12de016e2dd8fbed1ffcf21a7d4edb9586b490f150293964c0aa3ef181d55",
+      "preExistingDirtySha256": "880afdd4bb0d6d6b59098a856f8ac8881bdd19b4e17cbd847103338a4917a7d9"
+    },
+    {
+      "path": "patternly-backend/src/infrastructure/content/gcsContentPackageStorage.ts",
+      "sha256": "a0fd7b35d70aa357a1f7be8181d968c375b56dc4a01f96fe4ab409e04bf9c8b7",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly-backend/src/modules/content/packages.ts",
+      "sha256": "644b1a831415f006ffcee48be79cb0cb7b800470b51d70248c6d4db3a3ec7f03",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly-backend/src/api/app.ts",
+      "sha256": "ef5972f358048b9e1b2e8ae6376d76ac42e6ae97821c6412ddb92bbe6dd75eb4",
+      "preExistingDirtySha256": "4fc09f31960bb23adc96839034a13b813e8f8c8ccc81e9c895853c456de1f6b8"
+    },
+    {
+      "path": "patternly-backend/src/api/openapi.ts",
+      "sha256": "dc45e8bd4fb0688a1a2fd2e16d00df410a03f6a96e70350a724c3308a6a0b247",
+      "preExistingDirtySha256": "95e0e27163b3ad8459ce05915a7c6dcf43e3ec9911aa9b1168a4bab480ab1f58"
+    },
+    {
+      "path": "patternly-backend/src/index.ts",
+      "sha256": "bdc2af782218f6d0344be4025a90dbb7a19164a91ab1d8729d7b6bda3658baab",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly-backend/src/config/environment.ts",
+      "sha256": "1532e64f7f941a0075d527d96da007ec3759c37e30710b70d536c8d630984037",
+      "preExistingDirtySha256": "f34a9cd5b1003118f8d95967612c76c3777a749091314c5884a8efc47866601e"
+    },
+    {
+      "path": "patternly-backend/openapi/patternly-v1.json",
+      "sha256": "d2b13b1a8c2b681ca3fdb39cc7c1d4931beece5ccddf79e2a7c58e8ce8ad9732",
+      "preExistingDirtySha256": "818ba05f80aadd1c1d1b560905fc72b0ab0f0e1dfe23814cca05edfe6ae8fce1"
+    },
+    {
+      "path": "patternly-backend/tests/contentPackages.test.ts",
+      "sha256": "68edfe693ac78fdab0682cd45549cf5fddab8bf0f55fa16bf4dbef65440a0d06",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly-backend/tests/contentPackages.emulator.test.ts",
+      "sha256": "13db65b3d4f197c6fdeee8ab190ec6fb7388ddc1c433ea04db81ec33c21f914b",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly-backend/tests/environment.test.ts",
+      "sha256": "206db9d0a35c4d8d7b7a57a1a3a6ff3bb695856b5a3a82b7a0abaad294568205",
+      "preExistingDirtySha256": "0861cf5b5a6fc6a0deb8c798f475d404ad751bd91c95446b8cf4792b68e8acbe"
+    },
+    {
+      "path": "patternly-backend/tests/openapiContracts.test.ts",
+      "sha256": "758fdea8d126e80c156542cf29f0de224125264e62c13af5870d6e2e39020489",
+      "preExistingDirtySha256": "76a9b552c0eee0a37d75c671e6390a55987ee603236316487654775b4d93c68a"
+    },
+    {
+      "path": "patternly-backend/tests/fixtures/gcsPackageFixture.ts",
+      "sha256": "5df9ee88dc0354a1c4e27b0f56185e98c9428a5619940fa1e7b3198272256a6e",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly-backend/scripts/run-content-package-tests.mjs",
+      "sha256": "c1c40829c23106825fd3589ccf2298ccd9f25d71606815ae121bc1952a29a123",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly-backend/scripts/qa/verify-content-package-client.mjs",
+      "sha256": "d151d16237fd0a53b639f865aab3e4961eaad31de880bf2f7f81d65654e0efdc",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly-backend/docs/content-package-transport.md",
+      "sha256": "0a3176ffe1fe6e94fbc1e608adad8a1e8498a62d8f2d21f6424d04327cc553e5",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/infrastructure/clients/PatternlyApiClientAdapter.ts",
+      "sha256": "7c7adbb352b72fe51b1b696dcd51d59b58a49584e479a8fad1a0496b504d56d8",
+      "preExistingDirtySha256": "5556bb526cb5342b90acea024e9e86c8d40756a5a44500b35bf94398edf53366"
+    },
+    {
+      "path": "patternly/src/infrastructure/clients/contentPackageDescriptor.ts",
+      "sha256": "f7ef026fa9a11c1586420975c27c8924a91cb72a70d8267401f50ebdbfad9e27",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/infrastructure/clients/patternlyApiClient.test.ts",
+      "sha256": "05c9ac34d273c35cc24a4eaf63411937dcab29a1d191f079e39ed4877825874f",
+      "preExistingDirtySha256": "5d7dc8a6c6cfa620f41c5ea8aace819612e50e5888fa4d8d5598e1abe120a3fe"
+    },
+    {
+      "path": "patternly/src/content/application/nodePackageInstaller.ts",
+      "sha256": "47a361e7b3cfedeeaec278a9898442f3c7669b0e9aa59929ea3cf13ff04a3f9c",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/content/application/nodePackageStoreComposition.ts",
+      "sha256": "99cc120b348d962abebeb4c5d05358feb139907bb7eda3227cc08ffcc330e7bf",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/content/application/premiumNodeOfferPresentation.ts",
+      "sha256": "11aedd096aa5e33371d24a9e96b1b31f832cdc2d057b2ce6df7ebbe926d880b6",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/content/application/premiumNodeOfferPresentation.test.ts",
+      "sha256": "1d2f0be0a4dbbcd15036ada470763c0f6dcefe5cdbb7b4ce842abbe063d8a2e1",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/content/runtime/nodeContentPackage.ts",
+      "sha256": "9f5dd1b976fc0046abbedcf607d191be6cea9ce874efb56219cdbc18c54dce84",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/content/runtime/nodeContentPackage.test.ts",
+      "sha256": "2a1dbaf7889f671661803171f5ce1c720e15441036a84b6909590c4c1c4016ae",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/content/runtime/nodePackageStorage.ts",
+      "sha256": "9d36c61aa0fc12742e027a4ebb27bbaebc51360c287bac29faf2638386977b1f",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/content/runtime/nodePackageStorage.test.ts",
+      "sha256": "de434a166da0f18e5a6a8508cc362a0eed9e2b0c74dcb1f112aa9d3ec9263087",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/application/account/accountLifecycle.test.ts",
+      "sha256": "35ca0c1b10e5a70c3bac3a4fbc83bb3ee1162561b8454a02123c2c83cc9e858b",
+      "preExistingDirtySha256": "b9da252b382c3151282da627bbde43805030f14b92f43a1b541a9ce6a159ba22"
+    },
+    {
+      "path": "patternly/docs/specs/engineering/premium-revenuecat.md",
+      "sha256": "f353c9a2b1265f421c092921e6e20cfd24fd46e10d5763e350b98615d056b1b0",
+      "preExistingDirtySha256": "005eaf43614b593b03db644bfa3e1ca2fe68f8f2febfd791bfe05b77cee5a461"
+    },
+    {
+      "path": "patternly/src/locales/en/common.json",
+      "sha256": "689e993d11ee46bb94a9f818dcf4eac1ad710141bf0db23da8590f3d46f19c15",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/locales/pl/common.json",
+      "sha256": "d2ddd22245052bf8c9d8d65e5347dbba58f8a504da89670f1195502e9e2b17cc",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/locales/de/common.json",
+      "sha256": "1b923375013d46740086c42185fffddee4386e355e384d7c75567615fd4f50b1",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/locales/es/common.json",
+      "sha256": "b6c242be439f07e09ab2c0f048b3dd654838a197c5c33f8e85c010ecd9ee6625",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/locales/et/common.json",
+      "sha256": "c32c729eff7b1065f37d92a0146b5b3a7c818be7b9c94ae4f1544a7d132f16fa",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/locales/fr/common.json",
+      "sha256": "2d7bdf734a1340c7674d0b4f0d40b59549282cc72602df4cb7aba01dc0bf9b67",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/locales/it/common.json",
+      "sha256": "2d581967510e0a84c3351521fce13348ed7df842556e506e1e265d15554a6549",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "docs/02-architecture.md",
+      "sha256": "f4b0588adf0a3e9375d67f1235e61a18ae40e3ad20fedffdee10dbc281804d70",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "docs/08-storage-and-offline.md",
+      "sha256": "96dc165387cc858f17e45c85b45b504c41bb303a88456acbb5188eb5ed14191c",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "docs/PATTERNLY-WORKING-PLAN.md",
+      "sha256": "93ea7837b2429df669fb7b6ad3bfde109ea87d01b2dd21de9317d459d938c3c4",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": ".agent/WORKING_STATE.md",
+      "sha256": "fe4751bba442f119c3363c7f0428b00c892a26963679244f25fa2f51fe016959",
+      "preExistingDirtySha256": null
+    }
+  ],
+  "runLogs": {
+    "backend": {
+      "path": "/private/tmp/patternly19-backend-tests.log",
+      "sha256": "b0b6b13bc0a6ffd9e3390ac92d99fa6e0b84b01cec68c50e16830ea832749f1f",
+      "scope": "private temporary run log; commands and assertions versioned"
+    },
+    "client": {
+      "path": "/private/tmp/patternly19-client-tests.log",
+      "sha256": "49703abffbecb6cfd6a437e7b24602b481fcdff55c43b04994cc322302c09f5e",
+      "scope": "private temporary run log; commands and assertions versioned"
+    },
+    "emulator": {
+      "path": "/private/tmp/patternly19-emulator.log",
+      "sha256": "58ab55d7d5bb0faa06c53dd7aa6a0285cfaa1569946e00fadaf042a58a5d782d",
+      "scope": "private temporary run log; commands and assertions versioned"
+    }
+  },
+  "remaining": [
+    "admitted production offer and producer payload (do not invent publisher)",
+    "native runtime acceptance with real admitted artifact without reset/reinstall/newGuest",
+    "R04 real private GCS IAM/signing/download and other provider checks",
+    "full npmtest/CI/qa:static not claimed"
+  ],
+  "actionsNotTaken": [
+    "deploy",
+    "cloud IAM/config changes",
+    "publishing",
+    "mail",
+    "spending",
+    "commit",
+    "push",
+    "simulator reset/reinstall/newGuest",
+    "Android",
+    "new publisher",
+    "goals",
+    "automations",
+    "new chat"
+  ]
+}

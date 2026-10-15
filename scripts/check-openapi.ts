@@ -41,6 +41,7 @@ const environment = loadEnvironment({
   PRIVACY_AUDIT_HMAC_SECRET: "openapi-check-privacy-audit-secret-0123456789",
   ADMINISTRATOR_EMAIL: "security-probe-admin@example.com",
   REVENUECAT_WEBHOOK_SECRET: "security-probe-webhook-secret",
+  REVENUECAT_PROJECT_ID: "projtest",
   REVENUECAT_APP_ID: "security-probe-app",
   REVENUECAT_ENTITLEMENT_ID: "security-probe-entitlement",
   REVENUECAT_PRODUCT_ID: "security-probe-product",

@@ -624,6 +624,104 @@ TEST_GROUP(ENABLED
     assert.equal((await resultRef.get()).exists, false);
   });
 
+  for (const afterEffect of [false, true]) {
+    test(`B4 revoke restart resolves same ID after fault ${afterEffect ? "after" : "before"} Admin effect`, async () => {
+      const fixture = await makeAccount();
+      const foreign = await makeAccount();
+      const foreignRef = db.collection(COLLECTIONS.users).doc(foreign.userId);
+      const foreignBefore = (await foreignRef.get()).data();
+      const time = Date.now().toString(16).padStart(12, "0");
+      const id = `${time.slice(0, 8)}-${time.slice(8)}-7${randomUUID().slice(15)}`;
+      createdOperationIds.push(id);
+      let entered!: () => void;
+      let release!: () => void;
+      const atProvider = new Promise<void>((resolve) => { entered = resolve; });
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      let effects = 0;
+      let mints = 0;
+      const interrupted = new FirestoreAccountLifecycleStore(db, {
+        ...accountAuth,
+        createCustomToken: async (...args) => { mints++; return accountAuth.createCustomToken(...args); },
+        revokeRefreshTokens: async (uid) => {
+          if (afterEffect) { await accountAuth.revokeRefreshTokens(uid); effects++; }
+          entered();
+          await gate;
+          throw new Error("fixture_provider_interrupted");
+        },
+      }, fixture.ring, null);
+      const first = interrupted.revokeSessions(fixture.userId, 1, id);
+      const settled = assert.rejects(first, { message: "session_revocation_failed" });
+      await atProvider;
+      const restored = new FirestoreAccountLifecycleStore(db, {
+        ...accountAuth,
+        revokeRefreshTokens: async (uid) => { await accountAuth.revokeRefreshTokens(uid); effects++; },
+        createCustomToken: async (...args) => { mints++; return accountAuth.createCustomToken(...args); },
+      }, fixture.ring, null);
+      try {
+        await assert.rejects(restored.revokeSessions(fixture.userId, 1, id), { message: "session_revocation_in_progress" });
+        assert.equal((await db.collection(COLLECTIONS.sessionRevocationOperations).doc(id).get()).get("status"), "pending");
+        assert.equal(mints, 0);
+      } finally { release(); }
+      await settled;
+      assert.equal((await db.collection(COLLECTIONS.sessionRevocationOperations).doc(id).get()).get("status"), "failed");
+      const result = await restored.revokeSessions(fixture.userId, 1, id);
+      assert.equal(result.operationId, id);
+      assert.equal(result.status, "revoked");
+      assert.equal(effects, afterEffect ? 2 : 1, "unconfirmed revoke may repeat its idempotent effect; it is never guessed complete");
+      await restored.revokeSessions(fixture.userId, 1, id); // lost response after terminal persistence
+      assert.equal(effects, afterEffect ? 2 : 1, "confirmed terminal retry must not revoke again");
+      assert.equal(mints, 2);
+      assert.deepEqual((await foreignRef.get()).data(), foreignBefore);
+      await db.collection(COLLECTIONS.users).doc(fixture.userId).update({ authorizationGeneration: 2 });
+      await assert.rejects(restored.revokeSessions(fixture.userId, 1, id), { message: "authorization_generation_conflict" });
+      assert.equal(mints, 2, "old generation cannot receive a replacement token");
+    });
+
+    test(`B4 deletion restart resolves same secret after fault ${afterEffect ? "after" : "before"} Admin delete`, async () => {
+      const fixture = await makeAccount();
+      const foreign = await makeAccount();
+      const foreignRef = db.collection(COLLECTIONS.users).doc(foreign.userId);
+      const foreignBefore = (await foreignRef.get()).data();
+      const id = randomUUID();
+      const secret = randomBytes(32).toString("hex");
+      createdOperationIds.push(id);
+      let entered!: () => void;
+      let release!: () => void;
+      const atProvider = new Promise<void>((resolve) => { entered = resolve; });
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const interrupted = new FirestoreAccountLifecycleStore(db, {
+        ...accountAuth,
+        deleteUser: async (uid) => {
+          if (afterEffect) await accountAuth.deleteUser(uid);
+          entered();
+          await gate;
+          throw new Error("fixture_delete_interrupted");
+        },
+      }, fixture.ring, null);
+      const first = interrupted.deleteAccount(fixture.userId, 1, id, secret);
+      const settled = assert.rejects(first, { message: "remote_deletion_pending" });
+      await atProvider;
+      const restored = new FirestoreAccountLifecycleStore(db, accountAuth, fixture.ring, null);
+      try {
+        assert.equal((await restored.resumeDeletion(id, secret))?.status, "pending");
+        await assert.rejects(restored.deleteAccount(fixture.userId, 1, id, secret), { message: "account_deletion_conflict" });
+        assert.equal(await restored.resumeDeletion(id, "0".repeat(64)), null);
+        assert.equal((await db.collection(COLLECTIONS.accountDeletionOperations).doc(id).get()).get("phase"), "auth_deleting");
+        assert.equal((await db.collection(COLLECTIONS.users).doc(fixture.userId).get()).get("authorizationGeneration"), 2);
+      } finally { release(); }
+      await settled;
+      const result = await restored.resumeDeletion(id, secret);
+      assert.equal(result?.status, "complete");
+      assert.ok(result?.proofId);
+      createdProofIds.push(result.proofId);
+      assert.equal((await restored.readDeletionProof(result.proofId))?.operationId, id);
+      assert.deepEqual(await restored.resumeDeletion(id, secret), result, "lost proof response resolves without another deletion");
+      assert.equal((await db.collection(COLLECTIONS.users).doc(fixture.userId).get()).exists, false);
+      await assert.rejects(adminAuth.getUser(fixture.firebaseUid), (error: unknown) => (error as { code?: string }).code === "auth/user-not-found");
+      assert.deepEqual((await foreignRef.get()).data(), foreignBefore);
+    });
+  }
+
   test("current-session deletion fences a late remint before it can publish a recovery result", async () => {
     const fixture = await makeAccount();
     const runtime = { cipher: fixture.cipher } as const;

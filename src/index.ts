@@ -1,3 +1,5 @@
+import { getStorage } from "firebase-admin/storage";
+import { GcsContentPackageStorage } from "./infrastructure/content/gcsContentPackageStorage.js";
 import { buildApplication } from "./api/app.js";
 import { loadEnvironment } from "./config/environment.js";
 import { createFirestoreRuntime } from "./infrastructure/firestore/client.js";
@@ -8,7 +10,7 @@ import { createBootstrapLogger } from "./infrastructure/logging/logger.js";
 import { createSmtpLegalRequestEmailSender, createSmtpPrivacyEmailSender, createSmtpPurchaseReceiptEmailSender, createSmtpSecurityIncidentEmailSender } from "./infrastructure/email/smtpPrivacyEmailSender.js";
 import { createRevenueCatEntitlementReader } from "./infrastructure/revenuecat/client.js";
 import { createOperatorTokenVerifier } from "./infrastructure/operator/oidcVerifier.js";
-import { ContentPackageService, FirestoreContentPackagePointerStore, LocalFilesystemContentPackageStorage } from "./modules/content/packages.js";
+import { ContentPackageService, FirestoreContentPackagePointerStore } from "./modules/content/packages.js";
 
 async function main(): Promise<void> {
   const bootstrapLogger = createBootstrapLogger();
@@ -34,8 +36,8 @@ async function main(): Promise<void> {
       revenueCatEntitlementReader: environment.revenueCatReadApiKey && environment.revenueCatEntitlementId && environment.revenueCatProductId && environment.revenueCatWebhookEnvironment
         ? createRevenueCatEntitlementReader({ baseUrl: environment.revenueCatApiBaseUrl, apiKey: environment.revenueCatReadApiKey, entitlementId: environment.revenueCatEntitlementId, productId: environment.revenueCatProductId, environment: environment.revenueCatWebhookEnvironment })
         : null,
-      contentPackages: environment.contentPackageLocalRoot
-        ? new ContentPackageService(new FirestoreContentPackagePointerStore(firestore.db), new LocalFilesystemContentPackageStorage(environment.contentPackageLocalRoot))
+      contentPackages: environment.contentPackageBucket
+        ? new ContentPackageService(new FirestoreContentPackagePointerStore(firestore.db), new GcsContentPackageStorage(getStorage(firestore.app).bucket(environment.contentPackageBucket)))
         : null,
       privacyRequestEmailSender,
       legalRequestEmailSender,

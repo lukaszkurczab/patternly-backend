@@ -19,6 +19,7 @@ const production = {
   SMTP_FROM_EMAIL: "sender@example.test",
   SMTP_FROM_NAME: "Patternly",
   REVENUECAT_WEBHOOK_SECRET: "test-only-revenuecat-secret",
+  REVENUECAT_PROJECT_ID: "projtest",
   REVENUECAT_APP_ID: "patternly-test-app",
   REVENUECAT_ENTITLEMENT_ID: "premium",
   REVENUECAT_PRODUCT_ID: "premium-monthly",
@@ -41,7 +42,7 @@ test("production rejects either Firebase emulator host before runtime configurat
       { message: "production_firebase_emulator_config_forbidden" },
     );
   }
-  assert.throws(() => loadEnvironment({ ...production, CONTENT_PACKAGE_LOCAL_ROOT: "/var/lib/patternly/packages" }), { message: "production_local_content_package_storage_forbidden" });
+  assert.throws(() => loadEnvironment({ ...production, CONTENT_PACKAGE_LOCAL_ROOT: "/var/lib/patternly/packages" }), { message: "local_content_package_transport_removed" });
 });
 
 test("explicit local emulator configuration remains accepted outside production", () => {
@@ -141,4 +142,16 @@ test("shared emulator fixture uses the explicit runner project and rejects malfo
   verify("demo-patternly-aud08-suite", "demo-patternly-aud08-suite");
   verify("", null);
   verify("invalid/project", null);
+});
+
+test("production requires the RevenueCat project namespace used for global transaction identity", () => {
+  assert.throws(() => loadEnvironment({ ...production, REVENUECAT_PROJECT_ID: undefined }), { message: "production_revenuecat_config_required" });
+});
+
+
+test("content readiness target is explicit, paired and requires GCS; no local transport", () => {
+  assert.equal(loadEnvironment(production).contentPackageReadiness, null);
+  const config = { ...production, CONTENT_PACKAGE_BUCKET: "patternly-private-content", CONTENT_PACKAGE_READINESS_TRACK_ID: "accepted-track", CONTENT_PACKAGE_READINESS_NODE_ID: "accepted-node" };
+  assert.deepEqual(loadEnvironment(config).contentPackageReadiness, { trackId: "accepted-track", nodeId: "accepted-node" });
+  for (const invalid of [{ ...production, CONTENT_PACKAGE_READINESS_NODE_ID: "node" }, { ...production, CONTENT_PACKAGE_READINESS_TRACK_ID: "track", CONTENT_PACKAGE_READINESS_NODE_ID: "node" }, { ...config, CONTENT_PACKAGE_READINESS_NODE_ID: "../bad" }]) assert.throws(() => loadEnvironment(invalid));
 });

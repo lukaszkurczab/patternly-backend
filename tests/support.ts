@@ -39,6 +39,7 @@ export const testEnvironment: Environment = loadEnvironment({
   RECOVERY_OPERATION_KEYS_JSON: JSON.stringify({ version: 1, keys: [{ version: "test-recovery-v1", status: "active", keyBase64: Buffer.alloc(32, 17).toString("base64") }] }),
   PRIVACY_AUDIT_HMAC_SECRET: "test-only-privacy-audit-hmac-secret-0123456789",
   REVENUECAT_WEBHOOK_SECRET: "Bearer test-revenuecat-secret",
+  REVENUECAT_PROJECT_ID: "projtest",
   REVENUECAT_APP_ID: "app-1",
   REVENUECAT_ENTITLEMENT_ID: "premium",
   REVENUECAT_PRODUCT_ID: "monthly",

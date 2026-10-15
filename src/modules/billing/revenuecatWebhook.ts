@@ -6,6 +6,7 @@ export const revenueCatEventSchema = z.object({
   original_app_user_id: z.string().min(1).optional(), aliases: z.array(z.string().min(1)).optional(),
   event_timestamp_ms: z.number().int().safe().finite(), expiration_at_ms: z.number().int().safe().finite().nullable().optional(),
   purchased_at_ms: z.number().int().safe().finite().optional(),
+  store: z.string().optional(),
   app_id: z.string().min(1), entitlement_ids: z.array(z.string()).optional(), product_id: z.string().min(1).optional(), environment: z.enum(["SANDBOX", "PRODUCTION"]),
   transaction_id: z.string().min(1).max(256).optional(), original_transaction_id: z.string().min(1).max(256).optional(),
   cancel_reason: z.string().optional(), expiration_reason: z.string().optional(), will_renew: z.boolean().optional(), transferred_from: z.array(z.string()).optional(), transferred_to: z.array(z.string()).optional(),

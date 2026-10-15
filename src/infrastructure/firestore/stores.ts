@@ -1,3 +1,4 @@
+import { FirestorePurchaseCorrelation } from "../../modules/billing/purchaseCorrelation.js";
 import { timingSafeEqual } from "node:crypto";
 import type { FirestoreRuntime } from "./client.js";
 import { FirestoreContentVersionStore, type ContentVersionStore } from "../../modules/content/store.js";
@@ -38,6 +39,7 @@ export type BackendStores = Readonly<{
   dataExport: DataExportStore;
   privacyRequests: PrivacyRequestStore;
   securityIncidents: SecurityIncidentStore;
+  purchases: FirestorePurchaseCorrelation;
   revenueCatWebhook: import("../../modules/billing/revenuecatWebhookStore.js").RevenueCatWebhookStore;
   legalRequests: LegalRequestStore;
 }>;
@@ -51,9 +53,10 @@ export function createFirestoreStores(runtime: FirestoreRuntime, environment: En
     rateLimitMax: environment.reportRateLimitMax,
     rateLimitWindowSeconds: environment.reportRateLimitWindowSeconds,
   });
+  const purchaseScope = environment.revenueCatProjectId && environment.revenueCatAppId && environment.revenueCatProductId && environment.revenueCatWebhookEnvironment ? { projectId: environment.revenueCatProjectId, appId: environment.revenueCatAppId, productId: environment.revenueCatProductId, environment: environment.revenueCatWebhookEnvironment } : null;
   return Object.freeze({
     firebaseAuth,
-    users: new FirestoreUserStore(runtime.db, pseudonymKeyRing),
+    users: new FirestoreUserStore(runtime.db, pseudonymKeyRing, purchaseScope),
     devices: new FirestoreDeviceStore(runtime.db),
     progress: new FirestoreProgressStore(runtime.db),
     entitlements: new FirestoreEntitlementStore(runtime.db),
@@ -69,7 +72,8 @@ export function createFirestoreStores(runtime: FirestoreRuntime, environment: En
     }),
     privacyRequests: new FirestorePrivacyRequestStore(runtime.db, environment.privacyResponseKeyBase64, environment.privacyAuditHmacSecret),
     securityIncidents: new FirestoreSecurityIncidentStore(runtime.db, environment.privacyResponseKeyBase64, environment.privacyAuditHmacSecret),
-    revenueCatWebhook: new FirestoreRevenueCatWebhookStore(runtime.db),
+    purchases: new FirestorePurchaseCorrelation(runtime.db, purchaseScope),
+    revenueCatWebhook: new FirestoreRevenueCatWebhookStore(runtime.db, environment.revenueCatProjectId),
     legalRequests: new FirestoreLegalRequestStore(runtime.db, environment.privacyAuditHmacSecret),
   });
 }

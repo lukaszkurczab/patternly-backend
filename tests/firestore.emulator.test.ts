@@ -421,7 +421,7 @@ test("legal acceptance and purchase confirmation transactions reject a generatio
   assert.equal(inactiveEvidence.exists, false);
 
   const purchaseAuth = await createRegisteredAuthUser(context);
-  const purchasePayload = { confirmationId: "00000000-0000-4000-8000-000000000091", termsVersion: "test-baseline-v1", productIdentifier: "com.lkurczab.patternly.premium.monthly", storefrontPrice: "29,99 zł", locale: "pl", immediateStartRequested: true };
+  const purchasePayload = { confirmationId: "00000000-0000-4000-8000-000000000091", termsVersion: "test-baseline-v1", productIdentifier: "monthly", storefrontPrice: "29,99 zł", locale: "pl", immediateStartRequested: true };
   const purchaseHeaders = { authorization: `Bearer ${purchaseAuth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
   const first = await context.app.inject({ method: "POST", url: "/v1/purchase-confirmations", headers: purchaseHeaders, payload: purchasePayload });
   assert.equal(first.statusCode, 201);
@@ -762,7 +762,7 @@ test("legal acceptance is versioned, immutable, and exposed by the account profi
 test("purchase confirmation requires current Terms acceptance and preserves the immediate-start evidence", async () => {
   const auth = await createRegisteredAuthUser(context);
   const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
-  const payload = { confirmationId: "00000000-0000-4000-8000-000000000059", termsVersion: "2026-09-05", productIdentifier: "com.lkurczab.patternly.premium.monthly", storefrontPrice: "29,99 zł", locale: "pl", immediateStartRequested: true };
+  const payload = { confirmationId: "00000000-0000-4000-8000-000000000059", termsVersion: "2026-09-05", productIdentifier: "monthly", storefrontPrice: "29,99 zł", locale: "pl", immediateStartRequested: true };
   assert.equal((await context.app.inject({ method: "POST", url: "/v1/purchase-confirmations", headers, payload })).statusCode, 409);
   await context.app.inject({ method: "POST", url: "/v1/legal-acceptances", headers, payload: { termsVersion: payload.termsVersion, minimumAgeConfirmed: 18 } });
   const created = await context.app.inject({ method: "POST", url: "/v1/purchase-confirmations", headers, payload });
@@ -801,6 +801,7 @@ test("production excludes hosted admin origin while local admin requires loopbac
     SMTP_FROM_EMAIL: "privacy@example.com",
     SMTP_FROM_NAME: "Patternly",
     REVENUECAT_WEBHOOK_SECRET: "Bearer test-revenuecat-secret",
+    REVENUECAT_PROJECT_ID: "projtest",
     REVENUECAT_APP_ID: "app-1",
     REVENUECAT_ENTITLEMENT_ID: "premium",
     REVENUECAT_PRODUCT_ID: "monthly",
@@ -1707,6 +1708,9 @@ test("account deletion removes owned Firestore documents, preserves a tombstone,
   const exportAuditTimestamp = Timestamp.now();
   await firestore().collection(COLLECTIONS.accountDataExportAudits).doc("deletion-export-audit").set({ exportId: "deletion-export-audit", userId, createdAt: exportAuditTimestamp, status: "completed", schemaVersion: "account-data-export-v1", scope: [], expiresAt: Timestamp.fromMillis(exportAuditTimestamp.toMillis() + 30 * 86_400_000) });
   await firestore().collection(COLLECTIONS.accountDataExportRateLimits).doc(userId).set({ windowStartedAt: exportAuditTimestamp, count: 1, updatedAt: exportAuditTimestamp, expiresAt: Timestamp.fromMillis(exportAuditTimestamp.toMillis() + 3_600_000) });
+  const purchaseIndex = firestore().collection("revenueCatTransactions").doc("deletion-purchase-index");
+  await purchaseIndex.set({ ownerAccountId: userId, status: "bound" });
+  await purchaseIndex.collection("resolutions").doc("operation").set({ evidenceReference: "private-evidence", actor: "operator" });
   const deleted = await context.app.inject({ method: "POST", url: "/v1/account/deletion", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { operationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", operationSecret: "a".repeat(64) } });
   assert.equal(deleted.statusCode, 200);
   assert.equal(deleted.json().status, "deleted");
@@ -1719,6 +1723,8 @@ test("account deletion removes owned Firestore documents, preserves a tombstone,
   assert.equal((await firestore().collection("identityMappings").where("userId", "==", userId).get()).size, 0);
   assert.equal((await firestore().collection(COLLECTIONS.accountDataExportAudits).where("userId", "==", userId).get()).size, 0);
   assert.equal((await firestore().collection(COLLECTIONS.accountDataExportRateLimits).doc(userId).get()).exists, false);
+  assert.equal((await purchaseIndex.get()).exists, false);
+  assert.equal((await purchaseIndex.collection("resolutions").get()).size, 0);
   const tombstoneId = parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson).active("firebase", auth.localId).documentId;
   const tombstone = (await firestore().collection("deletedIdentities").doc(tombstoneId).get()).data();
   assert.ok(tombstone?.deletedAt instanceof Timestamp);

@@ -68,6 +68,7 @@ async function seedDataset(): Promise<void> {
   await db.collection(COLLECTIONS.users).doc(userId).collection("trackAccess").doc("track-a").set({ trackId: "track-a", source: "subscription", status: "active", updatedAt: now });
   await db.collection(COLLECTIONS.users).doc(userId).collection("entitlements").doc("premium").set({ entitlement: "premium", status: "active", source: "revenuecat", expiresAt: now, updatedAt: now });
   await db.collection(COLLECTIONS.users).doc(userId).collection("legalAcceptances").doc("terms-v1").set({ kind: "terms_and_minimum_age", termsVersion: "v1", minimumAgeConfirmed: 18, acceptedAt: now });
+  await db.collection("revenueCatTransactions").doc("owned-transaction").set({ ownerAccountId: userId, status: "reconciliation_required", resolutionReason: "missing_exact_binding", operatorResolution: { actor: "must-not-export" } });
   await db.collection(COLLECTIONS.users).doc(userId).collection("purchaseConfirmations").doc("confirmation-a").set({ confirmationId: "confirmation-a", productIdentifier: "com.lkurczab.patternly.premium.monthly", storefrontPrice: "29,99 zł", immediateStartRequested: true, acceptedAt: now });
   await db.collection(COLLECTIONS.users).doc(userId).collection("syncMetadata").doc("account").set({ accountRevision: 2, updatedAt: now, internalSecret: "must-not-export" });
   await db.collection(COLLECTIONS.users).doc(userId).collection("syncOperations").doc("operation-a").set({ payload: "must-not-export" });
@@ -133,11 +134,13 @@ test("account export contract is complete, isolated, timestamp-portable and reda
     assert.deepEqual(context.syncMetadata, { accountRevision: 2, updatedAt: now.toDate().toISOString() });
     assert.deepEqual((context.legalAcceptances as Array<Record<string, unknown>>)[0], { kind: "terms_and_minimum_age", termsVersion: "v1", minimumAgeConfirmed: 18, acceptedAt: now.toDate().toISOString() });
     assert.equal((context.purchaseConfirmations as Array<Record<string, unknown>>)[0]?.acceptedAt, now.toDate().toISOString());
+    assert.equal((context.purchaseHistory as Array<Record<string, unknown>>)[0]?.kind, "transaction");
+    assert.equal((context.purchaseHistory as Array<Record<string, unknown>>)[0]?.resolutionReason, "missing_exact_binding");
     assert.deepEqual(context.consumerCases, []);
     const serialized = JSON.stringify(body);
     for (const forbidden of ["raw-subject-a", "raw-subject-b", "raw-device-key-a", "must-not-export", "Other account report", "Anonymous report"]) assert.doesNotMatch(serialized, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
     const manifest = body.manifest as Record<string, unknown>;
-    assert.deepEqual(manifest.included, ["portable.profile", "portable.progress", "portable.linkedContentReports", "accountContext.trackAccess", "accountContext.entitlements", "accountContext.legalAcceptances", "accountContext.purchaseConfirmations", "accountContext.consumerCases", "accountContext.devices", "accountContext.syncMetadata", "accountContext.exportHistory"]);
+    assert.deepEqual(manifest.included, ["portable.profile", "portable.progress", "portable.linkedContentReports", "accountContext.trackAccess", "accountContext.entitlements", "accountContext.legalAcceptances", "accountContext.purchaseConfirmations", "accountContext.purchaseHistory", "accountContext.consumerCases", "accountContext.devices", "accountContext.syncMetadata", "accountContext.exportHistory"]);
     assert.equal((manifest.omitted as Array<Record<string, unknown>>).some((entry) => entry.category === "credentials"), true);
     assert.equal((await db.collection(COLLECTIONS.accountDataExportAudits).where("userId", "==", userId).get()).size, 1);
     const audit = (await db.collection(COLLECTIONS.accountDataExportAudits).where("userId", "==", userId).get()).docs[0]?.data() ?? {};

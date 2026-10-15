@@ -40,6 +40,7 @@ const environmentSchema = z.object({
   REVENUECAT_API_BASE_URL: z.string().url().default("https://api.revenuecat.com"),
   REVENUECAT_READ_API_KEY: z.string().min(1).optional(),
   REVENUECAT_WEBHOOK_SECRET: z.string().min(1).optional(),
+  REVENUECAT_PROJECT_ID: z.string().regex(/^proj[A-Za-z0-9]+$/u).optional(),
   REVENUECAT_APP_ID: z.string().min(1).optional(),
   REVENUECAT_ENTITLEMENT_ID: z.string().min(1).optional(),
   REVENUECAT_PRODUCT_ID: z.string().min(1).optional(),
@@ -47,7 +48,9 @@ const environmentSchema = z.object({
   CONTENT_CATALOG_ORIGIN: z.string().url().optional(),
   ADMIN_CONTENT_ROOT: z.string().min(1).optional(),
   ADMIN_CONTENT_RELEASE_ID: z.string().regex(ADMIN_CONTENT_RELEASE_ID_PATTERN).optional(),
-  CONTENT_PACKAGE_LOCAL_ROOT: z.string().min(1).optional(),
+  CONTENT_PACKAGE_BUCKET: z.string().regex(/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/u).optional(),
+  CONTENT_PACKAGE_READINESS_TRACK_ID: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,127}$/u).optional(),
+  CONTENT_PACKAGE_READINESS_NODE_ID: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,127}$/u).optional(),
 });
 
 export type Environment = Readonly<{
@@ -81,6 +84,7 @@ export type Environment = Readonly<{
   revenueCatApiBaseUrl: string;
   revenueCatReadApiKey: string | undefined;
   revenueCatWebhookSecret: string | undefined;
+  revenueCatProjectId: string | undefined;
   revenueCatAppId: string | undefined;
   revenueCatEntitlementId: string | undefined;
   revenueCatProductId: string | undefined;
@@ -88,7 +92,8 @@ export type Environment = Readonly<{
   contentCatalogOrigin: string | undefined;
   adminContentRoot: string | undefined;
   adminContentReleaseId: string | undefined;
-  contentPackageLocalRoot: string | undefined;
+  contentPackageBucket: string | undefined;
+  contentPackageReadiness: Readonly<{ trackId: string; nodeId: string }> | null;
 }>;
 
 export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
@@ -101,9 +106,11 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
       throw new Error("production_firebase_emulator_config_forbidden");
     }
     if (!smtpConfiguration(value)) throw new Error("production_smtp_config_required");
-    if (!value.REVENUECAT_WEBHOOK_SECRET || !value.REVENUECAT_APP_ID || !value.REVENUECAT_ENTITLEMENT_ID || !value.REVENUECAT_PRODUCT_ID || !value.REVENUECAT_WEBHOOK_ENVIRONMENT) throw new Error("production_revenuecat_config_required");
-    if (value.CONTENT_PACKAGE_LOCAL_ROOT !== undefined) throw new Error("production_local_content_package_storage_forbidden");
+    if (!value.REVENUECAT_PROJECT_ID || !value.REVENUECAT_WEBHOOK_SECRET || !value.REVENUECAT_APP_ID || !value.REVENUECAT_ENTITLEMENT_ID || !value.REVENUECAT_PRODUCT_ID || !value.REVENUECAT_WEBHOOK_ENVIRONMENT) throw new Error("production_revenuecat_config_required");
   }
+  if (source.CONTENT_PACKAGE_LOCAL_ROOT !== undefined) throw new Error("local_content_package_transport_removed");
+  if (Boolean(value.CONTENT_PACKAGE_READINESS_TRACK_ID) !== Boolean(value.CONTENT_PACKAGE_READINESS_NODE_ID)
+    || (value.CONTENT_PACKAGE_READINESS_TRACK_ID && !value.CONTENT_PACKAGE_BUCKET)) throw new Error("invalid_content_package_readiness_config");
   const adminWebOrigin = parseAdminWebOrigin(value);
   const operatorAccess = parseOperatorAccess(value);
   return Object.freeze({
@@ -132,6 +139,7 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     revenueCatApiBaseUrl: value.REVENUECAT_API_BASE_URL,
     revenueCatReadApiKey: value.REVENUECAT_READ_API_KEY,
     revenueCatWebhookSecret: value.REVENUECAT_WEBHOOK_SECRET,
+    revenueCatProjectId: value.REVENUECAT_PROJECT_ID,
     revenueCatAppId: value.REVENUECAT_APP_ID,
     revenueCatEntitlementId: value.REVENUECAT_ENTITLEMENT_ID,
     revenueCatProductId: value.REVENUECAT_PRODUCT_ID,
@@ -139,7 +147,9 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     contentCatalogOrigin: value.CONTENT_CATALOG_ORIGIN,
     adminContentRoot: value.ADMIN_CONTENT_ROOT,
     adminContentReleaseId: value.ADMIN_CONTENT_RELEASE_ID,
-    contentPackageLocalRoot: value.CONTENT_PACKAGE_LOCAL_ROOT,
+    contentPackageBucket: value.CONTENT_PACKAGE_BUCKET,
+    contentPackageReadiness: value.CONTENT_PACKAGE_READINESS_TRACK_ID && value.CONTENT_PACKAGE_READINESS_NODE_ID
+      ? Object.freeze({ trackId: value.CONTENT_PACKAGE_READINESS_TRACK_ID, nodeId: value.CONTENT_PACKAGE_READINESS_NODE_ID }) : null,
   });
 }
 

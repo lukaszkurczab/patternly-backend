@@ -46,6 +46,7 @@ function testEnvironment() {
     PRIVACY_AUDIT_HMAC_SECRET: "openapi-check-privacy-audit-secret-0123456789",
     ADMINISTRATOR_EMAIL: "security-probe-admin@example.com",
     REVENUECAT_WEBHOOK_SECRET: "security-probe-webhook-secret",
+    REVENUECAT_PROJECT_ID: "projtest",
     REVENUECAT_APP_ID: "security-probe-app",
     REVENUECAT_ENTITLEMENT_ID: "security-probe-entitlement",
     REVENUECAT_PRODUCT_ID: "security-probe-product",
@@ -78,7 +79,7 @@ test("unready runtime response matches the documented 503 schema", async () => {
     const documented = readyResponse.content["application/json"].schema;
     const validate = new Ajv2020({ strict: false }).compile(documented);
     assert.equal(validate(response.json()), true, JSON.stringify(validate.errors));
-    assert.deepEqual(response.json(), { status: "not_ready", checks: { database: false, authentication: true, providerReader: true } });
+    assert.deepEqual(response.json(), { status: "not_ready", checks: { database: false, authentication: true, providerReader: true, contentPackages: false } });
   } finally {
     await app.close();
   }
@@ -86,7 +87,7 @@ test("unready runtime response matches the documented 503 schema", async () => {
 
 test("runtime parity uses the real app, normalizes parameters, and ignores automatic HEAD", async () => {
   const routes = await runtimeInventory();
-  assert.equal(routes.length, 76);
+  assert.equal(routes.length, 81);
   assert.equal(routes.find((route) => operationKey(route.method, route.path) === "POST /v1/account/registration")?.securityProfile, "app_check_verify_only_bearer");
   assert.equal(routes.find((route) => operationKey(route.method, route.path) === "POST /v1/account/session/exchange")?.securityProfile, "app_check_verify_only_bearer");
   assert.equal(OPENAPI_DOCUMENT.paths["/v1/account/session/exchange"].post.requestBody.required, false);
@@ -429,5 +430,27 @@ test("sync 409 narrows the mandatory common envelope; anyOf cannot bypass it", (
   ]) {
     response.content = { "application/json": { schema } };
     assert.match(collectOpenApiContractErrors(document).join("\n"), /POST \/v1\/progress\/sync:error_schema_not_common_envelope:409/u);
+  }
+});
+
+test("Premium readiness probes its concrete package and signer; configured service alone is insufficient", async () => {
+  for (const state of ["missing_config", "missing_service", "missing_package", "signer_failure", "provider_reader_missing", "ready"] as const) {
+    let probes = 0;
+    const environment = { ...testEnvironment(), nodeEnv: "production" as const, contentPackageBucket: "patternly-private", contentPackageReadiness: state === "missing_config" ? null : { trackId: "accepted-track", nodeId: "accepted-node" } };
+    const app = buildApplication({ environment, firestore: { ping: async () => true } as never,
+      verifier: { verify: async () => { throw new Error("unused"); } }, appCheckVerifier: { verify: async () => {} }, stores: null,
+      revenueCatEntitlementReader: state === "provider_reader_missing" ? null : { read: async () => { throw new Error("unused"); } },
+      contentPackages: state === "missing_service" ? null : { describeCurrent: async (trackId: string, nodeId: string) => {
+        probes++; assert.equal(trackId, "accepted-track"); assert.equal(nodeId, "accepted-node");
+        if (state === "signer_failure") throw new Error("unavailable");
+        return state === "missing_package" ? null : {};
+      } } as never,
+    });
+    try {
+      const response = await app.inject({ method: "GET", url: "/ready" });
+      assert.equal(response.statusCode, state === "ready" ? 200 : 503, state);
+      assert.equal(response.json().checks.contentPackages, !["missing_config", "missing_service", "missing_package", "signer_failure"].includes(state), state);
+      assert.equal(probes, state === "missing_config" || state === "missing_service" ? 0 : 1);
+    } finally { await app.close(); }
   }
 });

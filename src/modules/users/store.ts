@@ -1,7 +1,8 @@
+import { FirestorePurchaseCorrelation, type PurchaseScope } from "../billing/purchaseCorrelation.js";
 import { randomUUID } from "node:crypto";
 import { Timestamp, type Firestore } from "firebase-admin/firestore";
 import { COLLECTIONS, identityDocumentId } from "../../infrastructure/firestore/paths.js";
-import { asIsoString, asRecord, asTimestamp, now } from "../../infrastructure/firestore/values.js";
+import { asIsoString, asRecord, now } from "../../infrastructure/firestore/values.js";
 import type { AuthenticatedIdentity } from "../auth/contracts.js";
 import { activeAuthorizationGeneration, assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
 import type { PseudonymKeyRing } from "../../infrastructure/security/pseudonymKeyRing.js";
@@ -84,7 +85,7 @@ function profileFromStored(userId: string, storedUser: unknown, storedIdentity: 
 }
 
 export class FirestoreUserStore implements UserStore {
-  public constructor(private readonly db: Firestore, private readonly pseudonymKeyRing: PseudonymKeyRing) {}
+  public constructor(private readonly db: Firestore, private readonly pseudonymKeyRing: PseudonymKeyRing, private readonly purchaseScope: PurchaseScope | null = null) {}
 
   public async resolveExistingUser(identity: AuthenticatedIdentity): Promise<Readonly<{ userId: string; authorizationGeneration: number }>> {
     const identityId = identityDocumentId(identity.provider, identity.subject);
@@ -237,34 +238,7 @@ export class FirestoreUserStore implements UserStore {
   }
 
   public async recordPurchaseConfirmation(userId: string, expectedAuthorizationGeneration: number, input: Readonly<{ confirmationId: string; termsVersion: string; productIdentifier: string; storefrontPrice: string; locale: "en" | "pl" }>): Promise<Readonly<{ confirmationId: string; acceptedAt: string; attemptExpiresAt: string }>> {
-    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
-    const confirmationRef = userRef.collection("purchaseConfirmations").doc(input.confirmationId);
-    const activeAttemptRef = userRef.collection("purchaseAttempts").doc("active");
-    const acceptedAt = now();
-    const attemptExpiresAt = Timestamp.fromMillis(acceptedAt.toMillis() + 15 * 60 * 1_000);
-    const evidence = { ...input, billingPeriod: "P1M", autoRenews: true, trialOffered: false, immediateStartRequested: true, acceptedAt };
-    const result = await this.db.runTransaction(async (transaction) => {
-      const [user, existing, activeAttempt] = await transaction.getAll(userRef, confirmationRef, activeAttemptRef);
-      if (!user?.exists) throw new Error("account_deleted");
-      const userData = asRecord(user.data(), "user");
-      assertExpectedAuthorizationGeneration(userData, expectedAuthorizationGeneration);
-      if (userData.acceptedTermsVersion !== input.termsVersion) throw new Error("legal_acceptance_required");
-      if (existing?.exists) {
-        const data = asRecord(existing.data(), "purchase_confirmation");
-        const storedAcceptedAt = asTimestamp(data.acceptedAt, "purchase_confirmation_at");
-        const storedAttemptExpiresAt = data.attemptExpiresAt instanceof Timestamp ? data.attemptExpiresAt : Timestamp.fromMillis(storedAcceptedAt.toMillis() + 15 * 60 * 1_000);
-        return { acceptedAt: storedAcceptedAt.toDate().toISOString(), attemptExpiresAt: storedAttemptExpiresAt.toDate().toISOString() };
-      }
-      if (activeAttempt?.exists) {
-        const data = asRecord(activeAttempt.data(), "purchase_attempt");
-        const expiresAt = data.expiresAt instanceof Timestamp ? data.expiresAt.toMillis() : 0;
-        if (expiresAt > acceptedAt.toMillis() && data.consumedAt == null) throw new Error("purchase_attempt_active");
-      }
-      transaction.create(confirmationRef, { ...evidence, attemptExpiresAt });
-      transaction.set(activeAttemptRef, { confirmationId: input.confirmationId, productIdentifier: input.productIdentifier, createdAt: acceptedAt, expiresAt: attemptExpiresAt, consumedAt: null });
-      return { acceptedAt: asIsoString(acceptedAt, "purchase_confirmation_at"), attemptExpiresAt: asIsoString(attemptExpiresAt, "purchase_attempt_expires_at") };
-    });
-    return Object.freeze({ confirmationId: input.confirmationId, ...result });
+    return new FirestorePurchaseCorrelation(this.db, this.purchaseScope).record(userId, expectedAuthorizationGeneration, input);
   }
 
 }

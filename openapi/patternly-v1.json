@@ -83,7 +83,8 @@
                       "required": [
                         "database",
                         "authentication",
-                        "providerReader"
+                        "providerReader",
+                        "contentPackages"
                       ],
                       "properties": {
                         "database": {
@@ -93,6 +94,9 @@
                           "type": "boolean"
                         },
                         "providerReader": {
+                          "type": "boolean"
+                        },
+                        "contentPackages": {
                           "type": "boolean"
                         }
                       }
@@ -127,7 +131,8 @@
                       "required": [
                         "database",
                         "authentication",
-                        "providerReader"
+                        "providerReader",
+                        "contentPackages"
                       ],
                       "properties": {
                         "database": {
@@ -137,6 +142,9 @@
                           "type": "boolean"
                         },
                         "providerReader": {
+                          "type": "boolean"
+                        },
+                        "contentPackages": {
                           "type": "boolean"
                         }
                       }
@@ -1083,8 +1091,21 @@
             "x-patternly-error-codes": [
               "legal_acceptance_required",
               "purchase_attempt_active",
+              "purchase_confirmation_conflict",
+              "purchase_product_invalid",
+              "identity_reconciliation_required",
               "authorization_generation_conflict"
             ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "RevenueCat purchase namespace is not configured",
             "content": {
               "application/json": {
                 "schema": {
@@ -1147,6 +1168,904 @@
                   "immediateStartRequested": {
                     "type": "boolean",
                     "const": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/purchase-attempts/{attemptId}": {
+      "x-patternly-security-profile": "app_check_bearer",
+      "x-patternly-consumer-scope": "mobile",
+      "get": {
+        "description": "Read durable purchase status or apply an exact, fenced purchase command. SDK data never grants access; operator bind requires verified exact original-operation/provider evidence.",
+        "responses": {
+          "200": {
+            "description": "Durable purchase result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "attempt"
+                  ],
+                  "properties": {
+                    "attempt": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "attemptId",
+                        "outcome",
+                        "acceptedAt",
+                        "startExpiresAt",
+                        "initiatedAt",
+                        "transactionKey",
+                        "resolutionReason"
+                      ],
+                      "properties": {
+                        "attemptId": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "type": "string"
+                        },
+                        "acceptedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "startExpiresAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "initiatedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "transactionKey": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "resolutionReason": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "dispatchAllowed": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Purchase unavailable; account_not_found when the verified bearer identity has no Patternly account",
+            "x-patternly-error-codes": [
+              "account_not_found"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Purchase state or revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Purchase or delivery unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_v1_purchase_attempts_by_attemptid",
+        "security": [
+          {
+            "appCheckAuth": [],
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "app_check_bearer",
+        "x-patternly-consumer-scope": "mobile",
+        "parameters": [
+          {
+            "name": "attemptId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ]
+      },
+      "post": {
+        "description": "Read durable purchase status or apply an exact, fenced purchase command. SDK data never grants access; operator bind requires verified exact original-operation/provider evidence.",
+        "responses": {
+          "200": {
+            "description": "Durable purchase result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "attempt"
+                  ],
+                  "properties": {
+                    "attempt": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "attemptId",
+                        "outcome",
+                        "acceptedAt",
+                        "startExpiresAt",
+                        "initiatedAt",
+                        "transactionKey",
+                        "resolutionReason"
+                      ],
+                      "properties": {
+                        "attemptId": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "type": "string"
+                        },
+                        "acceptedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "startExpiresAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "initiatedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "transactionKey": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "resolutionReason": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "dispatchAllowed": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Purchase unavailable; account_not_found when the verified bearer identity has no Patternly account",
+            "x-patternly-error-codes": [
+              "account_not_found"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Purchase state or revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Purchase or delivery unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_v1_purchase_attempts_by_attemptid",
+        "security": [
+          {
+            "appCheckAuth": [],
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "app_check_bearer",
+        "x-patternly-consumer-scope": "mobile",
+        "parameters": [
+          {
+            "name": "attemptId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "action"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "claim"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "action"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "pending"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "action",
+                      "source"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "cancelled"
+                      },
+                      "source": {
+                        "const": "original_sdk_operation"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "action",
+                      "transactionId"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "candidate"
+                      },
+                      "transactionId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/purchase-cases": {
+      "x-patternly-security-profile": "app_check_bearer",
+      "x-patternly-consumer-scope": "mobile",
+      "get": {
+        "description": "Read durable purchase status or apply an exact, fenced purchase command. SDK data never grants access; operator bind requires verified exact original-operation/provider evidence.",
+        "responses": {
+          "200": {
+            "description": "Durable purchase result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "items",
+                    "truncated"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "transactionKey",
+                          "revision",
+                          "status",
+                          "resolutionReason",
+                          "confirmationId",
+                          "receiptId"
+                        ],
+                        "properties": {
+                          "transactionKey": {
+                            "type": "string"
+                          },
+                          "revision": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "resolutionReason": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "confirmationId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "receiptId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Purchase unavailable; account_not_found when the verified bearer identity has no Patternly account",
+            "x-patternly-error-codes": [
+              "account_not_found"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Purchase state or revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Purchase or delivery unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_v1_purchase_cases",
+        "security": [
+          {
+            "appCheckAuth": [],
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "app_check_bearer",
+        "x-patternly-consumer-scope": "mobile"
+      }
+    },
+    "/v1/operator/purchase-cases/{transactionKey}": {
+      "x-patternly-security-profile": "operator",
+      "x-patternly-consumer-scope": "backend-only",
+      "get": {
+        "description": "Read durable purchase status or apply an exact, fenced purchase command. SDK data never grants access; operator bind requires verified exact original-operation/provider evidence.",
+        "responses": {
+          "200": {
+            "description": "Durable purchase result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "item"
+                  ],
+                  "properties": {
+                    "item": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "transactionKey",
+                        "revision",
+                        "status",
+                        "resolutionReason",
+                        "confirmationId",
+                        "receiptId"
+                      ],
+                      "properties": {
+                        "transactionKey": {
+                          "type": "string"
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "resolutionReason": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "confirmationId": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "receiptId": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Purchase unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Purchase state or revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Purchase or delivery unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_v1_operator_purchase_cases_by_transactionkey",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only",
+        "parameters": [
+          {
+            "name": "transactionKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ]
+      },
+      "patch": {
+        "description": "Read durable purchase status or apply an exact, fenced purchase command. SDK data never grants access; operator bind requires verified exact original-operation/provider evidence.",
+        "responses": {
+          "200": {
+            "description": "Durable purchase result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "item"
+                  ],
+                  "properties": {
+                    "item": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "transactionKey",
+                        "revision",
+                        "status",
+                        "resolutionReason",
+                        "confirmationId",
+                        "receiptId"
+                      ],
+                      "properties": {
+                        "transactionKey": {
+                          "type": "string"
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "resolutionReason": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "confirmationId": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "receiptId": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Purchase unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Purchase state or revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Purchase or delivery unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "patch_v1_operator_purchase_cases_by_transactionkey",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only",
+        "parameters": [
+          {
+            "name": "transactionKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "operationId",
+                  "expectedRevision",
+                  "attemptId",
+                  "action",
+                  "evidenceReference",
+                  "releaseLock"
+                ],
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "expectedRevision": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "attemptId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "bind",
+                      "close_unresolved"
+                    ]
+                  },
+                  "evidenceReference": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  },
+                  "evidence": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "transactionId",
+                      "initiatedAt",
+                      "source"
+                    ],
+                    "properties": {
+                      "transactionId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "initiatedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "source": {
+                        "const": "original_operation_provider_verified"
+                      }
+                    }
+                  },
+                  "releaseLock": {
+                    "type": "boolean"
                   }
                 }
               }
@@ -4748,7 +5667,7 @@
       "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "get": {
-        "description": "Stream current immutable gzip package bytes after a fresh RevenueCat entitlement read. Local filesystem package storage is development-only.",
+        "description": "Authorize a short-lived generation-bound GCS GET descriptor after fresh entitlement verification. No byte-stream fallback.",
         "parameters": [
           {
             "name": "trackId",
@@ -4771,69 +5690,126 @@
         ],
         "responses": {
           "200": {
-            "description": "Exact verified gzip package bytes",
+            "description": "Download descriptor; signed URL expires within 60 seconds",
             "headers": {
-              "Content-Length": {
-                "required": true,
-                "schema": {
-                  "type": "integer",
-                  "minimum": 1
-                }
-              },
               "Cache-Control": {
                 "required": true,
                 "schema": {
                   "type": "string",
                   "const": "private, no-store"
                 }
-              },
-              "X-Content-Package-Sha256": {
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[a-f0-9]{64}$"
-                }
-              },
-              "X-Content-Artifact-Sha256": {
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[a-f0-9]{64}$"
-                }
-              },
-              "X-Content-Version": {
-                "required": true,
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "X-Content-Release-Id": {
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "minLength": 1
-                }
-              },
-              "X-Content-Minimum-App-Version": {
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][A-Za-z0-9.-]+)?$"
-                }
-              },
-              "X-Content-Artifact-Size-Bytes": {
-                "required": true,
-                "schema": {
-                  "type": "integer",
-                  "minimum": 1
-                }
               }
             },
             "content": {
-              "application/gzip": {
+              "application/json": {
                 "schema": {
-                  "type": "string",
-                  "format": "binary"
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "schemaVersion",
+                    "manifest",
+                    "object",
+                    "downloadUrl",
+                    "expiresAt"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "patternly-content-download-v1"
+                    },
+                    "manifest": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "schemaVersion",
+                        "trackId",
+                        "nodeId",
+                        "contentVersion",
+                        "artifactSha256",
+                        "packageSha256",
+                        "contentReleaseId",
+                        "minimumAppVersion",
+                        "packageFormat",
+                        "compressedSizeBytes",
+                        "artifactSizeBytes",
+                        "packagePath"
+                      ],
+                      "properties": {
+                        "schemaVersion": {
+                          "const": "patternly-content-node-package-v1"
+                        },
+                        "trackId": {
+                          "type": "string"
+                        },
+                        "nodeId": {
+                          "type": "string"
+                        },
+                        "contentVersion": {
+                          "type": "string"
+                        },
+                        "artifactSha256": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "packageSha256": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "contentReleaseId": {
+                          "type": "string"
+                        },
+                        "minimumAppVersion": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$"
+                        },
+                        "packageFormat": {
+                          "const": "gzip"
+                        },
+                        "compressedSizeBytes": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 2097152
+                        },
+                        "artifactSizeBytes": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 8388608
+                        },
+                        "packagePath": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "object": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "bucket",
+                        "path",
+                        "generation"
+                      ],
+                      "properties": {
+                        "bucket": {
+                          "type": "string"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "generation": {
+                          "type": "string",
+                          "pattern": "^[1-9][0-9]{0,30}$"
+                        }
+                      }
+                    },
+                    "downloadUrl": {
+                      "type": "string",
+                      "format": "uri",
+                      "maxLength": 8192
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
                 }
               }
             }
@@ -4859,7 +5835,7 @@
             }
           },
           "403": {
-            "description": "Current entitlement is required",
+            "description": "Current entitlement required",
             "content": {
               "application/json": {
                 "schema": {
@@ -4882,7 +5858,7 @@
             }
           },
           "503": {
-            "description": "Entitlement reader or package bytes unavailable",
+            "description": "Entitlement reader, package, object or signer unavailable",
             "content": {
               "application/json": {
                 "schema": {

@@ -1,16 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { gcsPackageFixture } from "./fixtures/gcsPackageFixture.js";
 import { gzipSync } from "node:zlib";
-import { ContentPackageService, FirestoreContentPackagePointerStore, LocalFilesystemContentPackageStorage, contentNodePackagePath } from "../src/modules/content/packages.js";
+import { ContentPackageService, FirestoreContentPackagePointerStore, contentNodePackagePath } from "../src/modules/content/packages.js";
 import { TEST_APP_CHECK_TOKEN, clearFirestore, createEmulatorContext, createVerifiedAuthUser, registerAuthUser } from "./support.js";
 
-test("emulator package route enforces App Check and fresh entitlement and streams only verified bytes", async () => {
+test("emulator package route enforces App Check and fresh entitlement and issues only generation-bound descriptors", async () => {
   await clearFirestore();
-  const root = await mkdtemp(path.join(os.tmpdir(), "patternly-content-package-emulator-"));
+  const gcs = gcsPackageFixture();
   let result: "active" | "grace" | "hold" | "expired" | "refunded" | "unavailable" | "throw" = "active";
   let providerExpiresAt = "2099-01-01T00:00:00.000Z";
   let providerGraceExpiresAt = "2099-01-02T00:00:00.000Z";
@@ -23,9 +21,9 @@ test("emulator package route enforces App Check and fresh entitlement and stream
       return { entitlement: "premium", productId: "monthly", state: result, providerExpiresAt, providerGraceExpiresAt, providerObservedAt: new Date().toISOString() };
     } },
     createContentPackages: (db) => {
-      const service = new ContentPackageService(new FirestoreContentPackagePointerStore(db), new LocalFilesystemContentPackageStorage(root));
-      const readCurrent = service.readCurrent.bind(service);
-      service.readCurrent = async (...args) => { packageReadCount += 1; return readCurrent(...args); };
+      const service = new ContentPackageService(new FirestoreContentPackagePointerStore(db), gcs.storage);
+      const readCurrent = service.describeCurrent.bind(service);
+      service.describeCurrent = async (...args) => { packageReadCount += 1; return readCurrent(...args); };
       return service;
     },
   });
@@ -43,17 +41,15 @@ test("emulator package route enforces App Check and fresh entitlement and stream
     assert.equal(unknown.statusCode, 404);
     await context.app.inject({ method: "GET", url: "/v1/content/packages/bad%2Ftrack/premium-node", headers }).then((response) => assert.equal(response.statusCode, 400));
     await context.app.inject({ method: "GET", url: "/v1/content/packages/sample-track/premium-node", headers }).then((response) => assert.equal(response.statusCode, 404));
-    const service = new ContentPackageService(new FirestoreContentPackagePointerStore(context.db), new LocalFilesystemContentPackageStorage(root));
+    const service = new ContentPackageService(new FirestoreContentPackagePointerStore(context.db), gcs.storage);
     await service.publish(manifest, compressed);
     const active = await context.app.inject({ method: "GET", url: "/v1/content/packages/sample-track/premium-node", headers });
     assert.equal(active.statusCode, 200);
-    assert.deepEqual(active.rawPayload, compressed);
-    assert.equal(active.headers["content-length"], String(compressed.length));
-    assert.equal(active.headers["x-content-package-sha256"], manifest.packageSha256);
-    assert.equal(active.headers["x-content-release-id"], manifest.contentReleaseId);
-    assert.equal(active.headers["x-content-minimum-app-version"], manifest.minimumAppVersion);
-    assert.equal(active.headers["x-content-artifact-size-bytes"], String(manifest.artifactSizeBytes));
-    for (const header of ["x-content-release-id", "x-content-minimum-app-version", "x-content-artifact-size-bytes"]) assert.ok(active.headers[header]);
+    assert.match(String(active.headers["content-type"]), /application\/json/u);
+    assert.equal(active.headers["cache-control"], "private, no-store");
+    assert.deepEqual(active.json().manifest, manifest);
+    assert.equal(active.json().object.generation, "12345678901234567");
+    assert.equal(new URL(active.json().downloadUrl).searchParams.get("generation"), active.json().object.generation);
     assert.equal(requestedUsers.at(-1), user.userId);
     result = "grace";
     assert.equal((await context.app.inject({ method: "GET", url: "/v1/content/packages/sample-track/premium-node", headers })).statusCode, 200);
@@ -96,17 +92,15 @@ test("emulator package route enforces App Check and fresh entitlement and stream
     result = "active";
     providerExpiresAt = "2099-01-01T00:00:00.000Z";
     providerGraceExpiresAt = "2099-01-02T00:00:00.000Z";
-    const packageFile = path.join(root, manifest.packagePath);
-    await writeFile(packageFile, Buffer.from("corrupt"));
+    gcs.bytes.set(manifest.packagePath, Buffer.from("corrupt"));
     const corrupt = await context.app.inject({ method: "GET", url: "/v1/content/packages/sample-track/premium-node", headers });
     assert.equal(corrupt.statusCode, 503);
     assert.deepEqual(corrupt.json(), { error: { code: "package_unavailable" } });
-    await rm(packageFile);
+    gcs.bytes.delete(manifest.packagePath);
     const missing = await context.app.inject({ method: "GET", url: "/v1/content/packages/sample-track/premium-node", headers });
     assert.equal(missing.statusCode, 503);
     assert.deepEqual(missing.json(), { error: { code: "package_unavailable" } });
   } finally {
     await context.close();
-    await rm(root, { recursive: true, force: true });
   }
 });

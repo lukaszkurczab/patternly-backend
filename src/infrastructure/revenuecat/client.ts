@@ -222,7 +222,7 @@ function parseResponse(
 
   if (entitlement.product_identifier !== config.productId) return unavailable(config, requestDate.iso);
   if (typeof subscription.is_sandbox !== "boolean" || subscription.is_sandbox !== (config.environment === "SANDBOX")) return unavailable(config, requestDate.iso);
-  if (!hasNonEmptyString(subscription.store)) return unavailable(config, requestDate.iso);
+  if (subscription.store !== "app_store") return unavailable(config, requestDate.iso);
 
   const entitlementExpiresAt = parseProviderDate(entitlement.expires_date, false);
   const subscriptionExpiresAt = parseProviderDate(subscription.expires_date, false);
@@ -268,20 +268,6 @@ export function createRevenueCatEntitlementReader(
       const endpoint = `${normalizedConfig.baseUrl}/v1/subscribers/${encodeURIComponent(userId)}`;
       const payload = await fetchJson(fetchImpl, endpoint, normalizedConfig.apiKey, timeoutMs);
       return parseResponse(normalizedConfig, userId, payload);
-    },
-  });
-}
-
-// Kept for the existing, currently unused billing boundary. The online reader
-// above is the canonical implementation for the ODK-119 slice.
-export interface RevenueCatReconciler {
-  reconcile(userId: string, externalCustomerId: string): Promise<Readonly<{ status: "active" | "expired" | "revoked"; expiresAt: string | null }>>;
-}
-
-export function createUnavailableRevenueCatReconciler(): RevenueCatReconciler {
-  return Object.freeze({
-    async reconcile(): Promise<Readonly<{ status: "active" | "expired" | "revoked"; expiresAt: string | null }>> {
-      throw new Error("revenuecat_not_composed");
     },
   });
 }

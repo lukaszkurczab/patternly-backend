@@ -1504,6 +1504,12 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
     await this.deleteOwnedQuery(this.db.collection(COLLECTIONS.accountRecoveryOperations).where("userId", "==", userId), operation, fence);
     await this.deleteOwnedQuery(this.db.collection(COLLECTIONS.accountRecoveryOperationResults).where("userId", "==", userId), operation, fence);
     await this.deleteOwnedQuery(this.db.collection(COLLECTIONS.sessionRevocationOperations).where("userId", "==", userId), operation, fence);
+    for (;;) {
+      const page = await this.db.collection("revenueCatTransactions").where("ownerAccountId", "==", userId).limit(100).get();
+      if (page.empty) break;
+      for (const fact of page.docs) await this.deleteSubtreeOwned(fact.ref, operation, fence);
+      await this.deleteDocumentsOwned(page.docs.map(doc => doc.ref), operation, fence);
+    }
     await this.deleteOwnedQuery(this.db.collection(COLLECTIONS.accountDataExportAudits).where("userId", "==", userId), operation, fence);
     await this.deleteDocumentsOwned([this.db.collection(COLLECTIONS.accountDataExportRateLimits).doc(userId)], operation, fence);
     await this.unlinkOwnedReports(userId, operation, fence);
@@ -1623,7 +1629,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
 
   private async assertFirestoreDeletionComplete(userId: string, identityRefs: readonly StoredDeletionIdentity[]): Promise<void> {
     const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
-    const [user, mappings, recoveryCodes, recoveryOperations, recoveryResults, sessionRevocations, linkedReports, exportAudits, exportRateLimit] = await Promise.all([
+    const [user, mappings, recoveryCodes, recoveryOperations, recoveryResults, sessionRevocations, linkedReports, exportAudits, exportRateLimit, purchaseTransactions] = await Promise.all([
       userRef.get(),
       this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId).get(),
       this.db.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", userId).get(),
@@ -1633,8 +1639,9 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       this.db.collection(COLLECTIONS.contentReports).where("accountId", "==", userId).get(),
       this.db.collection(COLLECTIONS.accountDataExportAudits).where("userId", "==", userId).get(),
       this.db.collection(COLLECTIONS.accountDataExportRateLimits).doc(userId).get(),
+      this.db.collection("revenueCatTransactions").where("ownerAccountId", "==", userId).get(),
     ]);
-    if (user.exists || !mappings.empty || !recoveryCodes.empty || !recoveryOperations.empty || !recoveryResults.empty || !sessionRevocations.empty || !linkedReports.empty || !exportAudits.empty || exportRateLimit.exists) throw new Error("remote_deletion_pending");
+    if (user.exists || !mappings.empty || !recoveryCodes.empty || !recoveryOperations.empty || !recoveryResults.empty || !sessionRevocations.empty || !linkedReports.empty || !exportAudits.empty || exportRateLimit.exists || !purchaseTransactions.empty) throw new Error("remote_deletion_pending");
     const childCollections = await userRef.listCollections();
     const childDocuments = await Promise.all(childCollections.map((collection) => collection.limit(1).get()));
     if (childDocuments.some((documents) => !documents.empty)) throw new Error("remote_deletion_pending");

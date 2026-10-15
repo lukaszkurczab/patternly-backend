@@ -66,6 +66,7 @@ type ExportSnapshot = Readonly<{
   entitlements: readonly Readonly<Record<string, unknown>>[];
   legalAcceptances: readonly Readonly<Record<string, unknown>>[];
   purchaseConfirmations: readonly Readonly<Record<string, unknown>>[];
+  purchaseHistory: readonly Readonly<Record<string, unknown>>[];
   consumerCases: readonly Readonly<Record<string, unknown>>[];
   devices: readonly Readonly<Record<string, unknown>>[];
   syncMetadata: Readonly<Record<string, unknown>>;
@@ -195,7 +196,7 @@ export class FirestoreDataExportStore implements DataExportStore {
 
   private async readSnapshot(userId: string, currentExportId: string): Promise<ExportSnapshot> {
     const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
-    const [userSnapshot, identitiesSnapshot, progressSnapshot, devicesSnapshot, trackAccessSnapshot, entitlementsSnapshot, legalAcceptancesSnapshot, purchaseConfirmationsSnapshot, syncMetadataSnapshot, reportsSnapshot, consumerCasesSnapshot, auditSnapshot] = await Promise.all([
+    const [userSnapshot, identitiesSnapshot, progressSnapshot, devicesSnapshot, trackAccessSnapshot, entitlementsSnapshot, legalAcceptancesSnapshot, purchaseConfirmationsSnapshot, syncMetadataSnapshot, reportsSnapshot, consumerCasesSnapshot, auditSnapshot, purchaseAttempts, purchaseTransactions, purchaseReceipts] = await Promise.all([
       userRef.get(),
       this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId).get(),
       new FirestoreProgressStore(this.db).readSnapshot(userId),
@@ -208,6 +209,9 @@ export class FirestoreDataExportStore implements DataExportStore {
       this.db.collection(COLLECTIONS.contentReports).where("accountId", "==", userId).get(),
       this.db.collection("legalRequests").where("userId", "==", userId).get(),
       this.db.collection(COLLECTIONS.accountDataExportAudits).where("userId", "==", userId).orderBy("createdAt", "desc").limit(EXPORT_HISTORY_LIMIT + 1).get(),
+      userRef.collection("purchaseAttempts").get(),
+      this.db.collection("revenueCatTransactions").where("ownerAccountId", "==", userId).get(),
+      userRef.collection("purchaseReceipts").get(),
     ]);
 
     if (!userSnapshot.exists || asRecord(userSnapshot.data(), "user").deletedAt !== undefined) throw new Error("account_deleted");
@@ -227,6 +231,7 @@ export class FirestoreDataExportStore implements DataExportStore {
       entitlements: Object.freeze(entitlementsSnapshot.docs.map((document) => readEntitlement(asRecord(document.data(), "entitlement"))).sort(compareBy((row) => String(row.entitlement)))),
       legalAcceptances: Object.freeze(legalAcceptancesSnapshot.docs.map((document) => timestampPortable(asRecord(document.data(), "legal_acceptance")))),
       purchaseConfirmations: Object.freeze(purchaseConfirmationsSnapshot.docs.map((document) => timestampPortable(asRecord(document.data(), "purchase_confirmation")))),
+      purchaseHistory: Object.freeze([...[...purchaseAttempts.docs].filter(doc => doc.id !== "active").map(doc => ({ kind: "attempt", id: doc.id, ...Object.fromEntries(["outcome", "resolutionReason", "acceptedAt", "startExpiresAt", "initiatedAt", "resolveBy", "boundTransactionKey"].filter(key => doc.get(key) !== undefined).map(key => [key, doc.get(key)])) })), ...purchaseTransactions.docs.map(doc => ({ kind: "transaction", id: doc.id, ...Object.fromEntries(["status", "resolutionReason", "boundConfirmationId", "receiptId"].filter(key => doc.get(key) !== undefined).map(key => [key, doc.get(key)])) })), ...purchaseReceipts.docs.map(doc => ({ kind: "receipt", id: doc.id, ...Object.fromEntries(["transactionId", "confirmationId", "productIdentifier", "storefrontPrice", "termsVersion", "deliveryStatus", "createdAt"].filter(key => doc.get(key) !== undefined).map(key => [key, doc.get(key)])) }))].map(timestampPortable)),
       consumerCases: Object.freeze(consumerCasesSnapshot.docs.map((document) => {
         const row = timestampPortable(asRecord(document.data(), "legal_request"));
         return Object.freeze(Object.fromEntries(Object.entries(row).filter(([key]) => !["subjectKey", "lastActorPseudonym"].includes(key))));
@@ -284,6 +289,7 @@ function buildExportDocument(exportId: string, exportedAt: string, snapshot: Exp
       entitlements: snapshot.entitlements,
       legalAcceptances: snapshot.legalAcceptances,
       purchaseConfirmations: snapshot.purchaseConfirmations,
+      purchaseHistory: snapshot.purchaseHistory,
       consumerCases: snapshot.consumerCases,
       devices: snapshot.devices,
       syncMetadata: snapshot.syncMetadata,

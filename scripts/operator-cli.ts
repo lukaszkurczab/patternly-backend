@@ -20,7 +20,7 @@ export type OperatorCliIO = Readonly<{
 }>;
 
 type Command = "list" | "show" | "action" | "create-incident" | "authority-export";
-type Family = "content-reports" | "privacy-requests" | "legal-requests" | "security-incidents";
+type Family = "purchase-cases" | "content-reports" | "privacy-requests" | "legal-requests" | "security-incidents";
 type ParsedCommand = Readonly<{
   command: Command;
   family?: Family;
@@ -37,6 +37,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const OPENAPI_SCHEMA_ID = "patternly-openapi";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const FAMILY_ROUTES: Readonly<Record<Family, string>> = Object.freeze({
+  "purchase-cases": "/v1/operator/purchase-cases",
   "content-reports": "/v1/operator/content-reports",
   "privacy-requests": "/v1/operator/privacy-requests",
   "legal-requests": "/v1/operator/legal-requests",
@@ -102,7 +103,7 @@ function parseArgs(argv: readonly string[]): ParsedCommand {
   let id: string | undefined;
   let version: number | undefined;
   if (command === "list") {
-    if (positionals.length !== 1 || !isFamily(positionals[0])) fail("usage");
+    if (positionals[0] === "purchase-cases" || positionals.length !== 1 || !isFamily(positionals[0])) fail("usage");
     family = positionals[0];
   } else if (command === "show" || command === "action") {
     if (positionals.length !== 2 || !isFamily(positionals[0]) || !isValidId(positionals[0], positionals[1] ?? "")) fail("usage");
@@ -129,6 +130,7 @@ function isFamily(value: unknown): value is Family {
 }
 
 function isValidId(family: Family, id: string): boolean {
+  if (family === "purchase-cases") return /^(event-|attempt-)?[a-f0-9]{64}$/u.test(id);
   if (family === "privacy-requests") return /^pr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(id);
   if (family === "legal-requests") return /^lr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(id);
   if (family === "security-incidents") return id.startsWith("si_") && UUID.test(id.slice(3));
@@ -258,7 +260,7 @@ function familyRoute(family: Family, id?: string): string {
 
 function operatorFamilyPath(family: Family, detail: boolean): string {
   if (!detail) return FAMILY_ROUTES[family];
-  const parameter = family === "content-reports" ? "clientSubmissionId" : family === "security-incidents" ? "incidentId" : "requestId";
+  const parameter = family === "purchase-cases" ? "transactionKey" : family === "content-reports" ? "clientSubmissionId" : family === "security-incidents" ? "incidentId" : "requestId";
   return `${FAMILY_ROUTES[family]}/{${parameter}}`;
 }
 
@@ -395,7 +397,7 @@ export async function runOperatorCli(argv: readonly string[], io: OperatorCliIO)
         proposedEffect: effect,
       })}\n`);
       if (await io.readLine(`Type "${phrase}" to confirm: `) !== phrase) fail("cancelled");
-      const pathTemplate = command.family === "content-reports" ? "/v1/operator/content-reports/{clientSubmissionId}" : command.family === "privacy-requests" ? "/v1/operator/privacy-requests/{requestId}" : command.family === "legal-requests" ? "/v1/operator/legal-requests/{requestId}" : "/v1/operator/security-incidents/{incidentId}";
+      const pathTemplate = command.family === "purchase-cases" ? "/v1/operator/purchase-cases/{transactionKey}" : command.family === "content-reports" ? "/v1/operator/content-reports/{clientSubmissionId}" : command.family === "privacy-requests" ? "/v1/operator/privacy-requests/{requestId}" : command.family === "legal-requests" ? "/v1/operator/legal-requests/{requestId}" : "/v1/operator/security-incidents/{incidentId}";
       const validator = responseValidator(ajv, pathTemplate, "patch", 200);
       const url = requestUrl(command.origin, familyRoute(command.family, command.id));
       reconciliation = { url, validator: detailSchema, token };

@@ -1,0 +1,397 @@
+{
+  "schemaVersion": "patternly-content-transport19-residual-evidence-v1",
+  "date": "2026-10-15",
+  "localResult": "PASS",
+  "providerResult": "NOT_ACCEPTED",
+  "releaseResult": "NOT_ACCEPTED",
+  "nextPrompt": 20,
+  "nextPromptStarted": false,
+  "package": {
+    "derivation": {
+      "admissionSha256": "38f266e0b6732532aac09003561f59de894458ab95d20cab3ece080a40a85d0a",
+      "artifactSha256": "0f42e4208dac416e8db99c1024a1c9c7f0aac728d3d0122124c91a0b5659abf5",
+      "boundary": "local_derivation_from_granted_candidate_no_deployment",
+      "candidateId": "9a1ae78ad702612f33d523ab5581e7e5fe5bd6fd2bd42a7a94d892a0b907deda",
+      "itemCount": 123,
+      "mentalUnitIds": [
+        "federation_iam_identity_center_and_directory_integration",
+        "iam_users_groups_roles_and_policy_evaluation",
+        "identity_based_authorization_diagnostics",
+        "least_privilege_mfa_and_credential_lifecycle",
+        "shared_responsibility_and_root_access",
+        "sts_temporary_credentials_and_role_switching"
+      ],
+      "nodeId": "identity_federation_and_root_access",
+      "observedCurrentBundledLockSha256": "4e27acc32ee463f6ee1f61e838d766a3cdb8057c63c5e1aa64a5e4c96c393cb8",
+      "packageManifestSha256": "497808d874253c64310698597124d9a806da9b6da0dbd306010c5eb3fb7c2112",
+      "packageSha256": "10935a7d50a4ef4f3fda59f53c0c9ce98b1e5207bc093a1424179a817b07aa1a",
+      "releaseManifestSha256": "c53d430a1510186a44ead29f8bcba43c2aeecdf2c9278047ebb2481ba1f55799",
+      "schemaVersion": "patternly-premium-node-derivation-v1",
+      "selectedApplicationArtifactSha256": "350dc44eed14c7087bfdd79196d84d5ca16c606b449536f8c35078b4116a6fc6",
+      "sourceArtifactSha256": "350dc44eed14c7087bfdd79196d84d5ca16c606b449536f8c35078b4116a6fc6",
+      "trackId": "aws-certified-solutions-architect-associate"
+    },
+    "offer": {
+      "artifactSha256": "0f42e4208dac416e8db99c1024a1c9c7f0aac728d3d0122124c91a0b5659abf5",
+      "contentVersion": "aws-certified-solutions-architect-associate-authoring-v2026.10.11-saa-fixes-v1-bizq03-planning-v2",
+      "familyId": "certification",
+      "modeId": "certification-focus-practice",
+      "nodeId": "identity_federation_and_root_access",
+      "offerId": "aws-certified-solutions-architect-associate--identity_federation_and_root_access",
+      "source": "authenticated_backend",
+      "trackId": "aws-certified-solutions-architect-associate"
+    }
+  },
+  "sourceBinding": {
+    "scope": "selected AWS track only, existing granted admission; unrelated accepted Claude successor preserved",
+    "releaseLockUnchanged": true,
+    "bundledLockUnchanged": true,
+    "globalAdmissionUnchanged": true,
+    "questionsEdited": false,
+    "newPublisher": false,
+    "newAdmissionGrant": false
+  },
+  "review": {
+    "model": "gpt-6-luna",
+    "reasoning": "high",
+    "designMinimum": 0.84,
+    "scopedBindingRevisionMinimum": 0.86,
+    "sourceAcceptance": "PASS WITH GAPS",
+    "nativeAcceptance": "PASS WITH GAPS",
+    "blockingFindings": [],
+    "limits": [
+      "native interrupted request fails before first object byte, not mid-stream",
+      "profile fence invalidation seam, no real account/Guest transition",
+      "real GCS/RC/provider and deployment excluded"
+    ]
+  },
+  "checks": [
+    {
+      "cwd": "patternly-content",
+      "command": "node --test tests/content-builder.test.mjs tests/premiumNodePackage.test.mjs",
+      "pass": 39,
+      "fail": 0
+    },
+    {
+      "cwd": "patternly",
+      "command": "node --import tsx --test src/application/premiumNodeOfferRuntime.test.ts src/content/runtime/nodeContentPackage.test.ts src/content/runtime/nodePackageStorage.test.ts src/content/canonical/productModeConfig.test.ts scripts/premiumNodeOffersMetro.test.mjs",
+      "pass": 43,
+      "fail": 0
+    },
+    {
+      "cwd": "patternly-backend",
+      "command": "node scripts/run-content-package-tests.mjs",
+      "routePass": 1,
+      "crossRepo": "PASS",
+      "admittedPackage": true,
+      "sessionItems": 10,
+      "negativeCases": 5
+    },
+    {
+      "native": {
+        "nativeRun": {
+          "fixture": "content19",
+          "result": "PASS",
+          "native": true,
+          "packageItems": 123,
+          "mentalUnits": 6,
+          "sessionItems": 10,
+          "artifactSha256": "0f42e4208dac416e8db99c1024a1c9c7f0aac728d3d0122124c91a0b5659abf5",
+          "activations": 1,
+          "failures": [
+            "hash:package_corrupt",
+            "offline:package_unavailable",
+            "interrupted:package_unavailable",
+            "profile:profile_changed",
+            "access:entitlement_required"
+          ],
+          "storage": "real Expo FileSystem + native encrypted MMKV in isolated cache namespace",
+          "provider": "modeled GCS and RC; real isolated Auth/Firestore route"
+        },
+        "nativeRestart": {
+          "fixture": "content19",
+          "result": "PASS",
+          "restartExact": true,
+          "sessionItems": 10,
+          "artifactSha256": "0f42e4208dac416e8db99c1024a1c9c7f0aac728d3d0122124c91a0b5659abf5"
+        },
+        "nativeCleanup": {
+          "fixture": "content19",
+          "cleanup": true
+        },
+        "devicePreservation": {
+          "result": "PASS",
+          "protectedFiles": 10,
+          "unchangedFiles": 9,
+          "sdkUsageCacheChanges": 1,
+          "unexpectedChanges": 0,
+          "addedFiles": 0,
+          "missingFiles": 0,
+          "fixtureCacheRemoved": true,
+          "limits": "Documents/Application Support hashes; SDK heartbeat classified from installed source. No keychain export or whole-container equality claim."
+        }
+      }
+    },
+    {
+      "commands": [
+        "patternly: npm run typecheck",
+        "patternly: npm run validate:content-boundary",
+        "patternly: npm run validate:runtime-privacy-boundary",
+        "patternly-backend: npm run typecheck",
+        "patternly-backend: npm run lint",
+        "all3 repositories: git diff --check"
+      ],
+      "result": "PASS"
+    },
+    {
+      "independentQA": [
+        "content newtests4/4",
+        "AWS canonical builder scoring testPASS",
+        "APP source suite31/31",
+        "native source/logs/preservation reviewPASS WITH GAPS"
+      ]
+    }
+  ],
+  "device": {
+    "uuid": "7F315654-3175-4F3C-BB24-B0263F59360C",
+    "name": "existing iPhone17",
+    "bundleId": "com.lkurczab.patternly.sec03",
+    "reset": false,
+    "reinstall": false,
+    "newGuest": false,
+    "nativeStorage": "real Expo FS + native encrypted MMKV; dedicated Cache root and DB",
+    "restart": "actual process terminate+launch after completed installation",
+    "cleanup": true,
+    "preservation": {
+      "result": "PASS",
+      "protectedFiles": 10,
+      "unchangedFiles": 9,
+      "sdkUsageCacheChanges": 1,
+      "unexpectedChanges": 0,
+      "addedFiles": 0,
+      "missingFiles": 0,
+      "fixtureCacheRemoved": true,
+      "limits": "Documents/Application Support hashes; SDK heartbeat classified from installed source. No keychain export or whole-container equality claim."
+    }
+  },
+  "heartbeatClassification": {
+    "pathPattern": "Library/Application Support/google-heartbeat-storage/heartbeats-*",
+    "producer": "FirebaseCoreInternal StorageFactory + HeartbeatController.log",
+    "consumer": "FirebaseCore FIRHeartbeatLogger header payload",
+    "schema": "SDK agent/date/version/timePeriods",
+    "affectsLearningState": false,
+    "installedSources": [
+      {
+        "path": "/private/tmp/patternly-sec03-isolated-YtnYlk/attempt-2/project/ios/Pods/FirebaseCoreInternal/FirebaseCore/Internal/Sources/HeartbeatLogging/StorageFactory.swift",
+        "sha256": "903b475d719398f97f2ab5970c641b32cabdaf57133b4bb23f346bf1bc736196"
+      },
+      {
+        "path": "/private/tmp/patternly-sec03-isolated-YtnYlk/attempt-2/project/ios/Pods/FirebaseCoreInternal/FirebaseCore/Internal/Sources/HeartbeatLogging/Heartbeat.swift",
+        "sha256": "cbebcdd8ad91eae5302ce5d106afb42d3c515839cd62a0ddd2742ddd0aa2ffc7"
+      },
+      {
+        "path": "/private/tmp/patternly-sec03-isolated-YtnYlk/attempt-2/project/ios/Pods/FirebaseCoreInternal/FirebaseCore/Internal/Sources/HeartbeatLogging/HeartbeatController.swift",
+        "sha256": "8f1e0f9e5b88e7c2b06d2dda8657575c2f2fe2af7cb18d70e93ab424b550ae33"
+      },
+      {
+        "path": "/private/tmp/patternly-sec03-isolated-YtnYlk/attempt-2/project/ios/Pods/FirebaseCore/FirebaseCore/Sources/FIRHeartbeatLogger.m",
+        "sha256": "8f639625f096e47b39d81b4a2382455690250f2890ac8cbf0516ad82847e4d86"
+      }
+    ],
+    "appSourceReferences": 0
+  },
+  "inputWipPreservation": {
+    "existingFiles": 133,
+    "unchangedHashCount": 129,
+    "extendedWip": [
+      "patternly/docs/specs/engineering/premium-revenuecat.md",
+      "patternly-backend/.env.example",
+      "patternly-backend/docs/content-package-transport.md",
+      "patternly-backend/scripts/qa/verify-content-package-client.mjs"
+    ],
+    "missingFiles": []
+  },
+  "pins": {
+    "patternly/integration/contracts/content-release/release.lock.json": "22f3ef64cb3801bc0345b8d8bf6f8b656bd6579c6a46816b5ce9c0b30f5e8823",
+    "patternly/src/content/generated/canonical-content/content-lock.json": "4e27acc32ee463f6ee1f61e838d766a3cdb8057c63c5e1aa64a5e4c96c393cb8",
+    "patternly-content/evidence/admissions/candidate-admission-v3.json": "38f266e0b6732532aac09003561f59de894458ab95d20cab3ece080a40a85d0a"
+  },
+  "changedFiles": [
+    {
+      "path": "patternly/metro.config.js",
+      "sha256": "6a2a42e11437b8a3f1a2c923d46b2e28fc75bb09ba0ac6617f3bad73c759df09",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/content/application/premiumNodeOffers.ts",
+      "sha256": "b498b01b63a8fa8c80cf2840b940a61b6077007934f1c37001a7dbdd3dce61a6",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/content/application/premiumNodeOffers.release.ts",
+      "sha256": "cf1db23034d33db5e478a8b79ef70a66c80417eb7a86022ae0e2c2660892f2e7",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/content/generated/premium-node-offer.json",
+      "sha256": "839aeb1bd5198a20580bda3655db68dabe1fa3e5f67aafe7144a6297fddbe481",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/src/application/premiumNodeOfferRuntime.test.ts",
+      "sha256": "ffeaad82876c1eeab020b702632f4349712bfdc74bada94dad9764e421a5c6b8",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/scripts/premiumNodeOffersMetro.test.mjs",
+      "sha256": "f8a5e204b01aabf01335106dc5407c21fef6a01ba600c008b50e283de1195e67",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/scripts/qa/content19Fixture.tsx",
+      "sha256": "4653413e2a30131e6bdc181c7639c221d2e8f040f972cac68fd6af977eecefd8",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/scripts/qa/startContent19Fixture.mjs",
+      "sha256": "bb0d1219d10304587d31f7642930f51351a42d94dceda79ef253da9952a3ee76",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/scripts/qa/content19FixtureCommand.mjs",
+      "sha256": "5bfc9ac059f565c7bd9a510087ec7754169bafda932844fda965250924ca356e",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/scripts/qa/content19DataSnapshot.mjs",
+      "sha256": "50be0c60f465656e4a6173bac457e29a74f2c9e6cc282db3d5e0766537e7c6e6",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly/docs/specs/engineering/premium-revenuecat.md",
+      "sha256": "04014e524b371406a8b9ec65666b35b5b99cbcde0c0f2d135a3236632abcf52a",
+      "preExistingDirtySha256": "f353c9a2b1265f421c092921e6e20cfd24fd46e10d5763e350b98615d056b1b0"
+    },
+    {
+      "path": "patternly-backend/.env.example",
+      "sha256": "d6fcf6a321b017ee9e0807d652e1f299061d60ca7b8dcdc859b13a9cf134db81",
+      "preExistingDirtySha256": "b0e12de016e2dd8fbed1ffcf21a7d4edb9586b490f150293964c0aa3ef181d55"
+    },
+    {
+      "path": "patternly-backend/scripts/qa/verify-content-package-client.mjs",
+      "sha256": "76e8c1bd84592d2682990dc61bf4fc4ea2d5a10bbb0dc3dcf87623bde7a40eee",
+      "preExistingDirtySha256": "d151d16237fd0a53b639f865aab3e4961eaad31de880bf2f7f81d65654e0efdc"
+    },
+    {
+      "path": "patternly-backend/scripts/qa/serve-content19-native.mjs",
+      "sha256": "dca69acf9e99ea8335fea417a8ab4245cb6b2eba31309f6882461de39fb691b7",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly-backend/scripts/run-content-package-native.mjs",
+      "sha256": "c532229511162bd61c28834898d6a09d2e1a0010c74f54ddd81ac2ded82727a9",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly-backend/docs/content-package-transport.md",
+      "sha256": "03850429761b5eb65beb8fd0c20bf09d857ef1dbabc1c88fcb91fef4b63c7f85",
+      "preExistingDirtySha256": "0a3176ffe1fe6e94fbc1e608adad8a1e8498a62d8f2d21f6424d04327cc553e5"
+    },
+    {
+      "path": "patternly-content/package.json",
+      "sha256": "f343c5538a612b7ea04f3a954b4d889075875f963ab8f4550afc8d2cb9c6db84",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly-content/scripts/build.mjs",
+      "sha256": "9802399dcbb2678e22ff3751d8ae82849f1dce117ad8b80f9149836cca54e798",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly-content/tests/premiumNodePackage.test.mjs",
+      "sha256": "b4a27e2cf13f116f09b78d5c747286611900e5b4e51fa947ae10a975e53f887b",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly-content/artifacts/premium-nodes/aws-certified-solutions-architect-associate/identity_federation_and_root_access/0f42e4208dac416e8db99c1024a1c9c7f0aac728d3d0122124c91a0b5659abf5/derivation.json",
+      "sha256": "2a1922ac97df3669123957c8a38075a1b31140b087c7ee633279d261bff648c4",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly-content/artifacts/premium-nodes/aws-certified-solutions-architect-associate/identity_federation_and_root_access/0f42e4208dac416e8db99c1024a1c9c7f0aac728d3d0122124c91a0b5659abf5/10935a7d50a4ef4f3fda59f53c0c9ce98b1e5207bc093a1424179a817b07aa1a.gzip",
+      "sha256": "10935a7d50a4ef4f3fda59f53c0c9ce98b1e5207bc093a1424179a817b07aa1a",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "patternly-content/artifacts/premium-nodes/aws-certified-solutions-architect-associate/identity_federation_and_root_access/0f42e4208dac416e8db99c1024a1c9c7f0aac728d3d0122124c91a0b5659abf5/manifest.json",
+      "sha256": "497808d874253c64310698597124d9a806da9b6da0dbd306010c5eb3fb7c2112",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": "docs/PATTERNLY-WORKING-PLAN.md",
+      "sha256": "11dfabba64fd3cae634c194d11133afa381fb8a10a012bbfacc619d10904a87a",
+      "preExistingDirtySha256": null
+    },
+    {
+      "path": ".agent/WORKING_STATE.md",
+      "sha256": "ad2efb3bbf8138f8e7cd0a8ac5510ea96fb7298a0952a247100de4014d308013",
+      "preExistingDirtySha256": null
+    }
+  ],
+  "removedFiles": [
+    "patternly/src/content/application/premiumNodeOffers.disabled.ts (replaced by .release.ts; active references updated)"
+  ],
+  "repositoryHeads": {
+    "patternly": "830c1bc1daf1e49a44cb79c72cf2d1ae95ab1c29",
+    "patternly-backend": "32b409384b68f83a18972d2a4e145d202712bd6f",
+    "patternly-content": "71b0096f99a0afef8891e8e1b3d591575661ad88"
+  },
+  "privateLogs": [
+    {
+      "path": "/private/tmp/patternly19-residual-content-tests.log",
+      "sha256": "6f1d6e9091663b19f8e566eebe59dd4863e536630f30dfb951880d06e686a723"
+    },
+    {
+      "path": "/private/tmp/patternly19-residual-client-tests.log",
+      "sha256": "ddab0be91156f12d04612f56691f4702c4bb30683c12623136d085af8e188890"
+    },
+    {
+      "path": "/private/tmp/patternly19-residual-integration.log",
+      "sha256": "daab9c89175e06a6d13c136745818b03cd3f20c884bdbfdbd916809b24170e54"
+    },
+    {
+      "path": "/private/tmp/patternly19-residual-native-run.json",
+      "sha256": "d62be46abacfdfa8edd362b5add028177f4842c4f95f51ec7680c69af4775697"
+    },
+    {
+      "path": "/private/tmp/patternly19-residual-native-restart.json",
+      "sha256": "f9daf83896ed6946a6cf47de3012a5b9a7452d1b262c59a0891adb03e6775888"
+    },
+    {
+      "path": "/private/tmp/patternly19-residual-device-acceptance.json",
+      "sha256": "25d10578c1a41c80f7b3bf6de8dc51e0f7ee48f093e8a351395786069aec2ba2"
+    }
+  ],
+  "reuse": "First19 verifier/client/storage and API/build checks where sources/dependencies/config unchanged; no full CI or recovery gate claim.",
+  "stopped": [
+    "native fixture app",
+    "own Metro",
+    "own native bridge server",
+    "isolated Auth/Firestore emulators"
+  ],
+  "notPerformed": [
+    "deployment",
+    "publication",
+    "cloud configuration/IAM changes",
+    "provider acceptance",
+    "mail",
+    "spending",
+    "commit",
+    "push",
+    "Android",
+    "goal",
+    "automation",
+    "new thread",
+    "prompt20"
+  ]
+}

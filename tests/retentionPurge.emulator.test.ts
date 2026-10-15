@@ -181,3 +181,14 @@ test("unexpired and missing or invalid expiry records are preserved and unresolv
   assert.equal((await invalid.get()).exists, true);
   assert.equal((await invalidAudit.get()).exists, true);
 });
+
+test("billing postcheck detects a due payload introduced after the scan without false complete", async () => {
+  const db = firestore();
+  const ref = db.collection("revenueCatTransactions").doc("late-billing-payload");
+  const result = await new RetentionPurgeService(db, { afterPrimaryScan: async () => { await ref.set({ ownerAccountId: "fixture", status: "closed_unresolved", payloadUntil: Timestamp.fromMillis(0) }); } }).run({ execute: true, now: new Date() });
+  assert.equal(result.complete, false);
+  assert.equal(result.remainingDue, true);
+  const retry = await new RetentionPurgeService(db).run({ execute: true, now: new Date() });
+  assert.equal(retry.complete, true);
+  assert.equal((await ref.get()).get("compacted"), true);
+});

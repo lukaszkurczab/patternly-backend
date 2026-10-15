@@ -1,3 +1,4 @@
+import { dispatchPurchaseReceipt } from "../modules/billing/purchaseReceiptDispatcher.js";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { DestinationStream } from "pino";
 import { createHash, createHmac, randomUUID } from "node:crypto";
@@ -21,7 +22,6 @@ import { createLogger } from "../infrastructure/logging/logger.js";
 import { DataExportRateLimitError, DataExportTooLargeError } from "../modules/data-export/contracts.js";
 import { createAccountPrivacyRequestSchema, createGuestPrivacyRequestSchema, exchangeGuestPrivacyCodeSchema, privacyRequestAdminActionSchema, publicPrivacySessionSchema, resendGuestPrivacyCodeSchema, PRIVACY_RIGHT_POLICIES } from "../modules/privacy-requests/contracts.js";
 import { createSecurityIncidentSchema, securityIncidentActionSchema } from "../modules/security-incidents/contracts.js";
-import { PurchaseReceiptEmailRejectedError } from "../infrastructure/email/smtpPrivacyEmailSender.js";
 import { revenueCatEventSchema, verifyRevenueCatAuthorization } from "../modules/billing/revenuecatWebhook.js";
 import { createLegalRequestSchema, createPublicLegalRequestSchema, legalRequestAdminActionSchema } from "../modules/legal-requests/contracts.js";
 import { adoptionTransferApplySchema, adoptionTransferConfirmSchema, adoptionTransferPreviewSchema, adoptionTransferSealSchema, adoptionTransferStartSchema, adoptionTransferStatusSchema, adoptionTransferUploadSchema } from "../modules/users/adoptionTransfer.js";
@@ -627,7 +627,7 @@ type RouteHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<un
 function createWebhookHandler(dependencies: ApplicationDependencies): RouteHandler {
   const handler: RouteHandler = async (request, reply) => {
     const configuration = dependencies.environment;
-    if (!configuration.revenueCatWebhookSecret || !configuration.revenueCatAppId || !configuration.revenueCatEntitlementId || !configuration.revenueCatProductId || !configuration.revenueCatWebhookEnvironment) return reply.code(503).send({ error: { code: "revenuecat_not_configured" } });
+    if (!configuration.revenueCatProjectId || !configuration.revenueCatWebhookSecret || !configuration.revenueCatAppId || !configuration.revenueCatEntitlementId || !configuration.revenueCatProductId || !configuration.revenueCatWebhookEnvironment) return reply.code(503).send({ error: { code: "revenuecat_not_configured" } });
     if (!verifyRevenueCatAuthorization(request.headers.authorization, configuration.revenueCatWebhookSecret)) return reply.code(401).send({ error: { code: "revenuecat_webhook_unauthorized" } });
     const envelope = request.body as { event?: unknown } | null;
     const parsed = revenueCatEventSchema.safeParse(envelope?.event);
@@ -635,36 +635,8 @@ function createWebhookHandler(dependencies: ApplicationDependencies): RouteHandl
     try {
       const store = requireStores(dependencies).revenueCatWebhook;
       const result = await store.process(parsed.data, configuration.revenueCatAppId, configuration.revenueCatWebhookEnvironment, configuration.revenueCatEntitlementId, configuration.revenueCatProductId);
-      if (result.receiptDeliveryState) return reply.code(503).send({ error: { code: result.receiptDeliveryState === "unknown" ? "purchase_receipt_reconciliation_required" : "purchase_receipt_delivery_pending" } });
-      if (result.receipt) {
-        const receipt = result.receipt;
-        const mark = (status: "sent" | "failed" | "unknown") => store.markReceiptDelivery(receipt.userId, receipt.receiptId, receipt.deliveryClaimId, status);
-        // Failure here leaves the already committed pending attempt as the resend fence.
-        const recordUncertainty = async () => { try { await mark("unknown"); } catch { /* Reconcile the durable pending attempt after its lease expires. */ } };
-        if (!dependencies.purchaseReceiptEmailSender) {
-          const finalized = await mark("failed");
-          return reply.code(503).send({ error: { code: finalized ? "purchase_receipt_delivery_unavailable" : "purchase_receipt_reconciliation_required" } });
-        }
-        try {
-          await dependencies.purchaseReceiptEmailSender.send(receipt);
-        } catch (error) {
-          if (error instanceof PurchaseReceiptEmailRejectedError) {
-            const finalized = await mark("failed");
-            return reply.code(503).send({ error: { code: finalized ? "purchase_receipt_delivery_failed" : "purchase_receipt_reconciliation_required" } });
-          }
-          await recordUncertainty();
-          return reply.code(503).send({ error: { code: "purchase_receipt_reconciliation_required" } });
-        }
-        try {
-          if (!await mark("sent")) {
-            await recordUncertainty();
-            return reply.code(503).send({ error: { code: "purchase_receipt_reconciliation_required" } });
-          }
-        } catch {
-          await recordUncertainty();
-          return reply.code(503).send({ error: { code: "purchase_receipt_reconciliation_required" } });
-        }
-      }
+      const deliveryError = await dispatchPurchaseReceipt(store, result, dependencies.purchaseReceiptEmailSender);
+      if (deliveryError) return reply.code(503).send({ error: { code: deliveryError } });
       return reply.code(200).send({ outcome: result.outcome, duplicate: result.duplicate });
     } catch (error) {
       if (error instanceof Error && error.message === "event_timestamp_future") return reply.code(400).send({ error: { code: "invalid_request" } });
@@ -757,8 +729,20 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
     const authentication = dependencies.verifier !== null && dependencies.appCheckVerifier !== null;
     const providerReader = dependencies.environment.nodeEnv !== "production" || dependencies.revenueCatEntitlementReader != null;
-    const ready = firestore && authentication && providerReader;
-    return reply.code(ready ? 200 : 503).send({ status: ready ? "ready" : "not_ready", checks: { database: firestore, authentication, providerReader } });
+    const target = dependencies.environment.contentPackageReadiness;
+    let contentPackages = false;
+    if (dependencies.contentPackages && target) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        contentPackages = await Promise.race([
+          dependencies.contentPackages.describeCurrent(target.trackId, target.nodeId).then((value) => value !== null),
+          new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 3000); }),
+        ]);
+      } catch { contentPackages = false; }
+      finally { if (timer) clearTimeout(timer); }
+    }
+    const ready = firestore && authentication && providerReader && contentPackages;
+    return reply.code(ready ? 200 : 503).send({ status: ready ? "ready" : "not_ready", checks: { database: firestore, authentication, providerReader, contentPackages } });
   });
   app.get("/openapi.json", async () => OPENAPI_DOCUMENT);
 
@@ -828,16 +812,73 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     } catch (error) {
       if (error instanceof Error && error.message === "authorization_generation_conflict") return reply.code(409).send({ error: { code: error.message } });
       if (error instanceof Error && (error.message === "account_deleted" || error.message === "authorization_generation_required" || error.message === "authorization_generation_invalid")) return reply.code(401).send({ error: { code: error.message } });
+      if (error instanceof Error && error.message === "revenuecat_not_configured") return reply.code(503).send({ error: { code: error.message } });
       if (error instanceof Error && error.message === "legal_acceptance_required") return reply.code(409).send({ error: { code: "legal_acceptance_required" } });
-      if (error instanceof Error && error.message === "purchase_attempt_active") return reply.code(409).send({ error: { code: "purchase_attempt_active" } });
+      if (error instanceof Error && ["purchase_attempt_active", "purchase_confirmation_conflict", "identity_reconciliation_required", "purchase_product_invalid"].includes(error.message)) return reply.code(409).send({ error: { code: error.message } });
       throw error;
     }
+  });
+
+  const purchaseError = (error: unknown, reply: FastifyReply) => {
+    if (error instanceof Error && error.message.startsWith("purchase_")) return reply.code(error.message.endsWith("not_found") ? 404 : 409).send({ error: { code: error.message } });
+    if (error instanceof Error && error.message === "identity_reconciliation_required") return reply.code(409).send({ error: { code: error.message } });
+    if (error instanceof Error && error.message === "revenuecat_not_configured") return reply.code(503).send({ error: { code: error.message } });
+    if (error instanceof Error && error.message.startsWith("authorization_generation_")) return reply.code(409).send({ error: { code: error.message } });
+    if (error instanceof Error && error.message === "account_deleted") return reply.code(401).send({ error: { code: error.message } });
+    throw error;
+  };
+  app.get("/v1/purchase-attempts/:attemptId", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
+    const id = z.string().uuid().safeParse((request.params as { attemptId: string }).attemptId);
+    if (!id.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try { return { attempt: await requireStores(dependencies).purchases.status(request.userId!, request.expectedAuthorizationGeneration!, id.data) }; }
+    catch (error) { return purchaseError(error, reply); }
+  });
+  app.get("/v1/purchase-cases", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
+    try { return await requireStores(dependencies).purchases.cases(request.userId!, request.expectedAuthorizationGeneration!); }
+    catch (error) { return purchaseError(error, reply); }
+  });
+  app.post("/v1/purchase-attempts/:attemptId", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
+    const id = z.string().uuid().safeParse((request.params as { attemptId: string }).attemptId);
+    const input = z.discriminatedUnion("action", [z.object({ action: z.literal("claim") }).strict(), z.object({ action: z.literal("pending") }).strict(), z.object({ action: z.literal("cancelled"), source: z.literal("original_sdk_operation") }).strict(), z.object({ action: z.literal("candidate"), transactionId: z.string().min(1).max(256) }).strict()]).safeParse(request.body);
+    if (!id.success || !input.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      const stores = requireStores(dependencies);
+      const attempt = await stores.purchases.command(request.userId!, request.expectedAuthorizationGeneration!, id.data, input.data.action, input.data.action === "candidate" ? input.data.transactionId : undefined);
+      const delivery = attempt.transactionKey ? await stores.revenueCatWebhook.claimBoundReceipt(request.userId!, attempt.transactionKey) : {};
+      const error = await dispatchPurchaseReceipt(stores.revenueCatWebhook, delivery, dependencies.purchaseReceiptEmailSender);
+      if (error) return reply.code(503).send({ error: { code: error } });
+      return { attempt };
+    } catch (error) { return purchaseError(error, reply); }
+  });
+  app.get("/v1/operator/purchase-cases/:transactionKey", { preHandler: routeGuard("operator", dependencies, "purchase_cases:read") }, async (request, reply) => {
+    const key = z.string().regex(/^(event-|attempt-)?[a-f0-9]{64}$/u).safeParse((request.params as { transactionKey: string }).transactionKey);
+    if (!key.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    const fact = await dependencies.firestore!.db.collection("revenueCatTransactions").doc(key.data).get();
+    if (!fact.exists) return reply.code(404).send({ error: { code: "not_found" } });
+    return { item: requireStores(dependencies).purchases.caseView(key.data, fact.data()!) };
+  });
+  app.patch("/v1/operator/purchase-cases/:transactionKey", { preHandler: routeGuard("operator", dependencies, "purchase_cases:resolve") }, async (request, reply) => {
+    const key = z.string().regex(/^(event-|attempt-)?[a-f0-9]{64}$/u).safeParse((request.params as { transactionKey: string }).transactionKey);
+    const input = z.object({ operationId: z.string().uuid(), expectedRevision: z.number().int().nonnegative(), attemptId: z.string().uuid(), action: z.enum(["bind", "close_unresolved"]), evidenceReference: z.string().min(1).max(2000), evidence: z.object({ transactionId: z.string().min(1).max(256), initiatedAt: z.string().datetime(), source: z.literal("original_operation_provider_verified") }).strict().optional(), releaseLock: z.boolean() }).strict().safeParse(request.body);
+    if (!key.success || !input.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try {
+      const stores = requireStores(dependencies);
+      const item = await stores.purchases.resolveCase(key.data, input.data, request.operatorIdentity!.actorPseudonym);
+      const fact = await dependencies.firestore!.db.collection("revenueCatTransactions").doc(key.data).get();
+      const owner = fact.get("ownerAccountId");
+      const delivery = typeof owner === "string" ? await stores.revenueCatWebhook.claimBoundReceipt(owner, key.data) : {};
+      const error = await dispatchPurchaseReceipt(stores.revenueCatWebhook, delivery, dependencies.purchaseReceiptEmailSender);
+      if (error) return reply.code(503).send({ error: { code: error } });
+      return { item };
+    } catch (error) { return purchaseError(error, reply); }
   });
 
   app.get("/v1/entitlements", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     if (!dependencies.revenueCatEntitlementReader) return reply.code(503).send({ error: { code: "revenuecat_read_unavailable" } });
     try {
+      if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
       const result = await dependencies.revenueCatEntitlementReader.read(request.userId!);
+      if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
       if (result.state === "unavailable") return reply.code(503).send({ error: { code: "revenuecat_read_unavailable" } });
       return { serverObservedAt: new Date().toISOString(), entitlements: [{ accountId: request.userId!, ...result, source: "revenuecat" }] };
     } catch {
@@ -1340,7 +1381,11 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     if (!isPackageId(params.trackId) || !isPackageId(params.nodeId)) return reply.code(400).send({ error: { code: "invalid_request" } });
     if (!dependencies.revenueCatEntitlementReader) return reply.code(503).send({ error: { code: "entitlement_unavailable" } });
     let entitlement;
-    try { entitlement = await dependencies.revenueCatEntitlementReader.read(request.userId!); }
+    try {
+      if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
+      entitlement = await dependencies.revenueCatEntitlementReader.read(request.userId!);
+      if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
+    }
     catch { return reply.code(503).send({ error: { code: "entitlement_unavailable" } }); }
     if (entitlement.state === "unavailable") return reply.code(503).send({ error: { code: "entitlement_unavailable" } });
     const now = Date.now();
@@ -1351,19 +1396,15 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
     if (!dependencies.contentPackages) return reply.code(503).send({ error: { code: "package_unavailable" } });
     let packageData;
-    try { packageData = await dependencies.contentPackages.readCurrent(params.trackId, params.nodeId); }
+    try { packageData = await dependencies.contentPackages.describeCurrent(params.trackId, params.nodeId); }
     catch { return reply.code(503).send({ error: { code: "package_unavailable" } }); }
+    if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
+    await protect(request, reply, dependencies);
+    if (reply.sent) return;
+    if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
     if (!packageData) return reply.code(404).send({ error: { code: "not_found" } });
-    reply.header("content-type", "application/gzip");
-    reply.header("content-length", String(packageData.bytes.length));
     reply.header("cache-control", "private, no-store");
-    reply.header("x-content-package-sha256", packageData.manifest.packageSha256);
-    reply.header("x-content-artifact-sha256", packageData.manifest.artifactSha256);
-    reply.header("x-content-version", packageData.manifest.contentVersion);
-    reply.header("x-content-release-id", packageData.manifest.contentReleaseId);
-    reply.header("x-content-minimum-app-version", packageData.manifest.minimumAppVersion);
-    reply.header("x-content-artifact-size-bytes", String(packageData.manifest.artifactSizeBytes));
-    return reply.code(200).send(packageData.bytes);
+    return reply.code(200).send(packageData);
   });
   app.post("/v1/content/reports", { preHandler: routeGuard("app_check_optional_bearer", dependencies) }, async (request, reply) => {
     const parsed = createContentReportSchema.safeParse(request.body);
