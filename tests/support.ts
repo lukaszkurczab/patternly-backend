@@ -7,6 +7,11 @@ import { createFirestoreRuntime } from "../src/infrastructure/firestore/client.j
 import { createFirestoreStores, type BackendStores } from "../src/infrastructure/firestore/stores.js";
 import { createFirebaseTokenVerifier } from "../src/infrastructure/firebase/verifier.js";
 
+export function sessionRevocationId(issuedAt = Date.now()): string {
+  const time = issuedAt.toString(16).padStart(12, "0");
+  return `${time.slice(0, 8)}-${time.slice(8)}-7${randomUUID().slice(15)}`;
+}
+
 const projectId = process.env.FIREBASE_PROJECT_ID ?? "patternly-app-sandbox";
 if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)) throw new Error("firebase_test_project_invalid");
 export const TEST_APP_CHECK_TOKEN = "explicit-emulator-app-check-token";

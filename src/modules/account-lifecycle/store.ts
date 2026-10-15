@@ -25,6 +25,10 @@ const SECURITY_OPERATION_LEASE_MS = 2 * 60 * 1000;
 const RECOVERY_RESULT_TTL_MS = 55 * 60 * 1000;
 const RECOVERY_OPERATION_TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const RECOVERY_OPERATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const SESSION_REVOCATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const SESSION_REVOCATION_FIRST_USE_MS = 29 * 24 * 60 * 60 * 1000;
+const SESSION_REVOCATION_FUTURE_SKEW_MS = 5 * 60 * 1000;
+const SESSION_REVOCATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const RECOVERY_CODE_PATTERN = /^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){3}$/u;
 
 type SessionRevocationResult = Readonly<{ status: "revoked"; operationId: string; customToken: string }>;
@@ -107,6 +111,38 @@ function isPositiveSafeInteger(value: unknown): value is number {
 
 function timestampMillis(value: unknown): number {
   return value instanceof Timestamp ? value.toMillis() : value instanceof Date ? value.getTime() : Number.NEGATIVE_INFINITY;
+}
+
+// Only this lifecycle writer owns these records. Legacy revoked.updatedAt was
+// written once at finalization (not on mint retry); unknown shapes cannot backfill.
+function validateSessionRevocation(data: Record<string, unknown>, operationId: string, userId: string, generation: number, nowMs: number) {
+  if (data.userId !== userId || data.expectedAuthorizationGeneration !== generation) throw new Error("session_revocation_operation_conflict");
+  const allowed = ["operationId", "userId", "expectedAuthorizationGeneration", "status", "updatedAt", "failureCode", "terminalAt", "expiresAt"];
+  const updatedAtMs = timestampMillis(data.updatedAt);
+  if (data.operationId !== operationId || Object.keys(data).some((key) => !allowed.includes(key))
+    || !Number.isFinite(updatedAtMs) || updatedAtMs < 0 || updatedAtMs > nowMs
+    || !["pending", "failed", "revoked"].includes(String(data.status))) throw new Error("session_revocation_operation_invalid");
+  if (data.status !== "revoked") {
+    if ("terminalAt" in data || "expiresAt" in data
+      || (data.status === "pending" && "failureCode" in data)
+      || (data.status === "failed" && data.failureCode !== "session_revocation_failed")) throw new Error("session_revocation_operation_invalid");
+    return null;
+  }
+  if ("failureCode" in data) throw new Error("session_revocation_operation_invalid");
+  const legacy = !("terminalAt" in data) && !("expiresAt" in data);
+  const terminalAt = legacy ? asTimestamp(data.updatedAt, "session_revocation") : data.terminalAt;
+  const terminalMs = timestampMillis(terminalAt);
+  const expiresAt = legacy ? Timestamp.fromMillis(terminalMs + SESSION_REVOCATION_RETENTION_MS) : data.expiresAt;
+  const expiryMs = timestampMillis(expiresAt);
+  if (!Number.isFinite(terminalMs) || terminalMs < 0 || terminalMs > nowMs
+    || updatedAtMs !== terminalMs || expiryMs !== terminalMs + SESSION_REVOCATION_RETENTION_MS) throw new Error("session_revocation_operation_invalid");
+  return { terminalAt: asTimestamp(terminalAt, "session_revocation"), expiresAt: asTimestamp(expiresAt, "session_revocation"), legacy };
+}
+
+function assertSessionRevocationFirstUse(operationId: string, nowMs: number): void {
+  const issuedAt = Number.parseInt(operationId.replaceAll("-", "").slice(0, 12), 16);
+  if (operationId[14] !== "7" || issuedAt < nowMs - SESSION_REVOCATION_FIRST_USE_MS
+    || issuedAt > nowMs + SESSION_REVOCATION_FUTURE_SKEW_MS) throw new Error("session_revocation_operation_expired");
 }
 
 function recoveryProgress(operationId: string, status: RecoveryOperationProgress["status"], authorizationGeneration?: number): RecoveryOperationProgress {
@@ -818,10 +854,9 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
   }
 
   public async revokeSessions(userId: string, expectedAuthorizationGeneration: number, operationId: string): Promise<SessionRevocationResult> {
+    if (!SESSION_REVOCATION_ID_PATTERN.test(operationId)) throw new Error("session_revocation_operation_invalid");
     const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
     const operationRef = this.db.collection(COLLECTIONS.sessionRevocationOperations).doc(operationId);
-    const claimedAt = now();
-    const leaseUntil = Timestamp.fromMillis(claimedAt.toMillis() + SECURITY_OPERATION_LEASE_MS);
     const fence = randomUUID();
     const claim = await this.db.runTransaction(async (transaction) => {
       const user = await transaction.get(userRef);
@@ -831,12 +866,19 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       assertExpectedAuthorizationGeneration(userData, expectedAuthorizationGeneration);
       if (expectedAuthorizationGeneration >= Number.MAX_SAFE_INTEGER) throw new Error("authorization_generation_invalid");
 
-      let operationData: Record<string, unknown> | null = null;
+      const claimedAt = now();
+      const leaseUntil = Timestamp.fromMillis(claimedAt.toMillis() + SECURITY_OPERATION_LEASE_MS);
       if (operation.exists) {
-        operationData = asRecord(operation.data(), "session_revocation");
-        if (operationData.userId !== userId) throw new Error("session_revocation_operation_conflict");
-        if (operationData.expectedAuthorizationGeneration !== expectedAuthorizationGeneration) throw new Error("session_revocation_operation_conflict");
-        if (operationData.status === "revoked") return Object.freeze({ kind: "complete" as const });
+        const terminal = validateSessionRevocation(asRecord(operation.data(), "session_revocation"), operationId, userId, expectedAuthorizationGeneration, claimedAt.toMillis());
+        if (terminal) {
+          // Persist the original legacy deadline even when already expired; never
+          // restart retention from the migration/retry date.
+          if (terminal.legacy) transaction.update(operationRef, { terminalAt: terminal.terminalAt, expiresAt: terminal.expiresAt });
+          if (terminal.expiresAt.toMillis() <= claimedAt.toMillis()) return Object.freeze({ kind: "expired" as const });
+          return Object.freeze({ kind: "complete" as const });
+        }
+      } else {
+        assertSessionRevocationFirstUse(operationId, claimedAt.toMillis());
       }
 
       const currentSlot = userData.securityOperation;
@@ -903,6 +945,16 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       }, { merge: true });
       return Object.freeze({ kind: "claimed" as const, subjects: Object.freeze(subjects), fence });
     });
+    const assertMintAllowed = async (): Promise<void> => this.db.runTransaction(async (transaction) => {
+      const [user, operation] = await transaction.getAll(userRef, operationRef);
+      if (!user?.exists) throw new Error("account_deleted");
+      assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
+      if (!operation?.exists) throw new Error("session_revocation_operation_expired");
+      const checkedAt = now().toMillis();
+      const terminal = validateSessionRevocation(asRecord(operation.data(), "session_revocation"), operationId, userId, expectedAuthorizationGeneration, checkedAt);
+      if (!terminal || terminal.legacy) throw new Error("session_revocation_operation_invalid");
+      if (terminal.expiresAt.toMillis() <= checkedAt) throw new Error("session_revocation_operation_expired");
+    });
     const mintReplacementSession = async (knownSubject?: string): Promise<SessionRevocationResult> => {
       let subject = knownSubject;
       if (!subject) {
@@ -915,14 +967,20 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
         [subject] = subjects;
       }
       if (!subject) throw new Error("session_revocation_identity_unavailable");
+      await assertMintAllowed();
+      let customToken: string;
       try {
-        const customToken = await this.auth.createCustomToken(subject, { authorizationGeneration: expectedAuthorizationGeneration });
-        return Object.freeze({ status: "revoked", operationId, customToken });
+        customToken = await this.auth.createCustomToken(subject, { authorizationGeneration: expectedAuthorizationGeneration });
       } catch {
         throw new Error("session_reissue_failed");
       }
+      // A delete, generation change or expiry during provider work must not
+      // return the token to the caller.
+      await assertMintAllowed();
+      return Object.freeze({ status: "revoked", operationId, customToken });
     };
 
+    if (claim.kind === "expired") throw new Error("session_revocation_operation_expired");
     if (claim.kind === "complete") return mintReplacementSession();
     if (claim.kind === "in_progress") throw new Error("session_revocation_in_progress");
 
@@ -940,7 +998,11 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       const operationData = asRecord(operation.data(), "session_revocation");
       if (operationData.userId !== userId || operationData.expectedAuthorizationGeneration !== expectedAuthorizationGeneration || operationData.status !== "pending") throw new Error("session_revocation_operation_conflict");
       const updatedAt = now();
-      transaction.set(operationRef, { status, updatedAt, ...(status === "failed" ? { failureCode: "session_revocation_failed" } : { failureCode: FieldValue.delete() }) }, { merge: true });
+      transaction.set(operationRef, { status, updatedAt, ...(status === "failed" ? { failureCode: "session_revocation_failed" } : {
+        terminalAt: updatedAt,
+        expiresAt: Timestamp.fromMillis(updatedAt.toMillis() + SESSION_REVOCATION_RETENTION_MS),
+        failureCode: FieldValue.delete(),
+      }) }, { merge: true });
       transaction.set(userRef, { securityOperation: FieldValue.delete() }, { merge: true });
     });
 

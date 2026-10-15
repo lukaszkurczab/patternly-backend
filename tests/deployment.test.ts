@@ -73,13 +73,14 @@ test("Firestore export retention and history indexes are repository-deployable",
     { collectionGroup: "contentReports", fieldPath: "expiresAt" },
     { collectionGroup: "deletionProofs", fieldPath: "expiresAt" },
     { collectionGroup: "accountDeletionOperations", fieldPath: "expiresAt" },
+    { collectionGroup: "sessionRevocationOperations", fieldPath: "expiresAt" },
     { collectionGroup: "accountRecoveryOperations", fieldPath: "expiresAt" },
     { collectionGroup: "accountRecoveryOperationResults", fieldPath: "expiresAt" },
     { collectionGroup: "rateLimitBuckets", fieldPath: "expiresAt" },
     { collectionGroup: "deletedIdentities", fieldPath: "expiresAt" },
     { collectionGroup: "audit", fieldPath: "expiresAt" },
   ]);
-  assert.equal(ttl.policies.length, 34);
+  assert.equal(ttl.policies.length, 35);
   const indexes = JSON.parse(await readFile(resolve(process.cwd(), "firestore.indexes.json"), "utf8")) as { indexes?: readonly { collectionGroup?: unknown; queryScope?: unknown; fields?: readonly { fieldPath?: unknown; order?: unknown }[] }[] };
   assert.equal(indexes.indexes?.every((index) => (index.fields?.length ?? 0) >= 2), true, "Single-field indexes belong in fieldOverrides; Firestore rejects them as composite indexes");
   assert.equal(indexes.indexes?.some((index) => index.collectionGroup === "accountDataExportAudits" && index.queryScope === "COLLECTION" && index.fields?.[0]?.fieldPath === "userId" && index.fields?.[0]?.order === "ASCENDING" && index.fields?.[1]?.fieldPath === "createdAt" && index.fields?.[1]?.order === "DESCENDING"), true);

@@ -615,7 +615,8 @@ TEST_GROUP(ENABLED
       deleteUser: (uid: string) => accountAuth.deleteUser(uid),
     };
     const store = new FirestoreAccountLifecycleStore(db, noKeyAuth, fixture.ring, null);
-    const revokeId = randomUUID();
+    const revokeTime = Date.now().toString(16).padStart(12, "0");
+    const revokeId = `${revokeTime.slice(0, 8)}-${revokeTime.slice(8)}-7${randomUUID().slice(15)}`;
     createdOperationIds.push(revokeId);
     const revoked = await store.revokeSessions(fixture.userId, 1, revokeId);
     assert.equal(revoked.status, "revoked");

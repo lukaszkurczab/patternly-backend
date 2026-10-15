@@ -32,6 +32,7 @@ const expectedPolicies = [
   { collectionGroup: "contentReports", fieldPath: "expiresAt" },
   { collectionGroup: "deletionProofs", fieldPath: "expiresAt" },
   { collectionGroup: "accountDeletionOperations", fieldPath: "expiresAt" },
+  { collectionGroup: "sessionRevocationOperations", fieldPath: "expiresAt" },
   { collectionGroup: "accountRecoveryOperations", fieldPath: "expiresAt" },
   { collectionGroup: "accountRecoveryOperationResults", fieldPath: "expiresAt" },
   { collectionGroup: "rateLimitBuckets", fieldPath: "expiresAt" },

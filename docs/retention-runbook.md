@@ -16,6 +16,7 @@ time-limited record must fail closed when its `expiresAt` is in the past.
 | `audit` below `contentReports` | Only a non-duplicate status transition | exact verified parent `contentReports.expiresAt` | inherits parent | TTL collection group | historic records without expiry are ODK081 recursive-purge scope |
 | `deletionProofs` | `status: deleted` | immutable `completedAt` | 3 years | TTL | no backfill |
 | `accountDeletionOperations` | `phase: complete` only | immutable `completedAt` | 3 years | TTL | application TTL writer; pending rows have no expiry |
+| `sessionRevocationOperations` | `status: revoked` only | immutable `terminalAt` | exactly 30 × 24 hours | logical expiry + eventual TTL | lifecycle writer; verified legacy `revoked.updatedAt` only, never migration time; pending/failed have no TTL |
 | `accountRecoveryOperations` | `acknowledged` or actually `superseded` | immutable `terminalAt` | 30 days | TTL | application writer; active operations and `delivery_unconfirmed` reissues have no `expiresAt` until actual supersession |
 | `accountRecoveryOperationResults` | encrypted, retryable operation result | immutable result deadline | at most 55 minutes; issue results are capped by the original reauthentication deadline | TTL | application writer; acknowledgement deletes the result immediately; independent of operation history |
 | `rateLimitBuckets` | expired content-report or recovery-request window | writer-set `expiresAt` | one request window for reports; at most two configured windows for recovery | TTL | shared bucket group; records without `expiresAt` are unaffected |
@@ -35,7 +36,7 @@ automatic delete path.
 
 ## Repository and cloud procedure
 
-1. Run `npm run firestore:ttl:check`. It asserts exactly the 34 approved
+1. Run `npm run firestore:ttl:check`. It asserts exactly the 35 approved
    collection-group/`expiresAt` policies, including the shared `audit` and
    `rateLimitBuckets` groups.
 2. Review the target project and its active TTL policies. The emulator verifies
@@ -106,3 +107,28 @@ never manually touches privacy-request or security-incident audit records:
 their lifecycle and legal-hold rules can race a generic cleanup. Firestore TTL
 can therefore leave an eventual orphan window after a parent deletion; this
 command addresses only the reviewed content-report shape.
+
+## Session revocation (SEC-07, local implementation)
+
+The existing account-lifecycle owner writes `terminalAt`/`expiresAt` once after
+confirmed revoke. Mint retries do not update either timestamp or `updatedAt`.
+At `expiresAt <= now`, the reader refuses replacement-session issuance even if
+TTL has not deleted the document. Pending and retryable failed records have no
+arbitrary expiry; account deletion recursively owns their removal.
+
+For absent records only, UUIDv7 first use must be within the inclusive window
+`[now - 29 × 24 hours, now + 5 minutes]`. Missing v4 and old/future v7 are rejected
+before a slot or provider effect. Existing v4 records remain retryable. Verified
+legacy terminal records derive both deadlines from their unchanged `updatedAt`;
+unknown/malformed shapes fail closed. This is lazy transactional migration, not
+a generic purge or a cloud backfill. Before service rollout, inventory legacy
+shapes in the target project without changing them; this local acceptance does
+not inventory cloud records. Deploy backend with the v7 client before the first
+release; a supported v4 build would require a separate rollout review.
+
+The 23h55m safety margin assumes backend and TTL clocks do not diverge/roll back
+by that amount. Physical delete is eventual; the local emulator proves writer
+fields and application refusal, not managed TTL deletion. Cloud policy enablement
+and observed deletion remain **ODK-E2E-082**. Historical PITR/log/backup facts above
+are dated evidence, not a fresh discovery or a promise of immediate erasure of
+copies. This change runs no service apply, backfill or automatic purge.

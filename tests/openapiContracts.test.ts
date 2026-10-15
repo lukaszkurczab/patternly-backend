@@ -165,9 +165,16 @@ test("recovery operation routes document strict operation-bound payloads, guards
   assert.equal(OPENAPI_DOCUMENT.paths["/v1/account/recovery-codes"]["x-patternly-security-profile"], "app_check_bearer");
   assert.equal(OPENAPI_DOCUMENT.paths["/v1/public/recovery-codes/consume"]["x-patternly-security-profile"], "app_check_only");
   assert.equal(OPENAPI_DOCUMENT.paths["/v1/public/recovery-codes/consume/status"]["x-patternly-security-profile"], "app_check_only");
+  assert.deepEqual(consumeStatus.security, [{ appCheckAuth: [] }]);
   const paths = OPENAPI_DOCUMENT.paths as unknown as Record<string, { "x-patternly-security-profile"?: string }>;
   for (const path of ["/v1/account/recovery-codes/consume/ack", "/v1/account/recovery-codes/issue/status", "/v1/account/recovery-codes/issue/saved-ack"]) {
-    assert.equal(paths[path]?.["x-patternly-security-profile"], "bearer");
+    assert.equal(paths[path]?.["x-patternly-security-profile"], "app_check_bearer");
+    const route = operation(document, `${path.endsWith("/status") ? "GET" : "POST"} ${path}`);
+    assert.deepEqual(route.security, [{ appCheckAuth: [], bearerAuth: [] }]);
+    const responses = route.responses as Record<string, Record<string, unknown>>;
+    assert.ok((responses["401"]?.["x-patternly-error-codes"] as string[]).includes("app_check_required"));
+    assert.ok((responses["401"]?.["x-patternly-error-codes"] as string[]).includes("app_check_invalid"));
+    assert.ok((responses["503"]?.["x-patternly-error-codes"] as string[]).includes("app_check_not_configured"));
   }
   assert.deepEqual(issueStatus.parameters, [{ name: "operationId", in: "query", required: true, schema: { type: "string", format: "uuid" } }]);
 

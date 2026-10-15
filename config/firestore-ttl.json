@@ -118,6 +118,10 @@
       "fieldPath": "expiresAt"
     },
     {
+      "collectionGroup": "sessionRevocationOperations",
+      "fieldPath": "expiresAt"
+    },
+    {
       "collectionGroup": "accountRecoveryOperations",
       "fieldPath": "expiresAt"
     },

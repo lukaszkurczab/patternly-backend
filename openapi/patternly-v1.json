@@ -3698,7 +3698,7 @@
       }
     },
     "/v1/account/recovery-codes/consume/ack": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
         "description": "Acknowledge a consumed recovery operation for the current account generation",
@@ -3750,8 +3750,10 @@
             }
           },
           "401": {
-            "description": "Authentication or account authorization required",
+            "description": "App Check, authentication or account authorization required",
             "x-patternly-error-codes": [
+              "app_check_required",
+              "app_check_invalid",
               "authentication_required",
               "account_deleted",
               "authorization_generation_required",
@@ -3836,8 +3838,9 @@
             }
           },
           "503": {
-            "description": "Recovery operations are unavailable",
+            "description": "App Check or recovery operations are unavailable",
             "x-patternly-error-codes": [
+              "app_check_not_configured",
               "recovery_operations_unavailable",
               "recovery_operation_pending"
             ],
@@ -3861,15 +3864,16 @@
         "operationId": "post_v1_account_recovery_codes_consume_ack",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/account/recovery-codes/issue/status": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "get": {
         "description": "Read the current account's issue operation; retry may return codes only while the original deadline remains open",
@@ -3922,8 +3926,10 @@
             }
           },
           "401": {
-            "description": "Authentication or account authorization required",
+            "description": "App Check, authentication or account authorization required",
             "x-patternly-error-codes": [
+              "app_check_required",
+              "app_check_invalid",
               "authentication_required",
               "account_deleted",
               "authorization_generation_required",
@@ -4009,8 +4015,9 @@
             }
           },
           "503": {
-            "description": "Recovery operations are unavailable",
+            "description": "App Check or recovery operations are unavailable",
             "x-patternly-error-codes": [
+              "app_check_not_configured",
               "recovery_operations_unavailable",
               "recovery_operation_pending"
             ],
@@ -4034,15 +4041,16 @@
         "operationId": "get_v1_account_recovery_codes_issue_status",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
     "/v1/account/recovery-codes/issue/saved-ack": {
-      "x-patternly-security-profile": "bearer",
+      "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
         "description": "Acknowledge that issued recovery codes were saved by the authenticated account",
@@ -4094,8 +4102,10 @@
             }
           },
           "401": {
-            "description": "Authentication or account authorization required",
+            "description": "App Check, authentication or account authorization required",
             "x-patternly-error-codes": [
+              "app_check_required",
+              "app_check_invalid",
               "authentication_required",
               "account_deleted",
               "authorization_generation_required",
@@ -4181,8 +4191,9 @@
             }
           },
           "503": {
-            "description": "Recovery operations are unavailable",
+            "description": "App Check or recovery operations are unavailable",
             "x-patternly-error-codes": [
+              "app_check_not_configured",
               "recovery_operations_unavailable",
               "recovery_operation_pending"
             ],
@@ -4206,10 +4217,11 @@
         "operationId": "post_v1_account_recovery_codes_issue_saved_ack",
         "security": [
           {
+            "appCheckAuth": [],
             "bearerAuth": []
           }
         ],
-        "x-patternly-security-profile": "bearer",
+        "x-patternly-security-profile": "app_check_bearer",
         "x-patternly-consumer-scope": "mobile"
       }
     },
@@ -4297,6 +4309,8 @@
               "authorization_generation_conflict",
               "session_revocation_operation_conflict",
               "session_revocation_in_progress",
+              "session_revocation_operation_expired",
+              "session_revocation_operation_invalid",
               "security_operation_conflict"
             ],
             "content": {

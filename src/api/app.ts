@@ -1244,7 +1244,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/account/recovery-codes/consume/ack", { onRequest: recoveryOperationNoStore, preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/account/recovery-codes/consume/ack", { onRequest: recoveryOperationNoStore, preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const parsed = accountRecoveryOperationAckSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     if (!recoveryOperationRuntimeAvailable(dependencies.environment)) return reply.code(503).send({ error: { code: "recovery_operations_unavailable" } });
@@ -1257,7 +1257,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.get("/v1/account/recovery-codes/issue/status", { onRequest: recoveryOperationNoStore, preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.get("/v1/account/recovery-codes/issue/status", { onRequest: recoveryOperationNoStore, preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const query = request.query as Readonly<Record<string, unknown>>;
     const parsed = accountRecoveryCodeIssueStatusSchema.safeParse({ operationId: query.operationId });
     if (!parsed.success || Object.keys(query).some((key) => key !== "operationId")) return reply.code(400).send({ error: { code: "invalid_request" } });
@@ -1272,7 +1272,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.post("/v1/account/recovery-codes/issue/saved-ack", { onRequest: recoveryOperationNoStore, preHandler: routeGuard("bearer", dependencies) }, async (request, reply) => {
+  app.post("/v1/account/recovery-codes/issue/saved-ack", { onRequest: recoveryOperationNoStore, preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const parsed = accountRecoveryCodeSavedAckSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     if (!recoveryOperationRuntimeAvailable(dependencies.environment)) return reply.code(503).send({ error: { code: "recovery_operations_unavailable" } });
@@ -1294,7 +1294,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       const message = error instanceof Error ? error.message : "session_revocation_failed";
       if (message === "session_revocation_failed") return reply.code(503).send({ error: { code: "session_revocation_pending" } });
       if (["session_reissue_failed", "session_revocation_identity_unavailable"].includes(message)) return reply.code(503).send({ error: { code: message } });
-      if (["session_revocation_operation_conflict", "session_revocation_in_progress", "security_operation_conflict"].includes(message)) return reply.code(409).send({ error: { code: message } });
+      if (["session_revocation_operation_conflict", "session_revocation_in_progress", "session_revocation_operation_expired", "session_revocation_operation_invalid", "security_operation_conflict"].includes(message)) return reply.code(409).send({ error: { code: message } });
       if (message === "authorization_generation_conflict") return reply.code(409).send({ error: { code: message } });
       if (["account_deleted", "authorization_generation_required", "authorization_generation_invalid"].includes(message)) return reply.code(401).send({ error: { code: errorCode(error) } });
       throw error;

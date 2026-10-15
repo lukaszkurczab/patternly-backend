@@ -12,7 +12,7 @@ import { createContentReportSchema } from "../src/modules/content-reports/contra
 import { FirestoreAccountLifecycleStore } from "../src/modules/account-lifecycle/store.js";
 import { parsePseudonymKeyRing } from "../src/infrastructure/security/pseudonymKeyRing.js";
 import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
-import { TEST_APP_CHECK_TOKEN, accountRegistrationPayload, clearFirestore, createAuthUser, createEmulatorContext, createRegisteredAuthUser, createVerifiedAuthUser, firestore, registerAuthUser, setAuthCustomClaimsAndSignIn, testEnvironment, type EmulatorContext, verifyAuthUser } from "./support.js";
+import { TEST_APP_CHECK_TOKEN, accountRegistrationPayload, clearFirestore, createAuthUser, createEmulatorContext, createRegisteredAuthUser, createVerifiedAuthUser, firestore, registerAuthUser, setAuthCustomClaimsAndSignIn, testEnvironment, sessionRevocationId, type EmulatorContext, verifyAuthUser } from "./support.js";
 import type { BackendStores } from "../src/infrastructure/firestore/stores.js";
 
 const reportBody = (clientSubmissionId: string) => createContentReportSchema.parse({
@@ -127,7 +127,7 @@ test("account guards require a current signed authorization generation while opt
 
 test("session revocation rejects missing or stale generations before calling Firebase", async () => {
   const auth = await createRegisteredAuthUser(context);
-  const operationId = randomUUID();
+  const operationId = sessionRevocationId();
   const before = context.revokedSubjects.length;
   await assert.rejects(context.stores.accountLifecycle.revokeSessions(auth.userId, undefined as unknown as number, operationId), { message: "authorization_generation_required" });
   await assert.rejects(context.stores.accountLifecycle.revokeSessions(auth.userId, 2, operationId), { message: "authorization_generation_conflict" });
@@ -138,7 +138,7 @@ test("session revocation rejects missing or stale generations before calling Fir
 
 test("session revocation route returns typed 401 and 409 responses", async () => {
   const auth = await createRegisteredAuthUser(context);
-  const operationId = randomUUID();
+  const operationId = sessionRevocationId();
   const headers = { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
   const claimless = await setAuthCustomClaimsAndSignIn(auth, {});
   const missing = await context.app.inject({ method: "POST", url: "/v1/account/session/revoke", headers: { ...headers, authorization: `Bearer ${claimless.idToken}` }, payload: { operationId } });
@@ -168,7 +168,7 @@ test("session revocation route returns typed 401 and 409 responses", async () =>
 
 test("session revocation binds a single live operation, reports same-operation progress, and replays completion", async () => {
   const auth = await createRegisteredAuthUser(context);
-  const operationId = randomUUID();
+  const operationId = sessionRevocationId();
   let calls = 0;
   let providerEntered!: () => void;
   let releaseProvider!: () => void;
@@ -183,7 +183,7 @@ test("session revocation binds a single live operation, reports same-operation p
   const first = store.revokeSessions(auth.userId, 1, operationId);
   await entered;
   await assert.rejects(store.revokeSessions(auth.userId, 1, operationId), { message: "session_revocation_in_progress" });
-  await assert.rejects(store.revokeSessions(auth.userId, 1, randomUUID()), { message: "session_revocation_operation_conflict" });
+  await assert.rejects(store.revokeSessions(auth.userId, 1, sessionRevocationId()), { message: "session_revocation_operation_conflict" });
   assert.equal(calls, 1);
   releaseProvider();
   assert.deepEqual(await first, { status: "revoked", operationId, customToken: "unused" });
@@ -198,7 +198,7 @@ test("session revocation binds a single live operation, reports same-operation p
 
 test("same-operation replay and finalization reject an altered slot authorization generation", async () => {
   const auth = await createRegisteredAuthUser(context);
-  const operationId = randomUUID();
+  const operationId = sessionRevocationId();
   let providerEntered!: () => void;
   let releaseProvider!: () => void;
   const entered = new Promise<void>((resolve) => { providerEntered = resolve; });
@@ -224,7 +224,7 @@ test("same-operation replay and finalization reject an altered slot authorizatio
 
 test("session revocation failure can retry and expired owners cannot finalize over a newer fence", async () => {
   const auth = await createRegisteredAuthUser(context);
-  const operationId = randomUUID();
+  const operationId = sessionRevocationId();
   let calls = 0;
   const store = new FirestoreAccountLifecycleStore(firestore(), {
     createCustomToken: async () => "unused",
@@ -236,7 +236,7 @@ test("session revocation failure can retry and expired owners cannot finalize ov
   assert.deepEqual(await store.revokeSessions(auth.userId, 1, operationId), { status: "revoked", operationId, customToken: "unused" });
   assert.equal(calls, 2);
 
-  const racedOperationId = randomUUID();
+  const racedOperationId = sessionRevocationId();
   let firstEntered!: () => void;
   let releaseFirst!: () => void;
   const entered = new Promise<void>((resolve) => { firstEntered = resolve; });
@@ -263,7 +263,7 @@ test("session revocation failure can retry and expired owners cannot finalize ov
 
 test("completed session revocation retries replacement-token issuance without revoking twice", async () => {
   const auth = await createRegisteredAuthUser(context);
-  const operationId = randomUUID();
+  const operationId = sessionRevocationId();
   let revokeCalls = 0;
   let mintCalls = 0;
   const store = new FirestoreAccountLifecycleStore(firestore(), {
@@ -300,7 +300,7 @@ test("session revocation finalization preserves its slot when account generation
     { name: "state", changes: { authorizationState: "rotating" }, message: "account_deleted" },
   ] as const) {
     const auth = await createRegisteredAuthUser(context);
-    const operationId = randomUUID();
+    const operationId = sessionRevocationId();
     let providerEntered!: () => void;
     let releaseProvider!: () => void;
     const entered = new Promise<void>((resolve) => { providerEntered = resolve; });
@@ -1584,7 +1584,7 @@ test("deletion supersedes an in-flight session revoke and the stale revoker cann
     deleteUser: async () => undefined,
   }, parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson));
   const operationId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbd";
-  const pendingRevoke = oldRevoker.revokeSessions(auth.userId, 1, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbe");
+  const pendingRevoke = oldRevoker.revokeSessions(auth.userId, 1, sessionRevocationId());
   await revocationStarted;
 
   const deleting = new FirestoreAccountLifecycleStore(firestore(), {
@@ -2082,7 +2082,7 @@ test("account-owned writers reject a tombstoned or missing user after authentica
     await assert.rejects(context.stores.progress.confirmAdoption(userId, 1, "fixture-device", snapshot, confirmation), { message: "account_deleted" });
     await assert.rejects(context.stores.devices.touch(userId, { deviceKey: "fixture-device", platform: "ios", appVersion: "test" }), { message: "account_deleted" });
     await assert.rejects(context.stores.contentReports.create(userId, 1, { ...reportBody("88888888-8888-4888-8888-888888888888"), linkAccount: true, contactEmail: "fixture@example.invalid" }, { rateLimitKey: "late-write" }), { message: "account_deleted" });
-    await assert.rejects(context.stores.accountLifecycle.revokeSessions(userId, 1, `late-revoke-${state}`), { message: "account_deleted" });
+    await assert.rejects(context.stores.accountLifecycle.revokeSessions(userId, 1, sessionRevocationId()), { message: "account_deleted" });
   }
   assert.deepEqual((await userRef.listCollections()).map((collection) => collection.id), ["legalAcceptances"]);
   assert.equal((await firestore().collection("contentReports").get()).size, 0);

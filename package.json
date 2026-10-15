@@ -31,6 +31,7 @@
     "test:operator:acceptance": "node scripts/run-operator-acceptance-tests.mjs",
     "test:progress-paging:client": "node scripts/run-progress-paging-client.mjs",
     "test:sync-conflict:emulator": "node scripts/run-sync-conflict-tests.mjs",
+    "test:session-revocation:emulator": "node scripts/run-session-revocation-emulator-tests.mjs",
     "test:terminal-wire:emulator": "node scripts/run-terminal-wire-tests.mjs"
   },
   "dependencies": {
