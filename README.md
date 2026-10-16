@@ -8,6 +8,35 @@ The frontend remains offline-first. It owns the learning engine, active
 practice sessions, timer, local queue and cache. This repository does not run
 question selection or session transitions.
 
+## Local prerequisites
+
+The reproducible acceptance environment in [Backend CI](.github/workflows/ci.yml)
+uses **Node.js 22.22.3**, **Temurin JDK 21** and **Firebase CLI 15.19.0**
+(`firebase-tools`). Have these versions available and select them in your shell
+before running the commands below. Java is required by the Firebase emulators; it is not a
+production API dependency. Firebase CLI is installed separately in CI, not by
+this repository's `npm ci`.
+
+```sh
+node --version       # v22.22.3
+npm --version        # supplied with the selected Node installation
+java -version        # Temurin 21 (check JAVA_HOME and PATH)
+firebase --version   # 15.19.0
+```
+
+`package.json` declares the broader production Node minimum `>=22`; local
+acceptance uses the CI pin above. Operator HTTPS fixture tests specifically
+require Node 22.19+ for the test-only CA trust helpers (see
+[operator acceptance](docs/operator-acceptance.md)). A Node 22.9 or Java 17
+selected by a shell is insufficient for that acceptance environment.
+
+For the complete `npm run ci`, keep the mobile and web consumers in sibling
+directories `../patternly` and `../patternly-web`, and install mobile dependencies
+with `npm ci --prefix ../patternly`, as CI does. Use the configured sandbox
+project for the emulator command below; this is local validation, not a cloud
+deployment. [Cloud Build](cloudbuild.yaml) instead runs `ci:cloud` under Node 22;
+that narrower gate does not run the emulator/mobile-consumer acceptance.
+
 ## Commands
 
 ```sh
