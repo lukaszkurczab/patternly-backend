@@ -251,11 +251,16 @@ test("legal non-email actions need no sender and unavailable answer leaves no ef
     await assert.rejects(store.transitionAdmin(ref.id, "operator", { action: "answer", expectedRevision: 1, response: "Meaningful response" }, null), /legal_request_email_unavailable/u);
     assert.deepEqual((await ref.get()).data(), before);
     assert.equal((await ref.collection("audit").get()).size, auditBefore);
-    const held = await store.transitionAdmin(ref.id, "operator", { action: "set_legal_hold", expectedRevision: 1, active: true, reason: "Dispute pending" }, null);
+    const held = await store.transitionAdmin(ref.id, "operator", { action: "set_legal_hold", expectedRevision: 1, active: true, reason: "Dispute pending", reviewBy: new Date(Date.now() + 30 * 86400000).toISOString() }, null);
     assert.equal(held.legalHold, true);
     await ref.update({ status: "answered" });
-    const closed = await store.transitionAdmin(ref.id, "operator", { action: "close", expectedRevision: 2 }, null);
+    const closed = await store.transitionAdmin(ref.id, "operator", { action: "close", expectedRevision: 2, disposition: { kind: "claim", necessaryFields: ["email", "narrative", "transactionId", "response"], retentionUntil: "2032-01-01T00:00:00.000Z", basis: "Applicable complaint limitation period", reason: "Necessary complaint evidence" } }, null);
     assert.equal(closed.status, "closed");
+    assert.ok(closed.legalHoldReviewBy);
+    const released = await store.transitionAdmin(ref.id, "operator", { action: "set_legal_hold", expectedRevision: 3, active: false, reason: "Hold no longer required" }, null);
+    assert.equal(released.legalHold, false);
+    assert.equal(released.legalHoldReviewBy, null);
+    assert.equal(released.retentionUntil, "2032-01-01T00:00:00.000Z");
   } finally {
     await deleteApp(app);
   }

@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { addUtcCalendarMonths } from "../../infrastructure/time/utcCalendar.js";
+export { addUtcCalendarMonths };
 
 export const PRIVACY_REQUEST_RIGHTS = [
   "access",
@@ -65,6 +67,7 @@ export const privacyRequestAdminActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("execute_export"), ...revisionShape }).strict(),
   z.object({ action: z.literal("extend"), reason: reasonSchema, noticeLocale: z.enum(["pl", "en"]), ...revisionShape }).strict(),
   z.object({ action: z.literal("retry_extension_notice"), ...revisionShape }).strict(),
+  z.object({ action: z.literal("record_review"), reason: reasonSchema, nextReviewAt: z.string().datetime(), ...revisionShape }).strict(),
   z.object({
     action: z.literal("prepare_response"),
     outcome: z.enum(["fulfilled", "partially_fulfilled", "refused"]),
@@ -76,6 +79,7 @@ export const privacyRequestAdminActionSchema = z.discriminatedUnion("action", [
   }).strict(),
   z.object({ action: z.literal("deliver"), ...revisionShape }).strict(),
   z.object({ action: z.literal("close"), ...revisionShape }).strict(),
+  z.object({ action: z.literal("close_unverified"), reason: reasonSchema, ...revisionShape }).strict(),
 ]);
 
 export type PrivacyRequestAdminAction = z.infer<typeof privacyRequestAdminActionSchema>;
@@ -116,19 +120,6 @@ export const PRIVACY_RIGHT_POLICIES: Readonly<Record<PrivacyRequestRight, Privac
   consent_withdrawal: Object.freeze({ accountVerification: "active_session", guestVerification: "subject_link_required", executor: "consent_registry" }),
 });
 
-function daysInUtcMonth(year: number, month: number): number {
-  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
-}
-
-export function addUtcCalendarMonths(value: Date, months: number): Date {
-  if (!Number.isInteger(months) || months < 0) throw new Error("privacy_request_months_invalid");
-  const targetMonthIndex = value.getUTCMonth() + months;
-  const targetYear = value.getUTCFullYear() + Math.floor(targetMonthIndex / 12);
-  const targetMonth = ((targetMonthIndex % 12) + 12) % 12;
-  const day = Math.min(value.getUTCDate(), daysInUtcMonth(targetYear, targetMonth));
-  return new Date(Date.UTC(targetYear, targetMonth, day, value.getUTCHours(), value.getUTCMinutes(), value.getUTCSeconds(), value.getUTCMilliseconds()));
-}
-
 export function initialPrivacyRequestDeadline(receivedAt: Date): Date {
   return addUtcCalendarMonths(receivedAt, 1);
 }
@@ -164,5 +155,8 @@ export function transitionPrivacyRequest(snapshot: PrivacyRequestSnapshot, actio
     case "close":
       if (!(["fulfilled", "partially_fulfilled", "refused"] as PrivacyRequestStatus[]).includes(snapshot.status) || snapshot.deliveredAt === null) throw new Error("privacy_request_transition_invalid");
       return Object.freeze({ ...base, status: "closed", closedAt: now });
+    case "record_review":
+    case "close_unverified":
+      throw new Error("privacy_request_transition_invalid");
   }
 }

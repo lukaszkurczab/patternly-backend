@@ -30,6 +30,7 @@ type ParsedCommand = Readonly<{
   configPath: string;
   payloadFd?: number;
   createId?: string;
+  cursor?: string; dueOnly?: boolean;
 }>;
 
 const MAX_INPUT_BYTES = 256 * 1024;
@@ -73,6 +74,7 @@ function parseArgs(argv: readonly string[]): ParsedCommand {
   let configPath: string | undefined;
   let payloadFd: number | undefined;
   let createId: string | undefined;
+  let cursor: string | undefined; let dueOnly: boolean | undefined;
   const seen = new Set<string>();
   for (let index = 1; index < argv.length; index += 1) {
     const part = argv[index];
@@ -80,7 +82,7 @@ function parseArgs(argv: readonly string[]): ParsedCommand {
       positionals.push(part ?? "");
       continue;
     }
-    if (part !== "--origin" && part !== "--config" && part !== "--payload-fd" && part !== "--id") fail("unknown_option");
+    if (part !== "--origin" && part !== "--config" && part !== "--payload-fd" && part !== "--id" && part !== "--cursor" && part !== "--due") fail("unknown_option");
     if (seen.has(part)) fail("duplicate_option");
     seen.add(part);
     const value = argv[index + 1];
@@ -92,6 +94,10 @@ function parseArgs(argv: readonly string[]): ParsedCommand {
       if (!/^(0|[1-9][0-9]*)$/u.test(value)) fail("payload_fd_invalid");
       payloadFd = Number(value);
       if (!Number.isSafeInteger(payloadFd) || payloadFd > 1024) fail("payload_fd_invalid");
+    } else if (part === "--cursor") {
+      if (!/^[A-Za-z0-9_-]{1,2048}$/u.test(value)) fail("cursor_invalid"); cursor = value;
+    } else if (part === "--due") {
+      if (value !== "true" && value !== "false") fail("due_invalid"); dueOnly = value === "true";
     } else createId = value;
   }
 
@@ -99,6 +105,7 @@ function parseArgs(argv: readonly string[]): ParsedCommand {
   if (command !== "create-incident" && createId !== undefined) fail("id_not_allowed");
   if (command !== "action" && command !== "create-incident" && payloadFd !== undefined) fail("payload_fd_not_allowed");
 
+  if (command !== "list" && (cursor !== undefined || dueOnly !== undefined)) fail("list_option_required");
   let family: Family | undefined;
   let id: string | undefined;
   let version: number | undefined;
@@ -122,7 +129,7 @@ function parseArgs(argv: readonly string[]): ParsedCommand {
     version = Number(rawVersion);
   }
 
-  return Object.freeze({ command, ...(family ? { family } : {}), ...(id ? { id } : {}), ...(version === undefined ? {} : { version }), origin, configPath: resolve(configPath), ...(payloadFd === undefined ? {} : { payloadFd }), ...(createId ? { createId } : {}) });
+  return Object.freeze({ command, ...(cursor === undefined ? {} : { cursor }), ...(dueOnly === undefined ? {} : { dueOnly }), ...(family ? { family } : {}), ...(id ? { id } : {}), ...(version === undefined ? {} : { version }), origin, configPath: resolve(configPath), ...(payloadFd === undefined ? {} : { payloadFd }), ...(createId ? { createId } : {}) });
 }
 
 function isFamily(value: unknown): value is Family {
@@ -315,7 +322,8 @@ function safeEffectSummary(family: Family, payload: Record<string, unknown>): Re
     if (action === "set_legal_hold" && typeof payload.active === "boolean") return { legalHold: payload.active };
     if (action === "start_review") return { status: "in_review" };
     if (action === "answer") return { status: "answered" };
-    if (action === "close") return { status: "closed" };
+    if (action === "review_retention") return { effect: "review_and_minimize_evidence", necessaryFields: payload.necessaryFields, dispute: payload.dispute };
+    if (action === "close") return { status: "closed", necessaryFields: isRecord(payload.disposition) ? payload.disposition.necessaryFields : undefined };
   }
   if (family === "privacy-requests") {
     const effects: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
@@ -444,9 +452,12 @@ export async function runOperatorCli(argv: readonly string[], io: OperatorCliIO)
     if (command.command === "list" && command.family) {
       const route = FAMILY_ROUTES[command.family];
       const queueSchema = responseValidator(ajv, route, "get", 200);
-      const result = await apiRead(requestUrl(command.origin, route), token, queueSchema);
+      const url = new URL(requestUrl(command.origin, route));
+      if (command.cursor) url.searchParams.set("cursor", command.cursor);
+      if (command.dueOnly !== undefined) url.searchParams.set("due", String(command.dueOnly));
+      const result = await apiRead(url.toString(), token, queueSchema);
       if (!isRecord(result) || !Array.isArray(result.items)) fail("response_invalid");
-      if (result.truncated === true) io.writeError("Warning: list is truncated to 100 items.\n");
+      if (result.truncated === true) io.writeError("Continuation available: use --cursor from nextCursor with the same --due filter.\n");
       io.writeOut(`${JSON.stringify(result, null, 2)}\n`);
       return 0;
     }

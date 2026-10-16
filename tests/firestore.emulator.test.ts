@@ -8,6 +8,7 @@ import { buildApplication, type ApplicationDependencies } from "../src/api/app.j
 import { loadEnvironment } from "../src/config/environment.js";
 import { createFirebaseTokenVerifier } from "../src/infrastructure/firebase/verifier.js";
 import { COLLECTIONS, identityDocumentId } from "../src/infrastructure/firestore/paths.js";
+import { addUtcCalendarMonths } from "../src/infrastructure/time/utcCalendar.js";
 import { createContentReportSchema } from "../src/modules/content-reports/contracts.js";
 import { FirestoreAccountLifecycleStore } from "../src/modules/account-lifecycle/store.js";
 import { parsePseudonymKeyRing } from "../src/infrastructure/security/pseudonymKeyRing.js";
@@ -1162,28 +1163,24 @@ test("report persistence keeps default submissions unlinked and excludes respons
   assert.equal(stored.expiresAt.toMillis() - stored.createdAt.toMillis(), 30 * 24 * 60 * 60 * 1_000);
 });
 
-test("content report expiry is classified at creation and unlinking does not extend it", async () => {
+test("all new content reports expire 30 days after receipt and reject linkage", async () => {
   const anonymous = reportBody("3f61e3f3-f23e-467c-b92a-9b8fd0514f25");
-  const contact = createContentReportSchema.parse({ ...reportBody("3f61e3f3-f23e-467c-b92a-9b8fd0514f26"), contactEmail: "contact@example.com" });
+  assert.equal(createContentReportSchema.safeParse({ ...reportBody("3f61e3f3-f23e-467c-b92a-9b8fd0514f26"), contactEmail: "contact@example.com" }).success, false);
+  assert.equal(createContentReportSchema.safeParse({ ...reportBody("3f61e3f3-f23e-467c-b92a-9b8fd0514f28"), linkAccount: true }).success, false);
   await context.stores.contentReports.create(undefined, undefined, anonymous, { rateLimitKey: "anonymous-expiry" });
-  await context.stores.contentReports.create(undefined, undefined, contact, { rateLimitKey: "contact-expiry" });
   const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
   const userId = me.json().user.id as string;
-  const linked = createContentReportSchema.parse({ ...reportBody("3f61e3f3-f23e-467c-b92a-9b8fd0514f27"), linkAccount: true });
-  await context.stores.contentReports.create(userId, 1, linked, { rateLimitKey: "account-expiry" });
+  const authenticated = reportBody("3f61e3f3-f23e-467c-b92a-9b8fd0514f27");
+  await context.stores.contentReports.create(userId, 1, authenticated, { rateLimitKey: "account-expiry" });
   const anonymousStored = (await firestore().collection("contentReports").doc(anonymous.clientSubmissionId).get()).data();
-  const contactStored = (await firestore().collection("contentReports").doc(contact.clientSubmissionId).get()).data();
-  const linkedStored = (await firestore().collection("contentReports").doc(linked.clientSubmissionId).get()).data();
   assert.equal(anonymousStored?.expiresAt.toMillis() - anonymousStored?.createdAt.toMillis(), 30 * 24 * 60 * 60 * 1_000);
-  assert.equal(contactStored?.expiresAt.toMillis() - contactStored?.createdAt.toMillis(), 180 * 24 * 60 * 60 * 1_000);
-  assert.equal(linkedStored?.expiresAt.toMillis() - linkedStored?.createdAt.toMillis(), 180 * 24 * 60 * 60 * 1_000);
-  const linkedExpiry = linkedStored?.expiresAt.toMillis();
-  const deletion = await context.stores.accountLifecycle.deleteAccount(userId, 1, "cccccccc-cccc-4ccc-8ccc-ccccccccccd0", "f".repeat(64));
-  await context.stores.accountLifecycle.completeDeletion(deletion.operationId, deletion.proofId);
-  const unlinked = (await firestore().collection("contentReports").doc(linked.clientSubmissionId).get()).data();
-  assert.equal("accountId" in (unlinked ?? {}), false);
-  assert.equal(unlinked?.expiresAt.toMillis(), linkedExpiry);
+  const authenticatedStored = (await firestore().collection("contentReports").doc(authenticated.clientSubmissionId).get()).data();
+  assert.equal(authenticatedStored?.expiresAt.toMillis() - authenticatedStored?.createdAt.toMillis(), 30 * 24 * 60 * 60 * 1_000);
+  for (const stored of [anonymousStored, authenticatedStored]) {
+    assert.equal("accountId" in (stored ?? {}), false);
+    assert.equal("contactEmail" in (stored ?? {}), false);
+  }
 });
 
 test("content reports canonicalize an empty description without persisting learner-provided text", async () => {
@@ -1245,10 +1242,10 @@ test("content report retries are idempotent and do not consume the rate-limit bu
   assert.equal(buckets.docs[0]?.data().count, 1);
 });
 
-test("optional-bearer content report writes fence linked, unlinked and duplicate requests before rate limits", async () => {
-  for (const linkAccount of [false, true]) {
+test("optional-bearer content report writes fence authenticated and anonymous requests before rate limits", async () => {
+  for (const submissionId of ["a261e3f3-f23e-467c-b92a-9b8fd0514f25", "a161e3f3-f23e-467c-b92a-9b8fd0514f25"]) {
     const auth = await createRegisteredAuthUser(context);
-    const input = createContentReportSchema.parse({ ...reportBody(linkAccount ? "a161e3f3-f23e-467c-b92a-9b8fd0514f25" : "a261e3f3-f23e-467c-b92a-9b8fd0514f25"), linkAccount });
+    const input = createContentReportSchema.parse(reportBody(submissionId));
     const original = context.stores.contentReports;
     const contentReports = new Proxy(original, {
       get(target, property) {
@@ -1267,7 +1264,7 @@ test("optional-bearer content report writes fence linked, unlinked and duplicate
       payload: input,
     });
     await app.close();
-    assert.equal(response.statusCode, 409, `linkAccount=${linkAccount}`);
+    assert.equal(response.statusCode, 409, `submission=${submissionId}`);
     assert.deepEqual(response.json(), { error: { code: "authorization_generation_conflict" } });
     assert.equal((await firestore().collection(COLLECTIONS.contentReports).doc(input.clientSubmissionId).get()).exists, false);
   }
@@ -1321,6 +1318,17 @@ test("administrator report triage uses an idempotent monotonic state machine and
   const queue = await context.stores.contentReports.listQueue();
   assert.equal(queue.length, 1);
   assert.equal(queue[0]?.status, "in_review");
+});
+
+test("legacy linked report with a 180-day provider TTL is logically capped at 30 days", async () => {
+  const input = reportBody("7f61e3f3-f23e-467c-b92a-9b8fd0514f25");
+  await context.stores.contentReports.create(undefined, undefined, input, { rateLimitKey: "legacy-retention-client" });
+  const oldCreatedAt = Timestamp.fromMillis(Date.now() - 31 * 24 * 60 * 60 * 1_000);
+  const providerExpiry = Timestamp.fromMillis(Date.now() + 120 * 24 * 60 * 60 * 1_000);
+  await firestore().collection("contentReports").doc(input.clientSubmissionId).update({ createdAt: oldCreatedAt, expiresAt: providerExpiry, accountId: "legacy-account", contactEmail: "legacy@example.test" });
+  assert.equal(await context.stores.contentReports.readOperator(input.clientSubmissionId, "operator"), null);
+  assert.deepEqual(await context.stores.contentReports.listQueue(), []);
+  assert.equal((await firestore().collection("contentReports").doc(input.clientSubmissionId).get()).exists, true);
 });
 
 test("administrator report routes require a current verified administrator token and allow only the full state machine", async () => {
@@ -1697,8 +1705,13 @@ test("account deletion removes owned Firestore documents, preserves a tombstone,
   const state = attemptState("delete-item", "coding-interview-dsa-problem-solving");
   const mutation = { mutationId: `mutation-${Date.now()}-delete`, kind: "item" as const, recordType: "training_attempt" as const, trackId: "coding-interview-dsa-problem-solving", targetId: "delete-item", expectedVersion: null, state, fingerprint: createMergeRecordFingerprint({ recordId: "delete-item", recordType: "training_attempt", state, trackId: "coding-interview-dsa-problem-solving" }) };
   await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: canonicalSyncPayload(0, [mutation], "deletion-batch") });
-  const linked = createContentReportSchema.parse({ ...reportBody("9f61e3f3-f23e-467c-b92a-9b8fd0514f25"), linkAccount: true, contactEmail: "learner@example.com" });
+  const linked = createContentReportSchema.parse(reportBody("9f61e3f3-f23e-467c-b92a-9b8fd0514f25"));
   await context.stores.contentReports.create(userId, 1, linked, { rateLimitKey: "account-test-client" });
+  await firestore().collection(COLLECTIONS.contentReports).doc(linked.clientSubmissionId).update({ accountId: userId, contactEmail: "learner@example.com" });
+  for (const [requestId, status] of [["privacy-active-delete", "in_review"], ["privacy-closed-delete", "closed"]] as const) {
+    await firestore().collection(COLLECTIONS.privacyRequests).doc(requestId).set({ requestId, userId, subjectPseudonym: `stable-${requestId}`, channel: "account", status, receivedAt: Timestamp.now(), expiresAt: status === "closed" ? Timestamp.fromMillis(Date.now() + 86400000) : null });
+    await firestore().collection(COLLECTIONS.privacyRequestSecrets).doc(requestId).set({ requestId, payload: "preserved-case-evidence" });
+  }
   const batchReportRefs = Array.from({ length: 401 }, (_, index) => firestore().collection(COLLECTIONS.contentReports).doc(`deletion-batch-${String(index).padStart(3, "0")}`));
   const reportBatch = firestore().batch();
   for (let index = 0; index < batchReportRefs.length; index += 1) {
@@ -1737,6 +1750,13 @@ test("account deletion removes owned Firestore documents, preserves a tombstone,
   assert.equal("contactEmail" in report, false);
   assert.equal(report.description, linked.description);
   assert.deepEqual(report.context, linked.context);
+  for (const requestId of ["privacy-active-delete", "privacy-closed-delete"]) {
+    const retained = await firestore().collection(COLLECTIONS.privacyRequests).doc(requestId).get();
+    assert.ok(retained.exists);
+    assert.equal(retained.get("userId"), undefined);
+    assert.equal(retained.get("subjectPseudonym"), undefined);
+    assert.equal((await firestore().collection(COLLECTIONS.privacyRequestSecrets).doc(requestId).get()).exists, true);
+  }
   const batchReports = await firestore().getAll(...batchReportRefs);
   assert.equal(batchReports.length, 401);
   assert.ok(batchReports.every((document, index) => document.exists && document.get("accountId") === undefined && document.get("contactEmail") === undefined && document.get("retainedField") === index));
@@ -1744,7 +1764,7 @@ test("account deletion removes owned Firestore documents, preserves a tombstone,
   const deletionProof = (await firestore().collection("deletionProofs").doc(deleted.json().proofId).get()).data();
   assert.ok(operation?.completedAt instanceof Timestamp);
   assert.ok(operation?.expiresAt instanceof Timestamp);
-  assert.equal(operation.expiresAt.toMillis() - operation.completedAt.toMillis(), 3 * 365 * 24 * 60 * 60 * 1_000);
+  assert.equal(operation.expiresAt.toMillis(), addUtcCalendarMonths(operation.completedAt.toDate(), 12).getTime());
   assert.equal(deletionProof?.expiresAt.toMillis(), operation.expiresAt.toMillis());
   const oldTokenResponse = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
   assert.equal(oldTokenResponse.statusCode, 401);
@@ -1754,8 +1774,9 @@ test("account deletion persists subjects and phases, resumes through the bound s
   const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
   const userId = me.json().user.id as string;
-  const linked = createContentReportSchema.parse({ ...reportBody("af61e3f3-f23e-467c-b92a-9b8fd0514f25"), linkAccount: true, contactEmail: "resume@example.com" });
+  const linked = createContentReportSchema.parse(reportBody("af61e3f3-f23e-467c-b92a-9b8fd0514f25"));
   await context.stores.contentReports.create(userId, 1, linked, { rateLimitKey: "resume-deletion-client" });
+  await firestore().collection(COLLECTIONS.contentReports).doc(linked.clientSubmissionId).update({ accountId: userId, contactEmail: "resume@example.com" });
   await firestore().collection("recoveryCodeIndex").doc("resume-recovery-code").set({ userId, usedAt: null });
   await firestore().collection("sessionRevocationOperations").doc("resume-session-revocation").set({ userId, status: "revoked" });
   await firestore().collection("users").doc(userId).collection("drafts").doc("resume-draft").set({ value: "private" });
@@ -1786,7 +1807,7 @@ test("account deletion persists subjects and phases, resumes through the bound s
   const report = (await firestore().collection("contentReports").doc(linked.clientSubmissionId).get()).data();
   assert.ok(report);
   assert.equal(report.accountId, userId);
-  assert.equal(report.contactEmail, linked.contactEmail);
+  assert.equal(report.contactEmail, "resume@example.com");
   assert.equal(report.description, linked.description);
   assert.deepEqual(report.context, linked.context);
   assert.equal((await firestore().collection("deletionProofs").get()).size, 0);
@@ -2043,14 +2064,30 @@ test("legacy terminal records without phase and auth deletion marker never repor
   await assert.rejects(context.stores.accountLifecycle.completeDeletion(operationId, proofId), { message: "remote_deletion_pending" });
 });
 
-test("expired deletion proofs fail closed and are purged", async () => {
+test("expired deletion proofs fail closed while provider TTL owns physical cleanup", async () => {
   const operationId = "66666666-6666-4666-8666-666666666666";
   const proofId = "proof_expired_fixture_123456";
   const timestamp = Timestamp.now();
   await firestore().collection("accountDeletionOperations").doc(operationId).set({ operationId, status: "complete", phase: "complete", proofId, operationSecretHash: "a".repeat(64), authDeletedAt: timestamp, completedAt: timestamp });
   await firestore().collection("deletionProofs").doc(proofId).set({ status: "deleted", operationId, proofId, completedAt: timestamp, expiresAt: Timestamp.fromMillis(Date.now() - 1) });
   assert.equal(await context.stores.accountLifecycle.readDeletionProof(proofId), null);
-  assert.equal((await firestore().collection("deletionProofs").doc(proofId).get()).exists, false);
+  assert.equal((await firestore().collection("deletionProofs").doc(proofId).get()).exists, true);
+  assert.equal(await context.stores.accountLifecycle.readDeletionOperationStatus(operationId, "a".repeat(64)), null);
+  assert.equal((await firestore().collection("accountDeletionOperations").doc(operationId).get()).exists, true);
+});
+
+test("legacy three-year deletion proof and operation are logically capped at 12 calendar months", async () => {
+  const operationId = "77777777-7777-4777-8777-777777777777";
+  const proofId = "proof_legacy_three_year_fixture_1234";
+  const secret = "d".repeat(64);
+  const completedAt = Timestamp.fromMillis(Date.now() - 31 * 24 * 60 * 60 * 1_000);
+  const legacyExpiry = Timestamp.fromDate(addUtcCalendarMonths(completedAt.toDate(), 36));
+  await firestore().collection("accountDeletionOperations").doc(operationId).set({ operationId, status: "complete", phase: "complete", proofId, operationSecretHash: createHash("sha256").update(secret, "utf8").digest("hex"), completedAt, expiresAt: legacyExpiry });
+  await firestore().collection("deletionProofs").doc(proofId).set({ status: "deleted", operationId, proofId, completedAt, expiresAt: legacyExpiry });
+  assert.equal(await context.stores.accountLifecycle.readDeletionProof(proofId), null);
+  assert.equal(await context.stores.accountLifecycle.readDeletionOperationStatus(operationId, secret), null);
+  assert.equal((await firestore().collection("deletionProofs").doc(proofId).get()).exists, true);
+  assert.equal((await firestore().collection("accountDeletionOperations").doc(operationId).get()).exists, true);
 });
 
 test("a verify-only predecessor key completes an Auth-deleted operation after rotation", async () => {
@@ -2087,7 +2124,7 @@ test("account-owned writers reject a tombstoned or missing user after authentica
     await assert.rejects(context.stores.progress.applyBatch(userId, 1, "fixture-device", 0, [], { sessionId: "fixture-session", batchId: `fixture-${state}`, highWatermark: 0 }), { message: "account_deleted" });
     await assert.rejects(context.stores.progress.confirmAdoption(userId, 1, "fixture-device", snapshot, confirmation), { message: "account_deleted" });
     await assert.rejects(context.stores.devices.touch(userId, { deviceKey: "fixture-device", platform: "ios", appVersion: "test" }), { message: "account_deleted" });
-    await assert.rejects(context.stores.contentReports.create(userId, 1, { ...reportBody("88888888-8888-4888-8888-888888888888"), linkAccount: true, contactEmail: "fixture@example.invalid" }, { rateLimitKey: "late-write" }), { message: "account_deleted" });
+    await assert.rejects(context.stores.contentReports.create(userId, 1, reportBody("88888888-8888-4888-8888-888888888888"), { rateLimitKey: "late-write" }), { message: "account_deleted" });
     await assert.rejects(context.stores.accountLifecycle.revokeSessions(userId, 1, sessionRevocationId()), { message: "account_deleted" });
   }
   assert.deepEqual((await userRef.listCollections()).map((collection) => collection.id), ["legalAcceptances"]);

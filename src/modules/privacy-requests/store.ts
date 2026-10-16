@@ -1,8 +1,12 @@
+import { archiveIsLive, nextWorkingReviewAt } from "../retention/review.js";
+import { readOperatorPage, type OperatorPageOptions } from "../retention/operatorPage.js";
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
-import { Timestamp, type Firestore, type Transaction } from "firebase-admin/firestore";
+import { Timestamp, type Firestore, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore";
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
 import { asRecord, asTimestamp } from "../../infrastructure/firestore/values.js";
 import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
+import { addUtcCalendarMonths } from "../../infrastructure/time/utcCalendar.js";
+import { RETENTION_POLICY } from "../retention/policy.js";
 import {
   initialPrivacyRequestDeadline,
   transitionPrivacyRequest,
@@ -16,12 +20,19 @@ import {
 
 const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1_000;
 const SESSION_TTL_MS = 15 * 60 * 1_000;
-const RESPONSE_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const AUDIT_TTL_MS = 3 * 365 * 24 * 60 * 60 * 1_000;
+const RESPONSE_TTL_MS = RETENTION_POLICY.privacyRequestSecretRetentionDays * 24 * 60 * 60 * 1_000;
+const AUDIT_RETENTION_MONTHS = RETENTION_POLICY.privacyRequestArchiveMonths;
 const PUBLIC_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1_000;
 const PUBLIC_RATE_LIMIT_MAX = 5;
 const LIST_LIMIT = 100;
 const RESPONSE_CHUNK_CHARACTERS = 150_000;
+
+function defaultUnverifiedReviewAt(data: Record<string, unknown>): Date | null {
+  if (data.channel !== "public" || data.subjectVerifiedAt || !["received", "identity_verification_required"].includes(String(data.status))) return null;
+  const receivedAt = asTimestamp(data.receivedAt, "privacy_received_at").toMillis();
+  const deadlineAt = asTimestamp(data.deadlineAt, "privacy_deadline").toMillis();
+  return new Date(Math.min(deadlineAt, receivedAt + 30 * 24 * 60 * 60 * 1_000));
+}
 
 type EncryptedValue = Readonly<{ ciphertext: string; iv: string; tag: string }>;
 
@@ -39,8 +50,9 @@ export type PrivacyRequestListItem = Readonly<{
 }>;
 
 export type PrivacyRequestOperatorQueue = Readonly<{
-  items: readonly PrivacyRequestListItem[];
+  items: readonly (PrivacyRequestListItem & Readonly<{ nextReviewAt: string | null; reviewReason: string | null }>)[];
   truncated: boolean;
+  nextCursor: string | null;
 }>;
 
 export type PrivacyRequestDetails = PrivacyRequestListItem & Readonly<{
@@ -51,6 +63,8 @@ export type PrivacyRequestDetails = PrivacyRequestListItem & Readonly<{
   responseAvailableUntil: string | null;
   subjectVerified: boolean;
   extensionNoticeStatus: "available_in_app" | "pending" | "delivered" | "failed" | null;
+  nextReviewAt: string | null;
+  reviewReason: string | null;
 }>;
 
 export type PrivacyRequestResponse = Readonly<{
@@ -74,7 +88,7 @@ export interface PrivacyRequestStore {
   readAccount(userId: string, expectedAuthorizationGeneration: number, requestId: string): Promise<PrivacyRequestResponse | null>;
   readGuest(requestId: string, sessionToken: string): Promise<PrivacyRequestResponse | null>;
   listAdmin(): Promise<readonly PrivacyRequestListItem[]>;
-  listOperatorQueue(actorId: string): Promise<PrivacyRequestOperatorQueue>;
+  listOperatorQueue(actorId: string, options?: OperatorPageOptions): Promise<PrivacyRequestOperatorQueue>;
   readAdmin(requestId: string, actorId: string): Promise<PrivacyRequestDetails | null>;
   readExecutionContext(requestId: string): Promise<Readonly<{ channel: PrivacyRequestChannel; right: PrivacyRequestRight; status: PrivacyRequestStatus; revision: number; userId: string | null }> | null>;
   prepareExecutedResponse(requestId: string, actorId: string, expectedRevision: number, response: string, executionEvidence: string): Promise<PrivacyRequestDetails>;
@@ -98,7 +112,7 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
       if (!user.exists) throw new Error("account_deleted");
       assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
       transaction.create(this.requestRef(requestId), record);
-      transaction.create(this.secretRef(requestId), { payload: this.encrypt(JSON.stringify({ narrative: narrative ?? null, reportSubmissionIds: [] })), expiresAt: Timestamp.fromMillis(receivedAt.getTime() + AUDIT_TTL_MS) });
+      transaction.create(this.secretRef(requestId), { payload: this.encrypt(JSON.stringify({ narrative: narrative ?? null, reportSubmissionIds: [] })) });
       this.audit(transaction, requestId, "subject", "received", "request_received", receivedAt);
     });
     return this.toListItem(requestId, record);
@@ -126,8 +140,8 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
       const id = `pr_${randomUUID()}`;
       const record = this.initialRecord(id, "public", input.right, now, this.subjectPseudonym(`email:${email}`), null);
       transaction.create(this.requestRef(id), { ...record, status: "identity_verification_required" });
-      transaction.create(this.secretRef(id), { payload: this.encrypt(JSON.stringify({ email, narrative: input.narrative ?? null, reportSubmissionIds: [...input.reportSubmissionIds] })), expiresAt: Timestamp.fromMillis(now.getTime() + AUDIT_TTL_MS) });
-      transaction.create(idempotencyRef, { requestId: id, fingerprint, expiresAt: Timestamp.fromMillis(now.getTime() + AUDIT_TTL_MS) });
+      transaction.create(this.secretRef(id), { payload: this.encrypt(JSON.stringify({ email, narrative: input.narrative ?? null, reportSubmissionIds: [...input.reportSubmissionIds] })) });
+      transaction.create(idempotencyRef, { requestId: id, fingerprint, expiresAt: Timestamp.fromDate(addUtcCalendarMonths(now, AUDIT_RETENTION_MONTHS)) });
       this.audit(transaction, id, "subject", "received", "public_request_received", now);
       this.audit(transaction, id, "system", "identity_verification_required", "email_possession_verification_required", now);
       return { requestId: id, created: true };
@@ -168,11 +182,11 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
       if (!requestSnapshot?.exists || !secretSnapshot?.exists) return false;
       const data = asRecord(requestSnapshot.data(), "privacy_request");
       if (data.channel !== "public" || (!allowVerified && data.emailPossessionVerifiedAt)) return false;
-      const secret = asRecord(secretSnapshot.data(), "privacy_request_secret");
+      const secret = secretSnapshot.exists ? asRecord(secretSnapshot.data(), "privacy_request_secret") : {};
       const decrypted = JSON.parse(this.decrypt(asRecord(secret.payload, "privacy_request_secret_payload"))) as { email?: unknown };
       if (decrypted.email !== email) return false;
       const now = new Date();
-      transaction.set(this.requestRef(requestId), { verificationTokenHash: this.hash(`app-code:${token}`), verificationExpiresAt: Timestamp.fromMillis(now.getTime() + VERIFICATION_TTL_MS), deliveryAttemptId: attemptId, deliveryFailure: "pending", updatedAt: Timestamp.fromDate(now) }, { merge: true });
+      transaction.set(this.requestRef(requestId), { verificationTokenHash: this.hash(`app-code:${token}`), verificationExpiresAt: Timestamp.fromMillis(now.getTime() + VERIFICATION_TTL_MS), deliveryAttemptId: attemptId, deliveryFailure: "pending", deliveryAttemptedAt: Timestamp.fromDate(now), deliveryFailureAt: null, updatedAt: Timestamp.fromDate(now) }, { merge: true });
       return true;
     });
     if (!staged) return;
@@ -221,15 +235,24 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
   }
 
   public async listAccount(userId: string): Promise<readonly PrivacyRequestListItem[]> {
-    const snapshot = await this.db.collection(COLLECTIONS.privacyRequests).where("userId", "==", userId).orderBy("receivedAt", "desc").limit(LIST_LIMIT).get();
-    return Object.freeze(snapshot.docs.map((document) => this.toListItem(document.id, asRecord(document.data(), "privacy_request"))));
+    const selected: QueryDocumentSnapshot[] = [];
+    let cursor: QueryDocumentSnapshot | undefined;
+    for (;;) {
+      let query = this.db.collection(COLLECTIONS.privacyRequests).where("userId", "==", userId).orderBy("receivedAt", "desc").limit(LIST_LIMIT);
+      if (cursor) query = query.startAfter(cursor);
+      const page = await query.get();
+      for (const document of page.docs) if (this.isUnexpired(asRecord(document.data(), "privacy_request"))) selected.push(document);
+      if (selected.length >= LIST_LIMIT || page.empty || page.size < LIST_LIMIT) break;
+      cursor = page.docs.at(-1);
+    }
+    return Object.freeze(selected.slice(0, LIST_LIMIT).map((document) => this.toListItem(document.id, asRecord(document.data(), "privacy_request"))));
   }
 
   public async readAccount(userId: string, expectedAuthorizationGeneration: number, requestId: string): Promise<PrivacyRequestResponse | null> {
     const snapshot = await this.requestRef(requestId).get();
     if (!snapshot.exists) return null;
     const data = asRecord(snapshot.data(), "privacy_request");
-    if (data.userId !== userId || data.channel !== "account") return null;
+    if (data.userId !== userId || data.channel !== "account" || !this.isUnexpired(data)) return null;
     const response = await this.responseFor(requestId, data);
     if (response.response !== null) {
       await this.recordReadAudit(requestId, this.subjectPseudonym(`account:${userId}`), { userId, expectedAuthorizationGeneration });
@@ -256,36 +279,49 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
   }
 
   public async listAdmin(): Promise<readonly PrivacyRequestListItem[]> {
-    const snapshot = await this.db.collection(COLLECTIONS.privacyRequests).orderBy("deadlineAt", "asc").limit(LIST_LIMIT).get();
-    return Object.freeze(snapshot.docs.map((document) => this.toListItem(document.id, asRecord(document.data(), "privacy_request"))));
+    const selected: QueryDocumentSnapshot[] = [];
+    let cursor: QueryDocumentSnapshot | undefined;
+    for (;;) {
+      let query = this.db.collection(COLLECTIONS.privacyRequests).orderBy("deadlineAt", "asc").limit(LIST_LIMIT);
+      if (cursor) query = query.startAfter(cursor);
+      const page = await query.get();
+      for (const document of page.docs) if (this.isUnexpired(asRecord(document.data(), "privacy_request"))) selected.push(document);
+      if (selected.length >= LIST_LIMIT || page.empty || page.size < LIST_LIMIT) break;
+      cursor = page.docs.at(-1);
+    }
+    return Object.freeze(selected.slice(0, LIST_LIMIT).map((document) => this.toListItem(document.id, asRecord(document.data(), "privacy_request"))));
   }
 
-  public async listOperatorQueue(actorId: string): Promise<PrivacyRequestOperatorQueue> {
-    const snapshot = await this.db.collection(COLLECTIONS.privacyRequests).orderBy("deadlineAt", "asc").limit(LIST_LIMIT + 1).get();
-    const selected = snapshot.docs.slice(0, LIST_LIMIT);
+  public async listOperatorQueue(actorId: string, options?: OperatorPageOptions): Promise<PrivacyRequestOperatorQueue> {
+    const page = await readOperatorPage(this.db.collection(COLLECTIONS.privacyRequests), (data) => this.isUnexpired(data) && (!options?.dueOnly || this.reviewAt(data) !== null && Date.parse(this.reviewAt(data)!) <= Date.now()), options);
+    const selected = page.documents;
+    const truncated = page.truncated;
     const occurredAt = new Date();
     if (selected.length > 0) {
       await this.db.runTransaction(async (transaction) => {
         for (const document of selected) {
-          this.audit(transaction, document.id, this.actorPseudonym(actorId), "operator_queue_read", "operator_queue_read", occurredAt);
+          this.audit(transaction, document.id, this.actorPseudonym(actorId), "operator_queue_read", "operator_queue_read", occurredAt, this.auditExpiry(asRecord(document.data(), "privacy_request")));
         }
       });
     }
     return Object.freeze({
-      items: Object.freeze(selected.map((document) => this.toListItem(document.id, asRecord(document.data(), "privacy_request")))),
-      truncated: snapshot.docs.length > LIST_LIMIT,
+      items: Object.freeze(selected.map((document) => this.toOperatorQueueItem(document.id, asRecord(document.data(), "privacy_request")))),
+      truncated,
+      nextCursor: page.nextCursor,
     });
   }
 
   public async readAdmin(requestId: string, actorId: string): Promise<PrivacyRequestDetails | null> {
     const [requestSnapshot, secretSnapshot] = await Promise.all([this.requestRef(requestId).get(), this.secretRef(requestId).get()]);
-    if (!requestSnapshot.exists || !secretSnapshot.exists) return null;
-    const now = new Date();
-    await this.db.runTransaction(async (transaction) => this.audit(transaction, requestId, this.actorPseudonym(actorId), "details_read", "operator_details_read", now));
+    if (!requestSnapshot.exists) return null;
     const data = asRecord(requestSnapshot.data(), "privacy_request");
-    const secret = asRecord(secretSnapshot.data(), "privacy_request_secret");
-    const decrypted = JSON.parse(this.decrypt(asRecord(secret.payload, "privacy_request_secret_payload"))) as { narrative?: unknown; reportSubmissionIds?: unknown };
-    const extensionReason = this.decryptOptional(secret.extensionReason);
+    if (!this.isUnexpired(data) || !secretSnapshot.exists && !data.closedAt) return null;
+    const now = new Date();
+    await this.db.runTransaction(async (transaction) => this.audit(transaction, requestId, this.actorPseudonym(actorId), "details_read", "operator_details_read", now, this.auditExpiry(data)));
+    const secret = secretSnapshot.exists ? asRecord(secretSnapshot.data(), "privacy_request_secret") : {};
+    const secretActive = secretSnapshot.exists && this.secretIsLive(secret, data);
+    const decrypted = secretActive ? JSON.parse(this.decrypt(asRecord(secret.payload, "privacy_request_secret_payload"))) as { narrative?: unknown; reportSubmissionIds?: unknown } : {};
+    const extensionReason = secretActive ? this.decryptOptional(secret.extensionReason) : null;
     return Object.freeze({
       ...this.toListItem(requestId, data),
       narrative: typeof decrypted.narrative === "string" ? decrypted.narrative : null,
@@ -295,6 +331,16 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
       responseAvailableUntil: data.responseExpiresAt ? asTimestamp(data.responseExpiresAt, "privacy_response_expiry").toDate().toISOString() : null,
       subjectVerified: data.channel === "account" || Boolean(data.subjectVerifiedAt),
       extensionNoticeStatus: data.extensionNoticeStatus === "available_in_app" || data.extensionNoticeStatus === "pending" || data.extensionNoticeStatus === "delivered" || data.extensionNoticeStatus === "failed" ? data.extensionNoticeStatus : null,
+      nextReviewAt: this.reviewAt(data),
+      reviewReason: this.reviewReason(data),
+    });
+  }
+
+  private toOperatorQueueItem(requestId: string, data: Record<string, unknown>): PrivacyRequestOperatorQueue["items"][number] {
+    return Object.freeze({
+      ...this.toListItem(requestId, data),
+      nextReviewAt: this.reviewAt(data),
+      reviewReason: this.reviewReason(data),
     });
   }
 
@@ -345,6 +391,22 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
       if (!snapshot.exists) throw new Error("privacy_request_not_found");
       if (action.action === "extend" && !secretSnapshot?.exists) throw new Error("privacy_request_not_found");
       const data = asRecord(snapshot.data(), "privacy_request");
+      const now = new Date();
+      const specialUpdate: Record<string, unknown> = {};
+      if (action.action === "close_unverified") {
+        if (data.channel !== "public" || data.subjectVerifiedAt || data.emailPossessionVerifiedAt || !["received", "identity_verification_required"].includes(String(data.status))) throw new Error("privacy_request_unverified_close_invalid");
+        const archiveExpiry = addUtcCalendarMonths(now, AUDIT_RETENTION_MONTHS);
+        Object.assign(specialUpdate, { status: "closed", closedAt: Timestamp.fromDate(now), expiresAt: Timestamp.fromDate(archiveExpiry), unverifiedDisposition: "not_verified", reason: action.reason, verificationTokenHash: null, verificationExpiresAt: null, publicSessionHash: null, publicSessionExpiresAt: null, deliveryAttemptId: null });
+        transaction.set(this.secretRef(requestId), { expiresAt: Timestamp.fromMillis(now.getTime() + RESPONSE_TTL_MS) }, { merge: true });
+      }
+      if (action.action === "record_review") {
+        if (["closed", "fulfilled", "partially_fulfilled", "refused"].includes(String(data.status))) throw new Error("privacy_request_review_unavailable");
+        const nextReviewAt = new Date(action.nextReviewAt);
+        if (!Number.isFinite(nextReviewAt.getTime()) || nextReviewAt <= now || nextReviewAt.getTime() > now.getTime() + 30 * 24 * 60 * 60 * 1_000) throw new Error("privacy_request_review_date_invalid");
+        specialUpdate.nextReviewAt = Timestamp.fromDate(nextReviewAt);
+        specialUpdate.reviewReason = action.reason;
+        specialUpdate.deliveryReviewAcknowledgedAt = Timestamp.fromDate(now);
+      }
       if (operatorBlockPublicEmail && operatorEmailAction && data.channel === "public") throw new Error("privacy_request_operator_action_unavailable");
       if (action.action === "extend" && data.channel === "public" && !sender) throw new Error("privacy_email_unavailable");
       if (Number(data.revision) !== action.expectedRevision) throw new Error("privacy_request_revision_conflict");
@@ -352,9 +414,11 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
       if (action.action === "verify_subject" && (data.channel !== "public" || !data.emailPossessionVerifiedAt)) throw new Error("privacy_request_subject_unverified");
       if (action.action === "prepare_response" && action.outcome !== "refused") throw new Error("privacy_request_executor_required");
       const current = this.toTransitionSnapshot(data);
-      const now = new Date();
-      const next = transitionPrivacyRequest(current, action, now);
+      const next = action.action === "record_review" ? current : action.action === "close_unverified"
+        ? Object.freeze({ ...current, status: "closed" as const, closedAt: now })
+        : transitionPrivacyRequest(current, action, now);
       const update: Record<string, unknown> = {
+        ...specialUpdate,
         status: next.status,
         outcome: next.outcome,
         deadlineAt: Timestamp.fromDate(next.deadlineAt),
@@ -385,7 +449,8 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
         transaction.set(this.responseRef(requestId), { expiresAt: Timestamp.fromDate(responseExpiresAt) }, { merge: true });
       }
       if (action.action === "close") {
-        update.expiresAt = Timestamp.fromMillis(now.getTime() + AUDIT_TTL_MS);
+        const archiveExpiry = addUtcCalendarMonths(now, AUDIT_RETENTION_MONTHS);
+        update.expiresAt = Timestamp.fromDate(archiveExpiry);
         update.verificationTokenHash = null;
         update.verificationExpiresAt = null;
         update.publicSessionHash = null;
@@ -394,13 +459,13 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
         transaction.set(this.secretRef(requestId), { expiresAt: Timestamp.fromMillis(now.getTime() + RESPONSE_TTL_MS) }, { merge: true });
       }
       transaction.set(ref, update, { merge: true });
-      this.audit(transaction, requestId, this.actorPseudonym(actorId), action.action, action.action === "prepare_response" ? "operator_refusal_decision" : "state_transition", now);
+      this.audit(transaction, requestId, this.actorPseudonym(actorId), action.action, action.action === "prepare_response" ? "operator_refusal_decision" : action.action === "record_review" || action.action === "close_unverified" ? action.reason : "state_transition", now);
     });
     if (action.action === "extend") {
       const current = await this.requestRef(requestId).get();
       if (current.exists && asRecord(current.data(), "privacy_request").channel === "public") await this.notifyPublicExtension(requestId, actorId, action.expectedRevision + 1, sender, operatorBlockPublicEmail);
     }
-    if (action.action === "close") await this.alignAuditRetentionWithClosure(requestId);
+    if (action.action === "close" || action.action === "close_unverified") await this.alignAuditRetentionWithClosure(requestId);
     const details = await this.readAdmin(requestId, actorId);
     if (!details) throw new Error("privacy_request_not_found");
     return details;
@@ -419,7 +484,7 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
       if (operatorBlockPublicEmail) throw new Error("privacy_request_operator_action_unavailable");
       if (Number(data.revision) !== expectedRevision) throw new Error("privacy_request_revision_conflict");
       transitionPrivacyRequest(this.toTransitionSnapshot(data), { action: "deliver", expectedRevision }, new Date());
-      const secret = asRecord(secretSnapshot.data(), "privacy_request_secret");
+      const secret = secretSnapshot.exists ? asRecord(secretSnapshot.data(), "privacy_request_secret") : {};
       const decrypted = JSON.parse(this.decrypt(asRecord(secret.payload, "privacy_request_secret_payload"))) as { email?: unknown };
       if (typeof decrypted.email !== "string") throw new Error("privacy_request_invalid");
       email = decrypted.email;
@@ -427,6 +492,7 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
       transaction.set(this.requestRef(requestId), {
         deliveryAttemptId: attemptId,
         deliveryFailure: null,
+        deliveryAttemptedAt: Timestamp.fromDate(now), deliveryFailureAt: null,
         verificationTokenHash: this.hash(`app-code:${token}`),
         verificationExpiresAt: Timestamp.fromMillis(now.getTime() + VERIFICATION_TTL_MS),
         revision: expectedRevision + 1,
@@ -437,7 +503,7 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
     try {
       await sender.send({ recipient: email, purpose: "response", requestId, code: `${requestId}.${token}` });
     } catch {
-      await this.requestRef(requestId).set({ deliveryFailure: "response_email_failed", updatedAt: Timestamp.now() }, { merge: true });
+      await this.requestRef(requestId).set({ deliveryFailure: "response_email_failed", deliveryFailureAt: Timestamp.now(), updatedAt: Timestamp.now() }, { merge: true });
       throw new Error("privacy_email_unavailable");
     }
     await this.db.runTransaction(async (transaction) => {
@@ -473,17 +539,17 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
       if (operatorBlockPublicEmail) throw new Error("privacy_request_operator_action_unavailable");
       if (Number(requestData.revision) !== expectedRevision) throw new Error("privacy_request_revision_conflict");
       if (!requestData.extendedAt || (requestData.extensionNoticeStatus !== "pending" && requestData.extensionNoticeStatus !== "failed")) throw new Error("privacy_request_transition_invalid");
-      const secret = asRecord(secretSnapshot.data(), "privacy_request_secret");
+      const secret = secretSnapshot.exists ? asRecord(secretSnapshot.data(), "privacy_request_secret") : {};
       const decrypted = JSON.parse(this.decrypt(asRecord(secret.payload, "privacy_request_secret_payload"))) as { email?: unknown };
       extensionReason = this.decryptOptional(secret.extensionReason) ?? "";
       if (typeof decrypted.email !== "string" || !extensionReason) throw new Error("privacy_request_invalid");
       email = decrypted.email;
-      transaction.set(this.requestRef(requestId), { verificationTokenHash: this.hash(`app-code:${token}`), verificationExpiresAt: Timestamp.fromMillis(now.getTime() + VERIFICATION_TTL_MS), extensionNoticeAttemptedAt: Timestamp.fromDate(now), extensionNoticeStatus: "pending" }, { merge: true });
+      transaction.set(this.requestRef(requestId), { verificationTokenHash: this.hash(`app-code:${token}`), verificationExpiresAt: Timestamp.fromMillis(now.getTime() + VERIFICATION_TTL_MS), extensionNoticeAttemptedAt: Timestamp.fromDate(now), extensionNoticeStatus: "pending", extensionNoticeFailureAt: null }, { merge: true });
     });
     try {
       await sender.send({ recipient: email, purpose: "extension", requestId, code: `${requestId}.${token}`, extensionReason });
     } catch {
-      await this.requestRef(requestId).set({ extensionNoticeStatus: "failed", updatedAt: Timestamp.now() }, { merge: true });
+      await this.requestRef(requestId).set({ extensionNoticeStatus: "failed", extensionNoticeFailureAt: Timestamp.now(), updatedAt: Timestamp.now() }, { merge: true });
       throw new Error("privacy_email_unavailable");
     }
     await this.db.runTransaction(async (transaction) => {
@@ -534,7 +600,7 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
     let extensionReason: string | null = null;
     if (data.extendedAt) {
       const secret = await this.secretRef(requestId).get();
-      if (secret.exists) extensionReason = this.decryptOptional(asRecord(secret.data(), "privacy_request_secret").extensionReason);
+      if (secret.exists && this.secretIsLive(asRecord(secret.data(), "privacy_request_secret"), data)) extensionReason = this.decryptOptional(asRecord(secret.data(), "privacy_request_secret").extensionReason);
     }
     if (data.deliveredAt && data.responseExpiresAt && ["fulfilled", "partially_fulfilled", "refused", "closed"].includes(String(data.status))) {
       const expiry = asTimestamp(data.responseExpiresAt, "privacy_response_expiry");
@@ -585,22 +651,63 @@ export class FirestorePrivacyRequestStore implements PrivacyRequestStore {
         if (!user.exists) throw new Error("account_deleted");
         assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), authorization.expectedAuthorizationGeneration);
       }
-      this.audit(transaction, requestId, actor, "response_read", "response_artifact_read", at);
+      const request = await transaction.get(this.requestRef(requestId));
+      if (!request.exists || !this.isUnexpired(asRecord(request.data(), "privacy_request"))) throw new Error("privacy_request_not_found");
+      this.audit(transaction, requestId, actor, "response_read", "response_artifact_read", at, this.auditExpiry(asRecord(request.data(), "privacy_request")));
     });
   }
 
   private async alignAuditRetentionWithClosure(requestId: string): Promise<void> {
     const snapshot = await this.requestRef(requestId).collection(COLLECTIONS.privacyRequestAudit).get();
     if (snapshot.empty) return;
-    const expiresAt = Timestamp.fromMillis(Date.now() + AUDIT_TTL_MS);
+    const request = await this.requestRef(requestId).get();
+    if (!request.exists) return;
+    const closedAt = asRecord(request.data(), "privacy_request").closedAt;
+    const expiresAt = closedAt ? Timestamp.fromDate(addUtcCalendarMonths(asTimestamp(closedAt, "privacy_closed_at").toDate(), AUDIT_RETENTION_MONTHS)) : null;
     const batch = this.db.batch();
     for (const document of snapshot.docs) batch.set(document.ref, { expiresAt }, { merge: true });
     await batch.commit();
   }
 
-  private audit(transaction: Transaction, requestId: string, actor: string, event: string, reasonCode: string, at: Date): void {
+  private isUnexpired(data: Record<string, unknown>): boolean {
+    return archiveIsLive(data, AUDIT_RETENTION_MONTHS);
+  }
+
+  private auditExpiry(data: Record<string, unknown>): Timestamp | null {
+    return data.closedAt instanceof Timestamp ? Timestamp.fromDate(addUtcCalendarMonths(data.closedAt.toDate(), AUDIT_RETENTION_MONTHS)) : null;
+  }
+
+  private secretIsLive(secret: Record<string, unknown>, data: Record<string, unknown>): boolean {
+    const expiry = secret.expiresAt instanceof Timestamp ? secret.expiresAt.toMillis() : Number.POSITIVE_INFINITY;
+    const cap = data.closedAt instanceof Timestamp ? data.closedAt.toMillis() + RESPONSE_TTL_MS : Number.POSITIVE_INFINITY;
+    return Math.min(expiry, cap) > Date.now();
+  }
+
+  private reviewAt(data: Record<string, unknown>): string | null {
+    if (data.status === "closed") return null;
+    const dates: number[] = [];
+    if (data.nextReviewAt instanceof Timestamp) dates.push(data.nextReviewAt.toMillis());
+    const unverified = data.nextReviewAt instanceof Timestamp ? null : defaultUnverifiedReviewAt(data); if (unverified) dates.push(unverified.getTime());
+    const delivery = this.deliveryReviewAt(data); if (delivery) dates.push(delivery.getTime());
+    return dates.length ? new Date(Math.min(...dates)).toISOString() : null;
+  }
+
+  private deliveryReviewAt(data: Record<string, unknown>): Date | null {
+    if (data.status === "closed") return null;
+    const attempts: unknown[] = [];
+    if (["failed", "unknown", "pending"].includes(String(data.extensionNoticeStatus))) attempts.push(data.extensionNoticeFailureAt ?? data.extensionNoticeAttemptedAt ?? data.updatedAt ?? data.receivedAt);
+    if (typeof data.deliveryFailure === "string" || typeof data.deliveryAttemptId === "string" || ["failed", "unknown", "pending"].includes(String(data.deliveryStatus))) attempts.push(data.deliveryFailureAt ?? data.deliveryAttemptedAt ?? data.updatedAt ?? data.receivedAt);
+    const pending = attempts.filter((at): at is Timestamp => at instanceof Timestamp && (!(data.deliveryReviewAcknowledgedAt instanceof Timestamp) || data.deliveryReviewAcknowledgedAt.toMillis() < at.toMillis()));
+    return pending.length ? nextWorkingReviewAt(new Date(Math.min(...pending.map((at) => at.toMillis())))) : null;
+  }
+
+  private reviewReason(data: Record<string, unknown>): string | null {
+    return this.deliveryReviewAt(data) ? "delivery_outcome_requires_inspection" : typeof data.reviewReason === "string" ? data.reviewReason : !data.subjectVerifiedAt && data.channel === "public" ? "identity_verification_pending" : null;
+  }
+
+  private audit(transaction: Transaction, requestId: string, actor: string, event: string, reasonCode: string, at: Date, expiresAt: Timestamp | null = null): void {
     transaction.create(this.requestRef(requestId).collection(COLLECTIONS.privacyRequestAudit).doc(), {
-      event, actorPseudonym: actor, reasonCode, occurredAt: Timestamp.fromDate(at), expiresAt: Timestamp.fromMillis(at.getTime() + AUDIT_TTL_MS),
+      event, actorPseudonym: actor, reasonCode, occurredAt: Timestamp.fromDate(at), expiresAt,
     });
   }
 

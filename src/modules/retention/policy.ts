@@ -1,0 +1,16 @@
+export const RETENTION_POLICY = Object.freeze({
+  contentReportDays: 30,
+  accountDeletionProofMonths: 12,
+  privacyRequestArchiveMonths: 12,
+  privacyRequestSecretRetentionDays: 30,
+  legalRequestMinimalArchiveMonths: 12,
+  legalRequestWorkingRetentionDays: 30,
+  legalClaimReviewMonths: 6,
+  disputeReviewMonths: 6,
+  breachDocumentationYears: 6,
+  breachReviewMonths: 12,
+  nonBreachIncidentMonths: 12,
+  incidentWorkingRetentionDays: 30,
+  ordinaryOperationalLogDays: 30,
+  selectedSecurityLogDays: 90,
+});

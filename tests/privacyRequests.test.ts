@@ -243,3 +243,22 @@ test("failed guest extension notice remains explicit and can be retried without 
   assert.equal(delivered?.extensionNoticeStatus, "delivered");
   assert.equal(delivered?.revision, 3);
 });
+
+test("unverified guest requests get a bounded review date and close into a 12-month minimal archive", async () => {
+  let requestId = "";
+  await context.stores.privacyRequests.createGuest({ clientRequestId: "9431ad87-7618-49bc-a5eb-92c1d8d73910", email: "unverified@example.com", right: "access", reportSubmissionIds: [], rateLimitKey: "unverified-test" }, { send: async (input) => { requestId = input.requestId; } });
+  assert.ok(requestId);
+  const tooFar = new Date(Date.now() + 31 * 24 * 60 * 60 * 1_000).toISOString();
+  await assert.rejects(context.stores.privacyRequests.transitionAdmin(requestId, "admin", { action: "record_review", reason: "Still awaiting identity verification", nextReviewAt: tooFar, expectedRevision: 0 }, null), /privacy_request_review_date_invalid/u);
+  const nextReviewAt = new Date(Date.now() + 5 * 24 * 60 * 60 * 1_000).toISOString();
+  const reviewed = await context.stores.privacyRequests.transitionAdmin(requestId, "admin", { action: "record_review", reason: "Verification remains unconfirmed", nextReviewAt, expectedRevision: 0 }, null);
+  assert.equal(reviewed.nextReviewAt, nextReviewAt);
+  assert.equal(reviewed.reviewReason, "Verification remains unconfirmed");
+  const closed = await context.stores.privacyRequests.transitionAdmin(requestId, "admin", { action: "close_unverified", reason: "No identity verification was completed", expectedRevision: 1 }, null);
+  assert.equal(closed.status, "closed");
+  const stored = await getFirestore().collection("privacyRequests").doc(requestId).get();
+  const secret = await getFirestore().collection("privacyRequestSecrets").doc(requestId).get();
+  assert.ok(stored.data()?.expiresAt);
+  assert.ok(secret.data()?.expiresAt);
+  assert.equal(stored.data()?.email, undefined);
+});

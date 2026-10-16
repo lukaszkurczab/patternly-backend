@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { addUtcCalendarYears } from "../../infrastructure/time/utcCalendar.js";
+import { addUtcCalendarMonths } from "../../infrastructure/time/utcCalendar.js";
+import { RETENTION_POLICY } from "../retention/policy.js";
 
 export const INCIDENT_CLASSIFICATIONS = ["triage", "breach_confirmed", "not_a_breach"] as const;
 export const INCIDENT_DECISIONS = ["undecided", "required", "not_required"] as const;
@@ -35,21 +38,17 @@ export const securityIncidentActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("send_subject_notification"), recipientPseudonym: z.string().regex(/^[A-Za-z0-9_-]{16,128}$/u), snapshotVersion: z.number().int().positive(), ...revision }).strict(),
   z.object({ action: z.literal("resolve_subject_notification_unknown"), deliveryId: z.string().uuid(), outcome: z.enum(["sent", "failed"]), reason: text(4_000), ...revision }).strict(),
   z.object({ action: z.literal("reconcile_subject_notifications"), ...revision }).strict(),
-  z.object({ action: z.literal("set_legal_hold"), reason: text(4_000), ...revision }).strict(),
+  z.object({ action: z.literal("set_legal_hold"), reason: text(4_000), reviewBy: z.string().datetime(), ...revision }).strict(),
   z.object({ action: z.literal("release_legal_hold"), reason: text(4_000), ...revision }).strict(),
-  z.object({ action: z.literal("close"), ...revision }).strict(),
+  z.object({ action: z.literal("review_retention"), reason: text(4_000), nextReviewAt: z.string().datetime(), ...revision }).strict(),
+  z.object({ action: z.literal("close"), reason: text(4_000), ...revision }).strict(),
 ]);
 
 export type SecurityIncidentAction = z.infer<typeof securityIncidentActionSchema>;
 
-function utcCalendarYears(value: Date, years: number): Date {
-  const year = value.getUTCFullYear() + years;
-  const month = value.getUTCMonth();
-  const day = Math.min(value.getUTCDate(), new Date(Date.UTC(year, month + 1, 0)).getUTCDate());
-  return new Date(Date.UTC(year, month, day, value.getUTCHours(), value.getUTCMinutes(), value.getUTCSeconds(), value.getUTCMilliseconds()));
-}
-
-export const addUtcCalendarYears = utcCalendarYears;
-export const incidentRetentionExpiry = (closedAt: Date): Date => utcCalendarYears(closedAt, 6);
-export const incidentArtifactExpiry = (createdAt: Date): Date => utcCalendarYears(createdAt, 1);
+export { addUtcCalendarYears };
+export const incidentRetentionExpiry = (closedAt: Date, classification: "breach_confirmed" | "not_a_breach"): Date => classification === "breach_confirmed"
+  ? addUtcCalendarYears(closedAt, RETENTION_POLICY.breachDocumentationYears)
+  : addUtcCalendarMonths(closedAt, RETENTION_POLICY.nonBreachIncidentMonths);
+export const incidentArtifactExpiry = (closedAt: Date): Date => new Date(closedAt.getTime() + RETENTION_POLICY.incidentWorkingRetentionDays * 24 * 60 * 60 * 1_000);
 export const incidentDeadline = (awarenessAt: Date): Date => new Date(awarenessAt.getTime() + 72 * 60 * 60 * 1_000);

@@ -48,3 +48,8 @@ test("content report descriptions keep ordinary technical wording", () => {
     assert.equal(createContentReportSchema.safeParse({ ...baseReport, description }).success, true, description);
   }
 });
+
+test("content reports reject account and contact linkage fields", () => {
+  assert.equal(createContentReportSchema.safeParse({ ...baseReport, linkAccount: false }).success, false);
+  assert.equal(createContentReportSchema.safeParse({ ...baseReport, contactEmail: "person@example.com" }).success, false);
+});

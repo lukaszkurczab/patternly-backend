@@ -72,7 +72,7 @@ async function runNative(
 function legalDetails(requestId: string, revision = 0, legalHold = false) {
   return {
     requestId, kind: "complaint", status: "received", receivedAt: "2026-10-01T00:00:00.000Z",
-    responseDueAt: null, answeredAt: null, retentionUntil: null, legalHold, revision,
+    responseDueAt: null, answeredAt: null, retentionUntil: null, legalHold, legalHoldReviewBy: null, revision,
     narrative: "Readable fixture context", transactionId: null,
   };
 }
@@ -87,7 +87,7 @@ test("standalone CLI reads through verified TLS and a hidden real terminal token
     assert.equal(request.method, "GET");
     assert.equal(request.url, "/v1/operator/legal-requests");
     response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify({ items: [], truncated: false }));
+    response.end(JSON.stringify({ items: [], truncated: false, nextCursor: null }));
   });
   try {
     const result = await runNative(["list", "legal-requests"], fixture.origin, fixture.caCertificatePath, [{ expect: tokenPrompt, send: `${token}\n` }], [token]);
@@ -115,7 +115,7 @@ test(`standalone CLI cancellation sends no mutation after reading payload from $
     const result = await runNative(["action", "legal-requests", id, ...(payloadOnStdin ? [] : ["--payload-fd", "3"])], fixture.origin, fixture.caCertificatePath, [
       { expect: tokenPrompt, send: `${token}\n` },
       { expect: `Type "${phrase}" to confirm: `, send: "no\n" },
-    ], [token, reason], JSON.stringify({ action: "set_legal_hold", expectedRevision: 0, active: true, reason }), payloadOnStdin);
+    ], [token, reason], JSON.stringify({ action: "set_legal_hold", expectedRevision: 0, active: true, reviewBy: new Date(Date.now() + 86400000).toISOString(), reason }), payloadOnStdin);
     assert.match(result.output, /cancel/iu);
     assert.equal(reads, 1);
     assert.equal(writes, 0);
@@ -148,7 +148,7 @@ test("standalone CLI lost mutation response makes one write and one reconciliati
     const result = await runNative(["action", "legal-requests", id, "--payload-fd", "3"], fixture.origin, fixture.caCertificatePath, [
       { expect: tokenPrompt, send: `${token}\n` },
       { expect: `Type "${phrase}" to confirm: `, send: `${phrase}\n` },
-    ], [token, reason], JSON.stringify({ action: "set_legal_hold", expectedRevision: 0, active: true, reason }));
+    ], [token, reason], JSON.stringify({ action: "set_legal_hold", expectedRevision: 0, active: true, reviewBy: new Date(Date.now() + 86400000).toISOString(), reason }));
     assert.equal(result.exitCode, 2);
     assert.match(result.output, /AMBIGUOUS.*RECONCILIATION REQUIRED/iu);
     assert.equal(writes, 1);

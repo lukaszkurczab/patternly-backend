@@ -22,15 +22,16 @@ test("only a complaint receives the statutory fourteen-day response deadline", (
   assert.equal(complaintResponseDueAt(receivedAt, "suspension_appeal"), null);
 });
 
-test("closed consumer cases retain evidence for six calendar years", () => {
-  assert.equal(retentionUntilFromClosure(new Date("2024-02-29T08:30:00.000Z")).toISOString(), "2030-03-01T08:30:00.000Z");
-  assert.equal(retentionUntilFromClosure(new Date("2026-09-07T08:30:00.000Z")).toISOString(), "2032-09-07T08:30:00.000Z");
+test("minimal closed consumer-case archive uses calendar months", () => {
+  assert.equal(retentionUntilFromClosure(new Date("2024-02-29T08:30:00.000Z"), 12).toISOString(), "2025-02-28T08:30:00.000Z");
+  assert.equal(retentionUntilFromClosure(new Date("2026-09-07T08:30:00.000Z"), 12).toISOString(), "2027-09-07T08:30:00.000Z");
 });
 
 test("operator transitions require an expected revision and bounded response or hold reason", () => {
   assert.equal(legalRequestAdminActionSchema.safeParse({ action: "start_review", expectedRevision: 0 }).success, true);
   assert.equal(legalRequestAdminActionSchema.safeParse({ action: "answer", expectedRevision: 1, response: "Decision" }).success, true);
-  assert.equal(legalRequestAdminActionSchema.safeParse({ action: "close", expectedRevision: 2 }).success, true);
-  assert.equal(legalRequestAdminActionSchema.safeParse({ action: "set_legal_hold", expectedRevision: 3, active: true, reason: "Pending court matter" }).success, true);
+  assert.equal(legalRequestAdminActionSchema.safeParse({ action: "close", expectedRevision: 2, disposition: { kind: "minimal_archive", reason: "No continuing claim" } }).success, true);
+  assert.equal(legalRequestAdminActionSchema.safeParse({ action: "close", expectedRevision: 2, disposition: { kind: "claim", necessaryFields: ["email", "narrative", "transactionId", "response"], retentionUntil: "2030-01-01T00:00:00.000Z", basis: "Civil claim limitation", reason: "Necessary evidence" } }).success, true);
+  assert.equal(legalRequestAdminActionSchema.safeParse({ action: "set_legal_hold", expectedRevision: 3, active: true, reason: "Pending court matter", reviewBy: "2027-01-01T00:00:00.000Z" }).success, true);
   assert.equal(legalRequestAdminActionSchema.safeParse({ action: "answer", response: "Decision" }).success, false);
 });

@@ -1,3 +1,4 @@
+import { validateOperatorCursor } from "../modules/retention/operatorPage.js";
 import { dispatchPurchaseReceipt } from "../modules/billing/purchaseReceiptDispatcher.js";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { DestinationStream } from "pino";
@@ -65,8 +66,8 @@ export type ApplicationDependencies = Readonly<{
   logStream?: DestinationStream;
 }>;
 
-const operatorPrivacyActions = new Set(["require_verification", "verify_subject", "start_review", "extend", "prepare_response", "deliver", "execute_export", "close"]);
-const operatorLegalActions = new Set(["start_review", "close", "set_legal_hold"]);
+const operatorPrivacyActions = new Set(["require_verification", "verify_subject", "start_review", "extend", "prepare_response", "deliver", "execute_export", "close", "record_review", "close_unverified"]);
+const operatorLegalActions = new Set(["start_review", "close", "set_legal_hold", "review_retention"]);
 const operatorIncidentActions = new Set([
   "acknowledge_awareness", "classify", "correct_assessment", "decide_authority",
   "prepare_authority_export", "record_authority_submission", "decide_subject",
@@ -304,7 +305,7 @@ function operatorError(error: unknown, reply: FastifyReply, family: "content_rep
     return true;
   }
   const domainPrefix = `${family}_`;
-  if (message.startsWith(domainPrefix) || message === "operator_action_unavailable") {
+  if (message.startsWith(domainPrefix) || message === "operator_action_unavailable" || message === "retention_review_date_invalid") {
     const code = message.includes("email_unavailable") || message.includes("executor_required") || message.includes("operator_action_unavailable")
       ? "operator_action_unavailable"
       : message;
@@ -361,6 +362,9 @@ function projectSecurityIncidentListItem(incident: import("../modules/security-i
     closedAt: incident.closedAt,
     revision: incident.revision,
     legalHold: incident.legalHold,
+    legalHoldReviewBy: incident.legalHoldReviewBy,
+    nextReviewAt: incident.nextReviewAt ?? null,
+    reviewReason: incident.reviewReason ?? null,
     nextAction: incident.nextAction,
   });
 }
@@ -408,6 +412,8 @@ function projectOperatorPrivacyRequestDetails(request: PrivacyRequestDetails) {
     responseAvailableUntil: request.responseAvailableUntil,
     subjectVerified: request.subjectVerified,
     extensionNoticeStatus: request.extensionNoticeStatus,
+    nextReviewAt: request.nextReviewAt,
+    reviewReason: request.reviewReason,
   });
 }
 
@@ -421,6 +427,9 @@ function projectOperatorLegalRequestDetails(request: LegalRequestDetails) {
     answeredAt: request.answeredAt,
     retentionUntil: request.retentionUntil,
     legalHold: request.legalHold,
+    legalHoldReviewBy: request.legalHoldReviewBy,
+    nextReviewAt: request.nextReviewAt ?? null,
+    reviewReason: request.reviewReason ?? null,
     revision: request.revision,
     narrative: request.narrative,
     transactionId: request.transactionId,
@@ -1421,9 +1430,13 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       throw error;
     }
   });
-  app.get("/v1/operator/content-reports", { preHandler: routeGuard("operator", dependencies, "content_reports:read") }, async (request) => {
-    const queue = await requireStores(dependencies).contentReports.listOperatorQueue(request.operatorIdentity!.actorPseudonym);
-    return { items: queue.items, truncated: queue.truncated };
+  app.get("/v1/operator/content-reports", { preHandler: routeGuard("operator", dependencies, "content_reports:read") }, async (request, reply) => {
+    const parsed = z.object({ cursor: z.string().max(2048).optional(), due: z.enum(["true", "false"]).optional() }).strict().safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try { validateOperatorCursor(parsed.data.cursor, "contentReports", parsed.data.due === "true"); }
+    catch { return reply.code(400).send({ error: { code: "operator_cursor_invalid" } }); }
+    const queue = await requireStores(dependencies).contentReports.listOperatorQueue(request.operatorIdentity!.actorPseudonym, { cursor: parsed.data.cursor, dueOnly: parsed.data.due === "true" });
+    return { items: queue.items, truncated: queue.truncated, nextCursor: queue.nextCursor };
   });
   app.get("/v1/operator/content-reports/:clientSubmissionId", { preHandler: routeGuard("operator", dependencies, "content_reports:read") }, async (request, reply) => {
     const id = (request.params as { clientSubmissionId?: unknown }).clientSubmissionId;
@@ -1443,9 +1456,13 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       throw error;
     }
   });
-  app.get("/v1/operator/privacy-requests", { preHandler: routeGuard("operator", dependencies, "privacy_requests:read") }, async (request) => {
-    const queue = await requireStores(dependencies).privacyRequests.listOperatorQueue(request.operatorIdentity!.actorPseudonym);
-    return { items: queue.items, truncated: queue.truncated };
+  app.get("/v1/operator/privacy-requests", { preHandler: routeGuard("operator", dependencies, "privacy_requests:read") }, async (request, reply) => {
+    const parsed = z.object({ cursor: z.string().max(2048).optional(), due: z.enum(["true", "false"]).optional() }).strict().safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try { validateOperatorCursor(parsed.data.cursor, "privacyRequests", parsed.data.due === "true"); }
+    catch { return reply.code(400).send({ error: { code: "operator_cursor_invalid" } }); }
+    const queue = await requireStores(dependencies).privacyRequests.listOperatorQueue(request.operatorIdentity!.actorPseudonym, { cursor: parsed.data.cursor, dueOnly: parsed.data.due === "true" });
+    return { items: queue.items, truncated: queue.truncated, nextCursor: queue.nextCursor };
   });
   app.get("/v1/operator/privacy-requests/:requestId", { preHandler: routeGuard("operator", dependencies, "privacy_requests:read") }, async (request, reply) => {
     const id = privacyRequestId((request.params as { requestId?: unknown }).requestId);
@@ -1471,9 +1488,13 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       throw error;
     }
   });
-  app.get("/v1/operator/legal-requests", { preHandler: routeGuard("operator", dependencies, "legal_requests:read") }, async (request) => {
-    const queue = await requireStores(dependencies).legalRequests.listOperatorQueue(request.operatorIdentity!.actorPseudonym);
-    return { items: queue.items, truncated: queue.truncated };
+  app.get("/v1/operator/legal-requests", { preHandler: routeGuard("operator", dependencies, "legal_requests:read") }, async (request, reply) => {
+    const parsed = z.object({ cursor: z.string().max(2048).optional(), due: z.enum(["true", "false"]).optional() }).strict().safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try { validateOperatorCursor(parsed.data.cursor, "legalRequests", parsed.data.due === "true"); }
+    catch { return reply.code(400).send({ error: { code: "operator_cursor_invalid" } }); }
+    const queue = await requireStores(dependencies).legalRequests.listOperatorQueue(request.operatorIdentity!.actorPseudonym, { cursor: parsed.data.cursor, dueOnly: parsed.data.due === "true" });
+    return { items: queue.items, truncated: queue.truncated, nextCursor: queue.nextCursor };
   });
   app.get("/v1/operator/legal-requests/:requestId", { preHandler: routeGuard("operator", dependencies, "legal_requests:read") }, async (request, reply) => {
     const id = legalRequestId((request.params as { requestId?: unknown }).requestId);
@@ -1508,9 +1529,13 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       throw error;
     }
   });
-  app.get("/v1/operator/security-incidents", { preHandler: routeGuard("operator", dependencies, "security_incidents:read") }, async (request) => {
-    const queue = await requireStores(dependencies).securityIncidents.listOperatorQueue(request.operatorIdentity!.actorPseudonym);
-    return { items: queue.items.map(projectSecurityIncidentListItem), truncated: queue.truncated };
+  app.get("/v1/operator/security-incidents", { preHandler: routeGuard("operator", dependencies, "security_incidents:read") }, async (request, reply) => {
+    const parsed = z.object({ cursor: z.string().max(2048).optional(), due: z.enum(["true", "false"]).optional() }).strict().safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    try { validateOperatorCursor(parsed.data.cursor, "securityIncidents", parsed.data.due === "true"); }
+    catch { return reply.code(400).send({ error: { code: "operator_cursor_invalid" } }); }
+    const queue = await requireStores(dependencies).securityIncidents.listOperatorQueue(request.operatorIdentity!.actorPseudonym, { cursor: parsed.data.cursor, dueOnly: parsed.data.due === "true" });
+    return { items: queue.items.map(projectSecurityIncidentListItem), truncated: queue.truncated, nextCursor: queue.nextCursor };
   });
   app.get("/v1/operator/security-incidents/:incidentId", { preHandler: routeGuard("operator", dependencies, "security_incidents:read") }, async (request, reply) => {
     const id = securityIncidentId((request.params as { incidentId?: unknown }).incidentId);

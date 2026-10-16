@@ -1,3 +1,4 @@
+import type { OperatorPageOptions } from "../retention/operatorPage.js";
 import { z } from "zod";
 
 const contentIdentifier = z.string().min(1).max(256).regex(/^[A-Za-z0-9._:/-]+$/u);
@@ -45,8 +46,6 @@ export const createContentReportSchema = z.object({
   reason: z.enum(["incorrect_answer", "unclear_explanation", "outdated_content", "technical_issue", "other"]),
   description: contentReportDescriptionSchema,
   context: contentReportContextSchema,
-  linkAccount: z.boolean().default(false),
-  contactEmail: z.string().email().optional(),
 }).strict().transform((report) => ({
   ...report,
   description: report.description || EMPTY_REPORT_DESCRIPTION,
@@ -124,12 +123,13 @@ export type OperatorContentReportDetail = Readonly<Pick<ContentReportView,
 export type ContentReportOperatorQueue = Readonly<{
   items: readonly OperatorContentReportItem[];
   truncated: boolean;
+  nextCursor: string | null;
 }>;
 
 export interface ContentReportStore {
   create(userId: string | undefined, expectedAuthorizationGeneration: number | undefined, input: CreateContentReport, context: Readonly<{ rateLimitKey: string }>): Promise<Readonly<{ report: ContentReportView; duplicate: boolean }>>;
   listQueue(): Promise<readonly ContentReportView[]>;
-  listOperatorQueue(actorId: string): Promise<ContentReportOperatorQueue>;
+  listOperatorQueue(actorId: string, options?: OperatorPageOptions): Promise<ContentReportOperatorQueue>;
   readOperator(clientSubmissionId: string, actorId: string): Promise<OperatorContentReportDetail | null>;
   transitionStatus(clientSubmissionId: string, actorId: string, nextStatus: ContentReportStatus, expectedStatus?: ContentReportStatus): Promise<Readonly<{ report: ContentReportView; duplicate: boolean }>>;
 }

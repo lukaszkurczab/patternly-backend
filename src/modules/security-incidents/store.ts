@@ -1,8 +1,12 @@
+import { archiveIsLive, validateReviewDate } from "../retention/review.js";
+import { readOperatorPage, type OperatorPageOptions } from "../retention/operatorPage.js";
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
-import { Timestamp, type Firestore, type Transaction } from "firebase-admin/firestore";
+import { Timestamp, type Firestore, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore";
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
 import { canonicalJson } from "../../infrastructure/identity/canonicalJson.js";
 import { asRecord, asTimestamp } from "../../infrastructure/firestore/values.js";
+import { addUtcCalendarMonths } from "../../infrastructure/time/utcCalendar.js";
+import { RETENTION_POLICY } from "../retention/policy.js";
 import { AUTHORITY_DELIVERY_STATUSES, INCIDENT_CLASSIFICATIONS, INCIDENT_DECISIONS, SUBJECT_DELIVERY_STATUSES, SUBJECT_NOTIFICATION_STATUSES, incidentArtifactExpiry, incidentDeadline, incidentRetentionExpiry, type AuthorityDeliveryStatus, type IncidentClassification, type IncidentDecision, type SecurityIncidentAction, type SubjectDeliveryStatus, type SubjectNotificationStatus } from "./contracts.js";
 
 type EncryptedValue = Readonly<{ ciphertext: string; iv: string; tag: string }>;
@@ -35,10 +39,11 @@ function readSubjectDeliveryStatus(value: unknown): SubjectDeliveryStatus {
 export type SecurityIncidentListItem = Readonly<{
   incidentId: string; classification: IncidentClassification; authorityDecision: IncidentDecision;
   authorityDeliveryStatus: AuthorityDeliveryStatus; subjectDecision: IncidentDecision; subjectNotificationStatus: SubjectNotificationStatus;
-  awarenessAt: string | null; authorityDeadlineAt: string | null; closedAt: string | null; revision: number; legalHold: boolean;
+  awarenessAt: string | null; authorityDeadlineAt: string | null; closedAt: string | null; revision: number; legalHold: boolean; legalHoldReviewBy: string | null;
+  nextReviewAt?: string | null; reviewReason?: string | null;
   nextAction: "acknowledge_awareness" | "classify" | "decide_authority" | "prepare_authority_export" | "record_authority_submission" | "decide_subject" | "prepare_subject_notification" | "resolve_subject_notification_unknown" | "send_subject_notification" | "close" | "none";
 }>;
-export type SecurityIncidentOperatorQueue = Readonly<{ items: readonly SecurityIncidentListItem[]; truncated: boolean }>;
+export type SecurityIncidentOperatorQueue = Readonly<{ items: readonly SecurityIncidentListItem[]; truncated: boolean; nextCursor: string | null }>;
 
 export type SecurityIncidentDetails = SecurityIncidentListItem & Readonly<{
   title: string; details: string; assessment: Readonly<Record<string, unknown>>; createdAt: string; updatedAt: string; authorityExportVersion: number | null; assessmentVersion: number; authorityReason: string | null; subjectReason: string | null;
@@ -54,7 +59,7 @@ export interface SecurityIncidentEmailSender {
 export interface SecurityIncidentStore {
   create(actorId: string, input: Readonly<Record<string, unknown>>, clientIncidentId?: string): Promise<SecurityIncidentDetails>;
   listAdmin(): Promise<readonly SecurityIncidentListItem[]>;
-  listOperatorQueue(actorId: string): Promise<SecurityIncidentOperatorQueue>;
+  listOperatorQueue(actorId: string, options?: OperatorPageOptions): Promise<SecurityIncidentOperatorQueue>;
   readAdmin(incidentId: string, actorId: string): Promise<SecurityIncidentDetails | null>;
   readAuthorityExport(incidentId: string, version: number, actorId: string): Promise<Readonly<{ payload: string; digest: string; version: number }> | null>;
   act(incidentId: string, actorId: string, action: SecurityIncidentAction, sender: SecurityIncidentEmailSender | null): Promise<SecurityIncidentDetails>;
@@ -94,15 +99,26 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
   }
 
   public async listAdmin(): Promise<readonly SecurityIncidentListItem[]> {
-    const snapshot = await this.db.collection(COLLECTIONS.securityIncidents).orderBy("createdAt", "desc").limit(LIST_LIMIT).get();
-    for (const doc of snapshot.docs) assertIncidentEnums(asRecord(doc.data(), "security_incident"));
-    await Promise.all(snapshot.docs.map((doc) => this.materializeReminders(doc.id)));
-    return Object.freeze(snapshot.docs.map((doc) => this.toList(doc.id, asRecord(doc.data(), "security_incident"))));
+    const selected: QueryDocumentSnapshot[] = [];
+    let cursor: QueryDocumentSnapshot | undefined;
+    for (;;) {
+      let query = this.db.collection(COLLECTIONS.securityIncidents).orderBy("createdAt", "desc").limit(LIST_LIMIT);
+      if (cursor) query = query.startAfter(cursor);
+      const page = await query.get();
+      for (const document of page.docs) if (this.isUnexpired(asRecord(document.data(), "security_incident"))) selected.push(document);
+      if (selected.length >= LIST_LIMIT || page.empty || page.size < LIST_LIMIT) break;
+      cursor = page.docs.at(-1);
+    }
+    selected.length = Math.min(selected.length, LIST_LIMIT);
+    for (const doc of selected) assertIncidentEnums(asRecord(doc.data(), "security_incident"));
+    await Promise.all(selected.map((doc) => this.materializeReminders(doc.id)));
+    return Object.freeze(selected.map((doc) => this.toList(doc.id, asRecord(doc.data(), "security_incident"))));
   }
 
-  public async listOperatorQueue(actorId: string): Promise<SecurityIncidentOperatorQueue> {
-    const snapshot = await this.db.collection(COLLECTIONS.securityIncidents).orderBy("createdAt", "desc").limit(LIST_LIMIT + 1).get();
-    const selected = snapshot.docs.slice(0, LIST_LIMIT);
+  public async listOperatorQueue(actorId: string, options?: OperatorPageOptions): Promise<SecurityIncidentOperatorQueue> {
+    const page = await readOperatorPage(this.db.collection(COLLECTIONS.securityIncidents), (data) => this.isUnexpired(data) && (!options?.dueOnly || this.reviewAt(data) !== null && Date.parse(this.reviewAt(data)!) <= Date.now()), options);
+    const selected = page.documents;
+    const truncated = page.truncated;
     for (const document of selected) assertIncidentEnums(asRecord(document.data(), "security_incident"));
     if (selected.length > 0) {
       const occurredAt = new Date();
@@ -115,7 +131,7 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
           const expiry = data.closedAt
             ? data.legalHold === true
               ? null
-              : Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(data.closedAt, "closed_at").toDate()))
+              : Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(data.closedAt, "closed_at").toDate(), data.classification as "breach_confirmed" | "not_a_breach"))
             : undefined;
           this.audit(transaction, document.id, actorId, "operator_queue_read", occurredAt, undefined, undefined, undefined, expiry);
         }
@@ -123,7 +139,8 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
     }
     return Object.freeze({
       items: Object.freeze(selected.map((document) => this.toList(document.id, asRecord(document.data(), "security_incident")))),
-      truncated: snapshot.docs.length > LIST_LIMIT,
+      truncated,
+      nextCursor: page.nextCursor,
     });
   }
 
@@ -131,6 +148,7 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
     const [incident, secret] = await Promise.all([this.incidentRef(incidentId).get(), this.secretRef(incidentId).get()]);
     if (!incident.exists || !secret.exists) return null;
     const data = asRecord(incident.data(), "security_incident");
+    if (!this.isUnexpired(data)) return null;
     assertIncidentEnums(data);
     const decrypted = JSON.parse(this.decrypt(asRecord(asRecord(secret.data(), "security_incident_secret").payload, "security_incident_payload"))) as { title?: unknown; details?: unknown; assessments?: unknown };
     const [notifications, preparedSnapshot, auditDocs] = await Promise.all([
@@ -140,7 +158,10 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
     ]);
     for (const document of notifications.docs) readSubjectDeliveryStatus(asRecord(document.data(), "security_incident_delivery").status);
     await this.materializeReminders(incidentId, true);
-    const prepared = preparedSnapshot?.exists ? JSON.parse(this.decrypt(asRecord(asRecord(preparedSnapshot.data(), "security_incident_snapshot").payload, "security_incident_snapshot_payload"))) as { recipients?: unknown } : null;
+    const preparedData = preparedSnapshot?.exists ? asRecord(preparedSnapshot.data(), "security_incident_snapshot") : null;
+    const prepared = preparedData !== null && this.isChildUnexpired(preparedData, data)
+      ? JSON.parse(this.decrypt(asRecord(preparedData.payload, "security_incident_snapshot_payload"))) as { recipients?: unknown }
+      : null;
     const recipients = Array.isArray(prepared?.recipients) ? prepared.recipients.filter((value): value is string => typeof value === "string") : [];
     const now = new Date();
     await this.db.runTransaction(async (tx) => {
@@ -150,10 +171,10 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
       assertIncidentEnums(freshData);
       const freshNotifications = await tx.get(this.db.collection(COLLECTIONS.securityIncidentDeliveries).where("incidentId", "==", incidentId).limit(500));
       for (const document of freshNotifications.docs) readSubjectDeliveryStatus(asRecord(document.data(), "security_incident_delivery").status);
-      this.audit(tx, incidentId, actorId, "details_read", now, undefined, undefined, undefined, freshData.closedAt ? (freshData.legalHold ? null : Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(freshData.closedAt, "closed_at").toDate()))) : undefined);
+      this.audit(tx, incidentId, actorId, "details_read", now, undefined, undefined, undefined, freshData.closedAt ? (freshData.legalHold ? null : Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(freshData.closedAt, "closed_at").toDate(), freshData.classification as "breach_confirmed" | "not_a_breach"))) : undefined);
     });
     const assessment = this.currentAssessment(decrypted);
-    return Object.freeze({ ...this.toList(incidentId, data), title: typeof decrypted.title === "string" ? decrypted.title : "", details: typeof assessment.details === "string" ? assessment.details : "", assessment: Object.freeze(assessment), createdAt: asTimestamp(data.createdAt, "created_at").toDate().toISOString(), updatedAt: asTimestamp(data.updatedAt, "updated_at").toDate().toISOString(), authorityExportVersion: typeof data.authorityExportVersion === "number" ? data.authorityExportVersion : null, assessmentVersion: Number(data.assessmentVersion), authorityReason: this.decryptOptional(data.authorityReason), subjectReason: this.decryptOptional(data.subjectReason), authoritySubmissionReference: this.decryptOptional(data.authoritySubmissionReference), preparedRecipients: Object.freeze(recipients.map((email) => Object.freeze({ recipientPseudonym: this.recipientPseudonym(incidentId, email), snapshotVersion: Number(data.subjectNotificationVersion) }))), auditHistory: Object.freeze(auditDocs.docs.map((doc) => { const item = asRecord(doc.data(), "audit"); return Object.freeze({ event: String(item.event), actorPseudonym: String(item.actorPseudonym), at: asTimestamp(item.at, "audit_at").toDate().toISOString(), revision: typeof item.revision === "number" ? item.revision : null, assessmentVersion: typeof item.assessmentVersion === "number" ? item.assessmentVersion : null, snapshot: item.snapshot && typeof item.snapshot === "object" ? asRecord(item.snapshot, "audit_snapshot") : null }); })), subjectNotifications: Object.freeze(notifications.docs.map((doc) => {
+    return Object.freeze({ ...this.toList(incidentId, data), title: typeof decrypted.title === "string" ? decrypted.title : "", details: typeof assessment.details === "string" ? assessment.details : "", assessment: Object.freeze(assessment), createdAt: asTimestamp(data.createdAt, "created_at").toDate().toISOString(), updatedAt: asTimestamp(data.updatedAt, "updated_at").toDate().toISOString(), authorityExportVersion: typeof data.authorityExportVersion === "number" ? data.authorityExportVersion : null, assessmentVersion: Number(data.assessmentVersion), authorityReason: this.decryptOptional(data.authorityReason), subjectReason: this.decryptOptional(data.subjectReason), authoritySubmissionReference: this.decryptOptional(data.authoritySubmissionReference), preparedRecipients: Object.freeze(recipients.map((email) => Object.freeze({ recipientPseudonym: this.recipientPseudonym(incidentId, email), snapshotVersion: Number(data.subjectNotificationVersion) }))), auditHistory: Object.freeze(auditDocs.docs.filter((doc) => this.isChildUnexpired(asRecord(doc.data(), "security_incident_audit"), data)).map((doc) => { const item = asRecord(doc.data(), "audit"); return Object.freeze({ event: String(item.event), actorPseudonym: String(item.actorPseudonym), at: asTimestamp(item.at, "audit_at").toDate().toISOString(), revision: typeof item.revision === "number" ? item.revision : null, assessmentVersion: typeof item.assessmentVersion === "number" ? item.assessmentVersion : null, snapshot: item.snapshot && typeof item.snapshot === "object" ? asRecord(item.snapshot, "audit_snapshot") : null }); })), subjectNotifications: Object.freeze(notifications.docs.filter((doc) => this.isChildUnexpired(asRecord(doc.data(), "security_incident_delivery"), data)).map((doc) => {
       const value = asRecord(doc.data(), "security_incident_delivery");
       return Object.freeze({ recipientPseudonym: String(value.recipientPseudonym), snapshotVersion: Number(value.snapshotVersion), status: readSubjectDeliveryStatus(value.status), deliveryId: doc.id });
     })) });
@@ -163,8 +184,9 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
     const [snapshot, incident] = await Promise.all([this.artifactRef(`authority_${incidentId}_${version}`).get(), this.incidentRef(incidentId).get()]);
     if (!snapshot.exists || !incident.exists) return null;
     const data = asRecord(snapshot.data(), "security_incident_export");
-    if (data.incidentId !== incidentId || data.kind !== "authority_export") return null;
     const incidentData = asRecord(incident.data(), "incident");
+    if (data.incidentId !== incidentId || data.kind !== "authority_export" || !this.isUnexpired(incidentData) || !this.isChildUnexpired(data, incidentData)) return null;
+    if (!this.isUnexpired(incidentData) || (data.expiresAt instanceof Timestamp && data.expiresAt.toMillis() <= Date.now())) return null;
     assertIncidentEnums(incidentData);
     const payload = this.decrypt(asRecord(data.payload, "security_incident_export_payload"));
     await this.db.runTransaction(async (tx) => {
@@ -172,7 +194,7 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
       if (!freshIncident.exists) throw new Error("security_incident_not_found");
       const freshData = asRecord(freshIncident.data(), "security_incident");
       assertIncidentEnums(freshData);
-      this.audit(tx, incidentId, actorId, "authority_export_read", new Date(), undefined, undefined, undefined, freshData.closedAt ? (freshData.legalHold ? null : Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(freshData.closedAt, "closed_at").toDate()))) : undefined);
+      this.audit(tx, incidentId, actorId, "authority_export_read", new Date(), undefined, undefined, undefined, freshData.closedAt ? (freshData.legalHold ? null : Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(freshData.closedAt, "closed_at").toDate(), freshData.classification as "breach_confirmed" | "not_a_breach"))) : undefined);
     });
     return Object.freeze({ payload, digest: String(data.digest), version });
   }
@@ -194,16 +216,23 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
     const existingDeliveries = await tx.get(this.db.collection(COLLECTIONS.securityIncidentDeliveries).where("incidentId", "==", incidentId).limit(500));
     for (const document of existingDeliveries.docs) readSubjectDeliveryStatus(asRecord(document.data(), "security_incident_delivery").status);
     if (Number(data.revision) !== action.expectedRevision) throw new Error("security_incident_revision_conflict");
-    if (data.closedAt && action.action !== "set_legal_hold" && action.action !== "release_legal_hold") throw new Error("security_incident_closed");
+    if (!this.isUnexpired(data)) throw new Error("security_incident_expired");
+    if (data.closedAt && action.action !== "set_legal_hold" && action.action !== "release_legal_hold" && action.action !== "review_retention") throw new Error("security_incident_closed");
     const now = new Date();
     const update: Record<string, unknown> = { revision: action.expectedRevision + 1, updatedAt: Timestamp.fromDate(now) };
     const secretData = asRecord(secretSnapshot.data(), "security_incident_secret");
     const decrypted = JSON.parse(this.decrypt(asRecord(secretData.payload, "security_incident_payload"))) as Record<string, unknown>;
+    let minimizedClosedPayload: EncryptedValue | null = null;
     const classification = data.classification;
     const authorityDecision = data.authorityDecision;
     const subjectDecision = data.subjectDecision;
     const event = action.action;
-    if (action.action === "acknowledge_awareness") {
+    if (action.action === "review_retention") {
+      if (!data.closedAt && !data.legalHold) throw new Error("security_incident_review_unavailable");
+      const next = validateReviewDate(action.nextReviewAt, now, data.legalHold ? RETENTION_POLICY.disputeReviewMonths : RETENTION_POLICY.breachReviewMonths);
+      update.nextReviewAt = next; update.reviewReason = action.reason; update.retentionReviewedAt = Timestamp.fromDate(now);
+      if (data.legalHold) update.legalHoldReviewBy = next;
+    } else if (action.action === "acknowledge_awareness") {
       if (data.awarenessAt) throw new Error("security_incident_awareness_immutable");
       update.awarenessAt = Timestamp.fromDate(now); update.authorityDeadlineAt = Timestamp.fromDate(incidentDeadline(now));
     } else if (action.action === "classify") {
@@ -251,11 +280,13 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
       update.subjectNotificationStatus = action.outcome;
     } else if (action.action === "set_legal_hold") {
       if (data.legalHold) throw new Error("security_incident_hold_invalid");
-      update.legalHold = true; update.legalHoldReason = this.encrypt(action.reason); update.expiresAt = null;
+      const reviewBy = new Date(action.reviewBy);
+      if (!Number.isFinite(reviewBy.getTime()) || reviewBy <= now || reviewBy > addUtcCalendarMonths(now, RETENTION_POLICY.disputeReviewMonths)) throw new Error("security_incident_hold_review_invalid");
+      update.legalHold = true; update.legalHoldReason = this.encrypt(action.reason); update.legalHoldReviewBy = Timestamp.fromDate(reviewBy); update.expiresAt = null;
       await this.setArtifactsHold(tx, incidentId, true, now, data.closedAt ? asTimestamp(data.closedAt, "closed_at").toDate() : null);
     } else if (action.action === "release_legal_hold") {
       if (!data.legalHold) throw new Error("security_incident_hold_invalid");
-      update.legalHold = false; update.legalHoldReleaseReason = this.encrypt(action.reason); update.expiresAt = data.closedAt ? Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(data.closedAt, "closed_at").toDate())) : null;
+      update.legalHold = false; update.legalHoldReviewBy = null; update.legalHoldReleaseReason = this.encrypt(action.reason); update.expiresAt = data.closedAt ? Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(data.closedAt, "closed_at").toDate(), classification as "breach_confirmed" | "not_a_breach")) : null;
       await this.setArtifactsHold(tx, incidentId, false, now, data.closedAt ? asTimestamp(data.closedAt, "closed_at").toDate() : null);
     } else if (action.action === "close") {
       if (!data.awarenessAt || classification === "triage" || authorityDecision === "undecided" || subjectDecision === "undecided" || typeof decrypted.containedAt !== "string" || typeof decrypted.containment !== "string" || typeof decrypted.remediation !== "string" || typeof decrypted.postmortem !== "string") throw new Error("security_incident_close_incomplete");
@@ -270,11 +301,26 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
         subjectComplete = count > 0 && deliveries.docs.length === count && statuses.every((status) => status === "sent");
       }
       if (!authorityComplete || !subjectComplete) throw new Error("security_incident_close_incomplete");
-      update.closedAt = Timestamp.fromDate(now); if (!data.legalHold) update.expiresAt = Timestamp.fromDate(incidentRetentionExpiry(now));
-      await this.setRetentionOnClose(tx, incidentId, now, data.legalHold === true);
+      update.closureReason = this.encrypt(action.reason);
+      if (classification === "not_a_breach" && !data.legalHold) {
+        const minimal = {
+          title: typeof decrypted.title === "string" ? decrypted.title.slice(0, 200) : "Incident",
+          details: typeof decrypted.details === "string" ? decrypted.details.slice(0, 1_000) : "",
+          remediation: typeof decrypted.remediation === "string" ? decrypted.remediation.slice(0, 1_000) : "",
+          closureReason: action.reason,
+        };
+        minimizedClosedPayload = this.encrypt(JSON.stringify(minimal));
+      }
+      update.closedAt = Timestamp.fromDate(now); if (!data.legalHold) update.expiresAt = Timestamp.fromDate(incidentRetentionExpiry(now, classification as "breach_confirmed" | "not_a_breach"));
+      await this.setRetentionOnClose(tx, incidentId, now, data.legalHold === true, classification as "breach_confirmed" | "not_a_breach");
+
     }
+    if (classification === "not_a_breach" && data.closedAt && (action.action === "release_legal_hold" || action.action === "review_retention" && !data.legalHold)) {
+      minimizedClosedPayload = this.encrypt(JSON.stringify({ title: String(decrypted.title ?? "").slice(0, 200), details: String(decrypted.details ?? "").slice(0, 1000), remediation: String(decrypted.remediation ?? "").slice(0, 1000), closureReason: this.decryptOptional(data.closureReason) ?? "" }));
+    }
+    if (minimizedClosedPayload) tx.set(this.secretRef(incidentId), { payload: minimizedClosedPayload }, { merge: true });
     tx.set(ref, update, { merge: true });
-    const auditExpiry = action.action === "close" ? (data.legalHold ? null : Timestamp.fromDate(incidentRetentionExpiry(now))) : data.closedAt ? ((action.action === "set_legal_hold") ? null : Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(data.closedAt, "closed_at").toDate()))) : undefined;
+    const auditExpiry = action.action === "close" ? (data.legalHold ? null : Timestamp.fromDate(incidentRetentionExpiry(now, classification as "breach_confirmed" | "not_a_breach"))) : data.closedAt ? ((action.action === "set_legal_hold") ? null : Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(data.closedAt, "closed_at").toDate(), classification as "breach_confirmed" | "not_a_breach"))) : undefined;
     this.audit(tx, incidentId, actorId, event, now, action.expectedRevision + 1, Number(data.assessmentVersion), { classification: update.classification ?? data.classification, authorityDecision: update.authorityDecision ?? data.authorityDecision, subjectDecision: update.subjectDecision ?? data.subjectDecision }, auditExpiry);
   }
 
@@ -377,21 +423,62 @@ export class FirestoreSecurityIncidentStore implements SecurityIncidentStore {
     const groups = [COLLECTIONS.securityIncidentArtifacts, COLLECTIONS.securityIncidentDeliveries, COLLECTIONS.securityIncidentReminders, COLLECTIONS.securityIncidentDeliveryKeys];
     const [snapshots, ...queries] = await Promise.all([tx.getAll(this.secretRef(incidentId)), ...groups.map((collection) => tx.get(this.db.collection(collection).where("incidentId", "==", incidentId))), tx.get(this.incidentRef(incidentId).collection("audit"))]);
     const audits = queries.pop()!;
-    for (const snapshot of snapshots) if (snapshot.exists) { const raw = asRecord(snapshot.data(), "secret"); tx.set(snapshot.ref, { expiresAt: hold ? null : (raw.closedAt ? Timestamp.fromDate(incidentRetentionExpiry(asTimestamp(raw.closedAt, "closed_at").toDate())) : null) }, { merge: true }); }
-    for (const query of queries) for (const document of query.docs) { const raw = asRecord(document.data(), "incident_artifact"); const created = raw.createdAt ? asTimestamp(raw.createdAt, "created_at").toDate() : now; tx.set(document.ref, { expiresAt: hold ? null : Timestamp.fromDate(incidentArtifactExpiry(created)) }, { merge: true }); }
-    for (const document of audits.docs) tx.set(document.ref, { ...(closedAt ? { closedAt: Timestamp.fromDate(closedAt) } : {}), expiresAt: hold ? null : (closedAt ? Timestamp.fromDate(incidentRetentionExpiry(closedAt)) : null) }, { merge: true });
+    const incident = asRecord((await tx.get(this.incidentRef(incidentId))).data(), "security_incident");
+    const classification = incident.classification as "breach_confirmed" | "not_a_breach";
+    for (const snapshot of snapshots) if (snapshot.exists) { tx.set(snapshot.ref, { expiresAt: hold ? null : (closedAt ? Timestamp.fromDate(incidentRetentionExpiry(closedAt, classification)) : null) }, { merge: true }); }
+    for (const query of queries) for (const document of query.docs) {
+      const raw = asRecord(document.data(), "incident_artifact");
+      const neededBreachEvidence = classification === "breach_confirmed" && (raw.kind === "authority_submission_evidence" || raw.kind === "subject_notification_snapshot");
+      const expiresAt = hold ? null : closedAt
+        ? Timestamp.fromDate(neededBreachEvidence ? incidentRetentionExpiry(closedAt, classification) : incidentArtifactExpiry(closedAt))
+        : (raw.expiresAt ?? null);
+      tx.set(document.ref, { expiresAt }, { merge: true });
+    }
+    for (const document of audits.docs) tx.set(document.ref, { ...(closedAt ? { closedAt: Timestamp.fromDate(closedAt) } : {}), expiresAt: hold ? null : (closedAt ? Timestamp.fromDate(incidentRetentionExpiry(closedAt, classification)) : null) }, { merge: true });
   }
 
-  private async setRetentionOnClose(tx: Transaction, incidentId: string, closedAt: Date, hold: boolean): Promise<void> {
-    const expiry = hold ? null : Timestamp.fromDate(incidentRetentionExpiry(closedAt));
+  private async setRetentionOnClose(tx: Transaction, incidentId: string, closedAt: Date, hold: boolean, classification: "breach_confirmed" | "not_a_breach"): Promise<void> {
+    const expiry = hold ? null : Timestamp.fromDate(incidentRetentionExpiry(closedAt, classification));
     const audits = await tx.get(this.incidentRef(incidentId).collection("audit"));
+    const artifacts = await tx.get(this.db.collection(COLLECTIONS.securityIncidentArtifacts).where("incidentId", "==", incidentId));
+    const deliveries = await tx.get(this.db.collection(COLLECTIONS.securityIncidentDeliveries).where("incidentId", "==", incidentId));
+    const reminders = await tx.get(this.db.collection(COLLECTIONS.securityIncidentReminders).where("incidentId", "==", incidentId));
+    const keys = await tx.get(this.db.collection(COLLECTIONS.securityIncidentDeliveryKeys).where("incidentId", "==", incidentId));
     tx.set(this.secretRef(incidentId), { closedAt: Timestamp.fromDate(closedAt), expiresAt: expiry }, { merge: true });
     for (const document of audits.docs) tx.set(document.ref, { closedAt: Timestamp.fromDate(closedAt), expiresAt: expiry }, { merge: true });
+    for (const document of artifacts.docs) {
+      const artifact = asRecord(document.data(), "incident_artifact");
+      const necessaryNotificationEvidence = classification === "breach_confirmed" && (artifact.kind === "authority_submission_evidence" || artifact.kind === "subject_notification_snapshot");
+      const artifactExpiry = necessaryNotificationEvidence ? expiry : (hold ? null : Timestamp.fromDate(incidentArtifactExpiry(closedAt)));
+      tx.set(document.ref, { closedAt: Timestamp.fromDate(closedAt), expiresAt: artifactExpiry }, { merge: true });
+    }
+    for (const collection of [deliveries, reminders, keys]) for (const document of collection.docs) tx.set(document.ref, { closedAt: Timestamp.fromDate(closedAt), expiresAt: hold ? null : Timestamp.fromDate(incidentArtifactExpiry(closedAt)) }, { merge: true });
   }
 
   private currentAssessment(value: Record<string, unknown>): Record<string, unknown> { const { assessments: _assessments, ...current } = value; return current; }
+  private isUnexpired(data: Record<string, unknown>): boolean {
+    if (data.closedAt && data.classification !== "breach_confirmed" && data.classification !== "not_a_breach") return false;
+    return archiveIsLive(data, data.classification === "breach_confirmed" ? 12 * RETENTION_POLICY.breachDocumentationYears : RETENTION_POLICY.nonBreachIncidentMonths);
+  }
+  private isChildUnexpired(child: Record<string, unknown>, incident: Record<string, unknown>): boolean {
+    if (!this.isUnexpired(incident)) return false;
+    if (incident.legalHold === true) return child.expiresAt == null || child.expiresAt instanceof Timestamp && child.expiresAt.toMillis() > Date.now();
+    if (!incident.closedAt) return child.expiresAt == null || child.expiresAt instanceof Timestamp && child.expiresAt.toMillis() > Date.now();
+    if (!(child.expiresAt instanceof Timestamp)) return false;
+    const closedAt = asTimestamp(incident.closedAt, "closed_at").toDate();
+    const necessary = typeof child.event === "string" && child.at instanceof Timestamp || incident.classification === "breach_confirmed" && ["authority_submission_evidence", "subject_notification_snapshot"].includes(String(child.kind));
+    const cap = necessary ? incidentRetentionExpiry(closedAt, incident.classification as "breach_confirmed" | "not_a_breach") : incidentArtifactExpiry(closedAt);
+    return Math.min(child.expiresAt.toMillis(), cap.getTime()) > Date.now();
+  }
+  private reviewAt(data: Record<string, unknown>): string | null {
+    const dates = [data.legalHold ? data.legalHoldReviewBy : null, data.nextReviewAt].filter((date): date is Timestamp => date instanceof Timestamp);
+    if (dates.length) return new Date(Math.min(...dates.map((date) => date.toMillis()))).toISOString();
+    if (data.legalHold) return new Date(0).toISOString();
+    return data.classification === "breach_confirmed" && data.closedAt instanceof Timestamp
+      ? addUtcCalendarMonths(data.closedAt.toDate(), RETENTION_POLICY.breachReviewMonths).toISOString() : null;
+  }
   private nextAction(data: Record<string, unknown>): SecurityIncidentListItem["nextAction"] { if (data.closedAt) return "none"; if (!data.awarenessAt) return "acknowledge_awareness"; if (data.classification === "triage") return "classify"; if (data.authorityDecision === "undecided") return "decide_authority"; if (data.authorityDecision === "required" && !data.authorityExportVersion) return "prepare_authority_export"; if (data.authorityDecision === "required" && data.authorityDeliveryStatus === "not_started") return "record_authority_submission"; if (data.subjectDecision === "undecided") return "decide_subject"; if (data.subjectDecision === "required" && !data.subjectNotificationVersion) return "prepare_subject_notification"; if (data.subjectNotificationStatus === "unknown") return "resolve_subject_notification_unknown"; if (data.subjectDecision === "required" && data.subjectNotificationStatus !== "sent") return "send_subject_notification"; return "close"; }
-  private toList(incidentId: string, data: Record<string, unknown>): SecurityIncidentListItem { assertIncidentEnums(data); return Object.freeze({ incidentId, classification: data.classification, authorityDecision: data.authorityDecision, authorityDeliveryStatus: data.authorityDeliveryStatus, subjectDecision: data.subjectDecision, subjectNotificationStatus: data.subjectNotificationStatus, awarenessAt: data.awarenessAt ? asTimestamp(data.awarenessAt, "awareness_at").toDate().toISOString() : null, authorityDeadlineAt: data.authorityDeadlineAt ? asTimestamp(data.authorityDeadlineAt, "authority_deadline").toDate().toISOString() : null, closedAt: data.closedAt ? asTimestamp(data.closedAt, "closed_at").toDate().toISOString() : null, revision: Number(data.revision), legalHold: data.legalHold === true, nextAction: this.nextAction(data) }); }
+  private toList(incidentId: string, data: Record<string, unknown>): SecurityIncidentListItem { assertIncidentEnums(data); return Object.freeze({ incidentId, classification: data.classification, authorityDecision: data.authorityDecision, authorityDeliveryStatus: data.authorityDeliveryStatus, subjectDecision: data.subjectDecision, subjectNotificationStatus: data.subjectNotificationStatus, awarenessAt: data.awarenessAt ? asTimestamp(data.awarenessAt, "awareness_at").toDate().toISOString() : null, authorityDeadlineAt: data.authorityDeadlineAt ? asTimestamp(data.authorityDeadlineAt, "authority_deadline").toDate().toISOString() : null, closedAt: data.closedAt ? asTimestamp(data.closedAt, "closed_at").toDate().toISOString() : null, revision: Number(data.revision), legalHold: data.legalHold === true, legalHoldReviewBy: data.legalHoldReviewBy ? asTimestamp(data.legalHoldReviewBy, "legal_hold_review_by").toDate().toISOString() : null, nextReviewAt: this.reviewAt(data), reviewReason: typeof data.reviewReason === "string" ? data.reviewReason : null, nextAction: this.nextAction(data) }); }
   private encrypt(value: string): EncryptedValue { const iv = randomBytes(12); const cipher = createCipheriv("aes-256-gcm", this.key, iv); const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]); return Object.freeze({ ciphertext: ciphertext.toString("base64"), iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64") }); }
   private decrypt(value: Record<string, unknown>): string { const decipher = createDecipheriv("aes-256-gcm", this.key, Buffer.from(String(value.iv), "base64")); decipher.setAuthTag(Buffer.from(String(value.tag), "base64")); return Buffer.concat([decipher.update(Buffer.from(String(value.ciphertext), "base64")), decipher.final()]).toString("utf8"); }
   private decryptOptional(value: unknown): string | null { return value && typeof value === "object" ? this.decrypt(asRecord(value, "encrypted")) : null; }

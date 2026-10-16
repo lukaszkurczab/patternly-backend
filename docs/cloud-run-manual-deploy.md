@@ -20,7 +20,7 @@ Cloud Run service configuration:
   remains a release gate until the real issuer, audience, JWKS endpoint and
   allowlist are verified;
 - `REPORT_RATE_LIMIT_HASH_SECRET`;
-- Google Workspace SMTP settings for in-app guest privacy codes
+- Brevo SMTP settings for application mail (including guest privacy codes)
   `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_FROM_EMAIL`,
   `SMTP_FROM_NAME` and optional `SMTP_REPLY_TO`;
 - `SMTP_PASSWORD` — a Secret Manager value available only to the Cloud Run
@@ -87,9 +87,19 @@ for the index to become ready before enabling the new panel. Existing
 collection-scope indexes are preserved. See the
 [Firestore index documentation](https://firebase.google.com/docs/firestore/query-data/index-overview#collection_group_scope).
 
-Security-incident notices use the same Google Workspace SMTP Relay connection
+Security-incident notices use the same Brevo SMTP connection
 but a separate backend mail purpose. `SMTP_FROM_EMAIL` and `SMTP_REPLY_TO`
 must be real monitored addresses: the incident sender fails closed for known
 placeholders. UODO reporting remains manual; export the versioned payload and
 record the channel/reference/evidence after submitting through the authority's
 portal.
+
+Patternly uses the existing Brevo relay at `smtp-relay.brevo.com:587` with
+STARTTLS, sender name `Patternly`, and `contact@patternly.it` for both
+`SMTP_FROM_EMAIL` and `SMTP_REPLY_TO`. The login comes from the connected Brevo
+account; retain the existing Secret Manager reference for `SMTP_PASSWORD`.
+Human mail is separate: OVH Zimbra receives `contact@patternly.it` and its
+`support@patternly.it` / `privacy@patternly.it` aliases and sends operator replies.
+See the [domain/mail acceptance and limits](../../patternly/docs/specs/engineering/company-domain-mail.md).
+An SMTP delivery probe does not accept all backend mail routes or a production
+release; those remain ODK-E2E-086.

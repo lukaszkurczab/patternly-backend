@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "status": "desired_unapplied",
+  "buckets": [
+    { "id": "_Default", "purpose": "ordinary_application_and_operational_logs", "retentionDays": 30 },
+    { "id": "patternly-security", "purpose": "selected_security_review_logs", "retentionDays": 90 }
+  ]
+}

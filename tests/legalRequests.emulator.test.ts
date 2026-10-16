@@ -27,7 +27,8 @@ test("consumer case answer becomes final only after durable delivery and closure
   const answered = await store.transitionAdmin(created.requestId, "operator-raw-id", { action: "answer", expectedRevision: reviewing.revision, response: "Reklamacja uznana." }, sender);
   assert.equal(answered.status, "answered");
   assert.equal(answered.revision, 3);
-  const closed = await store.transitionAdmin(created.requestId, "operator-raw-id", { action: "close", expectedRevision: answered.revision }, sender);
+  await assert.rejects(store.transitionAdmin(created.requestId, "operator-raw-id", { action: "close", expectedRevision: answered.revision, disposition: { kind: "minimal_archive", reason: "No claim" } }, sender), /legal_request_claim_disposition_required/u);
+  const closed = await store.transitionAdmin(created.requestId, "operator-raw-id", { action: "close", expectedRevision: answered.revision, disposition: { kind: "claim", necessaryFields: ["email", "narrative", "transactionId", "response"], retentionUntil: "2032-02-01T00:00:00.000Z", basis: "Applicable claim limitation period", reason: "Evidence remains necessary for this complaint" } }, sender);
   assert.equal(closed.status, "closed");
   assert.ok(closed.retentionUntil);
   const document = await firestore().collection("legalRequests").doc(created.requestId).get();

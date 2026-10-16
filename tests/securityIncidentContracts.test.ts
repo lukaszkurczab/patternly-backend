@@ -12,7 +12,7 @@ test("security incident contract requires an explicit revision for every mutatio
 test("security incident calendar retention preserves leap-year legal dates", () => {
   const leap = new Date("2024-02-29T12:30:00.000Z");
   assert.equal(addUtcCalendarYears(leap, 1).toISOString(), "2025-02-28T12:30:00.000Z");
-  assert.equal(incidentRetentionExpiry(leap).toISOString(), "2030-02-28T12:30:00.000Z");
+  assert.equal(incidentRetentionExpiry(leap, "breach_confirmed").toISOString(), "2030-02-28T12:30:00.000Z");
 });
 
 test("security incident awareness deadline is immutable UTC +72 hours", () => {
@@ -20,7 +20,7 @@ test("security incident awareness deadline is immutable UTC +72 hours", () => {
 });
 
 test("OpenAPI exposes every runtime security-incident action and exact export route", () => {
-  assert.equal(securityIncidentActionSchema.options.length, 14);
+  assert.equal(securityIncidentActionSchema.options.length, 15);
   const schema = OPENAPI_DOCUMENT.components.schemas.SecurityIncidentAction as { oneOf?: readonly { required?: readonly string[]; additionalProperties?: unknown; properties?: { action?: { const?: string } } }[] };
   assert.equal(schema.oneOf?.length, securityIncidentActionSchema.options.length);
   for (const runtime of securityIncidentActionSchema.options) {

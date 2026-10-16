@@ -1,14 +1,14 @@
+import { readOperatorPage, type OperatorPageOptions } from "../retention/operatorPage.js";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import type { Firestore } from "firebase-admin/firestore";
 import { Timestamp } from "firebase-admin/firestore";
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
 import { asIsoString, asRecord, asTimestamp, now } from "../../infrastructure/firestore/values.js";
 import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
+import { RETENTION_POLICY } from "../retention/policy.js";
 import { projectContentReportContext, type ContentReportStatus, type ContentReportStore, type ContentReportView, type CreateContentReport, type OperatorContentReportDetail, type OperatorContentReportItem } from "./contracts.js";
 
-const REPORT_RETENTION_DAYS = 30;
-const IDENTIFIABLE_RETENTION_DAYS = 180;
-const OPERATOR_QUEUE_LIMIT = 100;
+const REPORT_RETENTION_DAYS = RETENTION_POLICY.contentReportDays;
 
 function toView(row: Record<string, unknown>): ContentReportView {
   if (typeof row.id !== "string" || typeof row.clientSubmissionId !== "string" || typeof row.trackId !== "string" || typeof row.contentVersion !== "string" || typeof row.itemId !== "string" || typeof row.reason !== "string" || typeof row.description !== "string" || typeof row.status !== "string" || typeof row.context !== "object" || row.context === null || Array.isArray(row.context)) throw new Error("content_report_record_invalid");
@@ -37,7 +37,6 @@ export class FirestoreContentReportStore implements ContentReportStore {
   public constructor(private readonly db: Firestore, private readonly options: Readonly<{ rateLimitHashSecret: string; rateLimitMax: number; rateLimitWindowSeconds: number }>) {}
 
   public async create(userId: string | undefined, expectedAuthorizationGeneration: number | undefined, input: CreateContentReport, context: Readonly<{ rateLimitKey: string }>): Promise<Readonly<{ report: ContentReportView; duplicate: boolean }>> {
-    if (input.linkAccount && !userId) throw new Error("account_link_requires_authentication");
     const reportRef = this.db.collection(COLLECTIONS.contentReports).doc(input.clientSubmissionId);
     const rateLimitRef = this.db.collection(COLLECTIONS.rateLimitBuckets).doc(this.rateLimitDocumentId(context.rateLimitKey));
     const reportId = randomUUID();
@@ -58,9 +57,7 @@ export class FirestoreContentReportStore implements ContentReportStore {
       if (withinWindow && bucketCount >= this.options.rateLimitMax) throw new Error("report_rate_limited");
       const nextCount = withinWindow ? bucketCount + 1 : 1;
       const nextWindowStart = withinWindow ? bucketStart : createdAt;
-      const hasAccountLink = input.linkAccount && userId !== undefined;
-      const hasContactLink = input.contactEmail !== undefined;
-      const expiryMillis = createdAt.toMillis() + (hasAccountLink || hasContactLink ? IDENTIFIABLE_RETENTION_DAYS : REPORT_RETENTION_DAYS) * 86_400_000;
+      const expiryMillis = createdAt.toMillis() + REPORT_RETENTION_DAYS * 86_400_000;
       transaction.set(rateLimitRef, { windowStartedAt: nextWindowStart, count: nextCount, expiresAt: Timestamp.fromMillis(createdAt.toMillis() + windowMillis) });
       transaction.create(reportRef, {
         id: reportId,
@@ -75,22 +72,21 @@ export class FirestoreContentReportStore implements ContentReportStore {
         createdAt,
         updatedAt: createdAt,
         expiresAt: Timestamp.fromMillis(expiryMillis),
-        ...(hasAccountLink ? { accountId: userId } : {}),
-        ...(hasContactLink ? { contactEmail: input.contactEmail } : {}),
       });
-      return { report: toView({ ...input, id: reportId, status: "open", createdAt, updatedAt: createdAt, ...(hasAccountLink ? { accountId: userId } : {}), ...(hasContactLink ? { contactEmail: input.contactEmail } : {}) }), duplicate: false };
+      return { report: toView({ ...input, id: reportId, status: "open", createdAt, updatedAt: createdAt }), duplicate: false };
     });
     return Object.freeze(report);
   }
 
   public async listQueue(): Promise<readonly ContentReportView[]> {
     const rows = await this.db.collection(COLLECTIONS.contentReports).where("status", "in", ["open", "in_review", "resolved"]).get();
-    return Object.freeze(rows.docs.map((row) => toView(asRecord(row.data(), "content_report"))).sort((left, right) => right.createdAt.localeCompare(left.createdAt)));
+    return Object.freeze(rows.docs.filter((row) => !isExpired(asRecord(row.data(), "content_report"))).map((row) => toView(asRecord(row.data(), "content_report"))).sort((left, right) => right.createdAt.localeCompare(left.createdAt)));
   }
 
-  public async listOperatorQueue(actorId: string): Promise<Readonly<{ items: readonly OperatorContentReportItem[]; truncated: boolean }>> {
-    const snapshot = await this.db.collection(COLLECTIONS.contentReports).orderBy("createdAt", "desc").limit(OPERATOR_QUEUE_LIMIT + 1).get();
-    const selected = snapshot.docs.slice(0, OPERATOR_QUEUE_LIMIT);
+  public async listOperatorQueue(actorId: string, options?: OperatorPageOptions): Promise<Readonly<{ items: readonly OperatorContentReportItem[]; truncated: boolean; nextCursor: string | null }>> {
+    const page = await readOperatorPage(this.db.collection(COLLECTIONS.contentReports), (data) => !isExpired(data) && (!options?.dueOnly || data.status !== "closed"), options);
+    const selected = page.documents;
+    const truncated = page.truncated;
     const at = now();
     if (selected.length > 0) {
       const batch = this.db.batch();
@@ -107,7 +103,8 @@ export class FirestoreContentReportStore implements ContentReportStore {
     }
     return Object.freeze({
       items: Object.freeze(selected.map((document) => this.toOperatorItem(toView(asRecord(document.data(), "content_report"))))),
-      truncated: snapshot.docs.length > OPERATOR_QUEUE_LIMIT,
+      truncated,
+      nextCursor: page.nextCursor,
     });
   }
 
@@ -116,6 +113,7 @@ export class FirestoreContentReportStore implements ContentReportStore {
     const snapshot = await ref.get();
     if (!snapshot.exists) return null;
     const data = asRecord(snapshot.data(), "content_report");
+    if (isExpired(data)) return null;
     const report = toView(data);
     await ref.collection(COLLECTIONS.contentReportAudit).doc(randomUUID()).create({
       event: "operator_details_read",
@@ -134,6 +132,7 @@ export class FirestoreContentReportStore implements ContentReportStore {
       const snapshot = await transaction.get(reportRef);
       if (!snapshot.exists) throw new Error("content_report_not_found");
       const row = asRecord(snapshot.data(), "content_report");
+      if (isExpired(row)) throw new Error("content_report_expired");
       const current = toView(row);
       const expiresAt = asTimestamp(row.expiresAt, "content_report_expiry");
       if (expectedStatus !== undefined && current.status !== expectedStatus) throw new Error("content_report_status_conflict");
@@ -185,4 +184,11 @@ export class FirestoreContentReportStore implements ContentReportStore {
 
 function isAllowedTransition(current: ContentReportStatus, next: ContentReportStatus): boolean {
   return (current === "open" && next === "in_review") || (current === "in_review" && next === "resolved") || (current === "resolved" && next === "closed");
+}
+
+function isExpired(row: Record<string, unknown>): boolean {
+  const providerExpiry = row.expiresAt instanceof Timestamp ? row.expiresAt.toMillis() : Number.POSITIVE_INFINITY;
+  const createdAt = row.createdAt instanceof Timestamp ? row.createdAt.toMillis() : Number.NaN;
+  const policyExpiry = Number.isFinite(createdAt) ? createdAt + REPORT_RETENTION_DAYS * 24 * 60 * 60 * 1_000 : Number.POSITIVE_INFINITY;
+  return Math.min(providerExpiry, policyExpiry) <= Date.now();
 }

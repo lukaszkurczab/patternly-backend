@@ -12,10 +12,10 @@ time-limited record must fail closed when its `expiresAt` is in the past.
 | `syncOperations` | Created only after a confirmed adoption is materialized | immutable `createdAt` | 30 days | TTL | application TTL writer; user recursive lifecycle owns descendant deletion |
 | `syncMutations` | Created only for an applied batch/adoption mutation; conflicts create none | immutable `createdAt` | 30 days | TTL | application TTL writer; user recursive lifecycle owns descendant deletion; [legacy receipt resolution](sync-mutation-receipts.md) never deletes/backfills an incomplete row |
 | `syncBatches` | Immutable successful batch result, including verified duplicates | immutable `createdAt` | 30 days | TTL | application writer; replay does not renew expiry |
-| `contentReports` | Set once at creation; status/unlink does not change it | immutable `createdAt` | 30 days anonymous; 180 days with `accountId` or `contactEmail` at creation | TTL | no automatic backfill |
+| `contentReports` | Set once at creation; status/unlink does not change it | immutable `createdAt` | 30 days for every report | TTL + logical read expiry | legacy linked rows are logically capped at 30 days; provider TTL may remain later until an approved backfill |
 | `audit` below `contentReports` | Only a non-duplicate status transition | exact verified parent `contentReports.expiresAt` | inherits parent | TTL collection group | historic records without expiry are ODK081 recursive-purge scope |
-| `deletionProofs` | `status: deleted` | immutable `completedAt` | 3 years | TTL | no backfill |
-| `accountDeletionOperations` | `phase: complete` only | immutable `completedAt` | 3 years | TTL | application TTL writer; pending rows have no expiry |
+| `deletionProofs` | `status: deleted` | immutable `completedAt` | 12 calendar months | TTL + logical read expiry | no backfill |
+| `accountDeletionOperations` | `phase: complete` only | immutable `completedAt` | 12 calendar months | TTL + logical read expiry | application TTL writer; pending rows have no expiry; opaque operation hash retained for acknowledgement/status |
 | `sessionRevocationOperations` | `status: revoked` only | immutable `terminalAt` | exactly 30 × 24 hours | logical expiry + eventual TTL | lifecycle writer; verified legacy `revoked.updatedAt` only, never migration time; pending/failed have no TTL |
 | `accountRecoveryOperations` | `acknowledged` or actually `superseded` | immutable `terminalAt` | 30 days | TTL | application writer; active operations and `delivery_unconfirmed` reissues have no `expiresAt` until actual supersession |
 | `accountRecoveryOperationResults` | encrypted, retryable operation result | immutable result deadline | at most 55 minutes; issue results are capped by the original reauthentication deadline | TTL | application writer; acknowledgement deletes the result immediately; independent of operation history |
@@ -23,16 +23,38 @@ time-limited record must fail closed when its `expiresAt` is in the past.
 | `deletedIdentities` | deletion tombstone | immutable `deletedAt` | 45 days | TTL | no backfill |
 | `accountDataExportAudits` | completed export audit | creation/completion timestamp | 30 days | TTL | no backfill |
 | `accountDataExportRateLimits` | rate-limit window | window start | request window | TTL | no backfill |
-| `privacyRequests`, `privacyRequestSecrets`, `privacyResponseArtifacts`, `privacyResponseChunks`, `privacyRequestRateLimits`, `audit` below `privacyRequests` | see privacy-request state machine | store-specific closure/delivery timestamp | module-defined | TTL | privacy-request lifecycle; no manual generic purge |
-| `securityIncidents`, `securityIncidentSecrets`, `audit` below `securityIncidents` | closed unless legal hold | immutable `closedAt` | 6 calendar years | TTL | security-incident lifecycle; legal hold writes `null` expiry; no manual generic purge |
-| `legalRequests`, `audit` below `legalRequests` | consumer case closed unless legal hold | immutable `closedAt` | 6 calendar years | TTL | complaints, withdrawals, non-personal data recovery and suspension appeals; legal hold writes `null` expiry |
+| `privacyRequests` and `audit` below `privacyRequests` | closed request | immutable `closedAt` | 12 calendar months | TTL + logical read expiry | account history remains available while linked; account deletion unlinks stable user identifiers from active and closed requests |
+| `privacyRequestSecrets` | active request, or closed request | intake until closure; then immutable `closedAt` | active requests have no expiry; closed narrative/email expires after 30 days | TTL + logical secret-reader expiry | response/extension payload is not exposed after expiry |
+| `privacyResponseArtifacts`, `privacyResponseChunks` | delivered response | immutable delivery time | 30 days after delivery | TTL + logical read expiry | privacy-request lifecycle; no manual generic purge |
+| `privacyRequestRateLimits` | public intake bucket | bucket start | one request window | TTL | no manual purge |
+| `securityIncidents`, `securityIncidentSecrets`, `audit` below `securityIncidents` | closed non-breach without dispute; confirmed breach; or legal hold | immutable `closedAt` | 12 calendar months; 6 calendar years; or until reviewed release | TTL + logical read expiry | close requires reasoned classification; held records require review within six months; overdue holds remain active |
+| `securityIncidentArtifacts` | working artifact; confirmed-breach required submission/notification evidence; or legal hold | immutable `closedAt` | 30 days; evidence aligned with core 6-year expiry; or until reviewed release | TTL + logical read expiry | only designated submission/notification evidence follows core period; hold release reclassifies by artifact kind |
+| `securityIncidentDeliveries`, `securityIncidentDeliveryKeys`, `securityIncidentReminders` | supporting artifacts unless legal hold | immutable `closedAt` | 30 days after closure | TTL + logical read expiry | legal hold release never removes core incident evidence |
+| `legalRequests`, `audit` below `legalRequests` | closed claim, closed no-claim archive, or legal hold | explicit claim expiry or immutable `closedAt` | claim-specific exact date; 12 calendar months for minimal no-claim archive; or until reviewed release | TTL + logical read expiry | claims require expiry/basis/reason; minimal archive only for data-recovery/suspension appeals; holds require review within six months |
 | `legalRequestRateLimits` | first public intake in an hourly bucket | bucket start | 1 hour | TTL | abuse prevention; HMAC key, no raw email |
-| `securityIncidentArtifacts`, `securityIncidentDeliveries`, `securityIncidentDeliveryKeys`, `securityIncidentReminders` | artifact/delivery/reminder unless legal hold | immutable creation timestamp | 1 calendar year | TTL | security-incident module; legal hold writes `null` expiry |
 
 `deletionRequests` deliberately has no new TTL policy. It is a historic,
 deprecated collection; its identified expired record was removed in the ODK066
 approved cloud phase. ODK081 does not own it and must not introduce a generic
 automatic delete path.
+
+## Operator enforcement and legacy records
+
+Continuation and due-review actions use the existing API/CLI; see [operations](operations.md).
+Follow every nextCursor, including empty filtered pages. Legal reviews are due
+within6months, confirmed-breach reviews within12months and holds within6months.
+Uncertain privacy delivery is due by the next UTC weekday; no automatic resend.
+New claim close requires necessaryFields; unselected fields are deleted immediately
+rather than copied into another90day archive. Resolved disputes require finality
+and execution before redundant fields are deleted. Old claim clocks/necessity
+are not guessed: the operator must record an assessment in the due queue.
+Legacy privacy12month, incident classification and working30day read caps apply
+without modifying cloud expiry fields. Necessary breach notification evidence
+and core audits are preserved for the core period; active holds remain in force.
+Physical managedTTL/backfill, logging and mailbox acceptance remain separate.
+
+`config/log-retention-policy.json` is a checked desired policy only. It has not
+been applied to Google Cloud, and this code has no Cloud Logging mutation path.
 
 ## Repository and cloud procedure
 
@@ -56,14 +78,14 @@ STANDARD in `europe-central2`, with PITR disabled and
 `versionRetentionPeriod` of `3600s`. It found zero backups, zero backup
 schedules and zero active Firestore TTL policies before apply.
 
-The approved cloud phase completed on 2026-09-07:
+Historical cloud observation, last recorded on 2026-09-07 (not freshly verified):
 
 - all 20 repository-owned Firestore TTL policies report `ACTIVE`;
 - PITR reports `POINT_IN_TIME_RECOVERY_ENABLED` with a
   `versionRetentionPeriod` of `604800s` (7 days);
 - no additional Firestore backup or backup schedule is configured;
 - operational logs remain in `_Default` for 30 days;
-- bucket `patternly-security` is active in `europe-central2` with 180-day
+- bucket `patternly-security` was active in `europe-central2` with 180-day
   retention;
 - sink `patternly-security-retention` routes warning/error events,
   `account_sync_rejected`, `request_failed`, and HTTP 401/403 request logs for

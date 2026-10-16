@@ -22,7 +22,7 @@ function signedToken(overrides: Readonly<Record<string, unknown>> = {}): string 
 }
 
 function legalDetails(requestId = legalId, revision = 0, legalHold = false) {
-  return { item: { requestId, kind: "complaint", status: "received", receivedAt: "2026-10-01T00:00:00.000Z", responseDueAt: null, answeredAt: null, retentionUntil: null, legalHold, revision, narrative: "fixture context", transactionId: null } };
+  return { item: { requestId, kind: "complaint", status: "received", receivedAt: "2026-10-01T00:00:00.000Z", responseDueAt: null, answeredAt: null, retentionUntil: null, legalHold, legalHoldReviewBy: null, revision, narrative: "fixture context", transactionId: null } };
 }
 
 function createIo(options: Readonly<{ token?: string; payload?: string; confirmation?: string; inputIsTTY?: boolean; stdinIsTTY?: boolean }>) {
@@ -71,7 +71,7 @@ test("list and show use real HTTPS, hidden token input, and canonical response s
   const fixture = await createTlsFixture((request, response) => {
     assert.equal(request.headers.authorization, `Bearer ${token}`);
     response.setHeader("content-type", "application/json");
-    if (request.url === "/v1/operator/legal-requests") response.end(JSON.stringify({ items: [{ requestId: legalId, kind: "complaint", status: "received", receivedAt: "2026-10-01T00:00:00.000Z", responseDueAt: null, answeredAt: null, retentionUntil: null, legalHold: false, revision: 0 }], truncated: true }));
+    if (request.url === "/v1/operator/legal-requests") response.end(JSON.stringify({ items: [{ requestId: legalId, kind: "complaint", status: "received", receivedAt: "2026-10-01T00:00:00.000Z", responseDueAt: null, answeredAt: null, retentionUntil: null, legalHold: false, legalHoldReviewBy: null, revision: 0 }], truncated: true, nextCursor: "continuation" }));
     else if (request.url === `/v1/operator/legal-requests/${legalId}`) response.end(JSON.stringify(detail));
     else { response.statusCode = 404; response.end(JSON.stringify({ error: { code: "not_found" } })); }
   });
@@ -82,7 +82,7 @@ test("list and show use real HTTPS, hidden token input, and canonical response s
       const listCode = await runOperatorCli(args(fixture.origin, config.path, "list", "legal-requests"), listIo.io);
       assert.equal(listCode, 0, listIo.output());
       assert.match(listIo.output(), /truncated/iu);
-      assert.match(listIo.output(), /100 items/iu);
+      assert.match(listIo.output(), /nextCursor/iu);
       assert.equal(listIo.output().includes(token), false);
 
       const showIo = createIo({ token });
@@ -108,7 +108,7 @@ test("action validates payload and current CAS state before typed confirmation a
   });
   const config = await configFile(fixture.origin);
   const phrase = `apply legal-requests set_legal_hold to ${legalId}`;
-  const payload = JSON.stringify({ action: "set_legal_hold", expectedRevision: 0, active: true, reason: "legal hold required" });
+  const payload = JSON.stringify({ action: "set_legal_hold", expectedRevision: 0, active: true, reviewBy: new Date(Date.now() + 86400000).toISOString(), reason: "legal hold required" });
   try {
     await withTrustedTls(fixture.caCertificatePath, async () => {
       const cli = createIo({ token, payload, confirmation: phrase });
@@ -126,7 +126,7 @@ test("action validates payload and current CAS state before typed confirmation a
 
 test("inherited insecure TLS configuration is rejected before an HTTPS request", async () => {
   let requests = 0;
-  const fixture = await createTlsFixture((_request, response) => { requests += 1; response.end(JSON.stringify({ items: [], truncated: false })); });
+  const fixture = await createTlsFixture((_request, response) => { requests += 1; response.end(JSON.stringify({ items: [], truncated: false, nextCursor: null })); });
   const config = await configFile(fixture.origin);
   const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
@@ -146,7 +146,7 @@ test("inherited insecure TLS configuration is rejected before an HTTPS request",
 
 test("an untrusted TLS certificate is rejected without reaching the handler", async () => {
   let requests = 0;
-  const fixture = await createTlsFixture((_request, response) => { requests += 1; response.end(JSON.stringify({ items: [], truncated: false })); });
+  const fixture = await createTlsFixture((_request, response) => { requests += 1; response.end(JSON.stringify({ items: [], truncated: false, nextCursor: null })); });
   const config = await configFile(fixture.origin);
   try {
     const cli = createIo({ token: signedToken() });
@@ -160,7 +160,7 @@ test("an untrusted TLS certificate is rejected without reaching the handler", as
 test("a redirect is rejected without forwarding credentials to its target", async () => {
   let originRequests = 0;
   let targetRequests = 0;
-  const target = await createTlsFixture((request, response) => { targetRequests += 1; response.end(JSON.stringify({ items: [], truncated: false })); });
+  const target = await createTlsFixture((request, response) => { targetRequests += 1; response.end(JSON.stringify({ items: [], truncated: false, nextCursor: null })); });
   const origin = await createTlsFixture((_request, response) => {
     originRequests += 1;
     response.statusCode = 302;
@@ -184,7 +184,7 @@ test("a redirect is rejected without forwarding credentials to its target", asyn
 
 test("expired, overlong, and future-issued tokens fail locally before HTTP", async () => {
   let requests = 0;
-  const fixture = await createTlsFixture((_request, response) => { requests += 1; response.end(JSON.stringify({ items: [], truncated: false })); });
+  const fixture = await createTlsFixture((_request, response) => { requests += 1; response.end(JSON.stringify({ items: [], truncated: false, nextCursor: null })); });
   const config = await configFile(fixture.origin);
   try {
     const now = Math.floor(Date.now() / 1000);
@@ -206,7 +206,7 @@ test("expired, overlong, and future-issued tokens fail locally before HTTP", asy
 
 test("a denied origin fails before token prompt or network", async () => {
   let requests = 0;
-  const fixture = await createTlsFixture((_request, response) => { requests += 1; response.end(JSON.stringify({ items: [], truncated: false })); });
+  const fixture = await createTlsFixture((_request, response) => { requests += 1; response.end(JSON.stringify({ items: [], truncated: false, nextCursor: null })); });
   const config = await configFile(fixture.origin);
   try {
     const cli = createIo({ token: signedToken() });
@@ -251,7 +251,7 @@ test("piped JSON stdin is accepted when prompts use a separate controlling termi
   const phrase = `apply legal-requests close to ${legalId}`;
   try {
     await withTrustedTls(fixture.caCertificatePath, async () => {
-      const cli = createIo({ token, payload: JSON.stringify({ action: "close", expectedRevision: 0 }), confirmation: phrase, inputIsTTY: true, stdinIsTTY: false });
+      const cli = createIo({ token, payload: JSON.stringify({ action: "close", expectedRevision: 0, disposition: { kind: "claim", necessaryFields: ["email", "narrative"], retentionUntil: "2030-01-01T00:00:00.000Z", basis: "Applicable claim period", reason: "Necessary case evidence" } }), confirmation: phrase, inputIsTTY: true, stdinIsTTY: false });
       const code = await runOperatorCli(args(fixture.origin, config.path, "action", "legal-requests", legalId), cli.io);
       assert.equal(code, 0, cli.output());
       assert.equal(cli.hiddenCount(), 1);
@@ -267,7 +267,7 @@ test("interactive stdin still requires an explicit payload descriptor", async ()
   const fixture = await createTlsFixture((_request, response) => { requests += 1; response.end("{}"); });
   const config = await configFile(fixture.origin);
   try {
-    const cli = createIo({ token: signedToken(), inputIsTTY: true, stdinIsTTY: true, payload: JSON.stringify({ action: "close", expectedRevision: 0 }) });
+    const cli = createIo({ token: signedToken(), inputIsTTY: true, stdinIsTTY: true, payload: JSON.stringify({ action: "close", expectedRevision: 0, disposition: { kind: "claim", necessaryFields: ["email", "narrative"], retentionUntil: "2030-01-01T00:00:00.000Z", basis: "Applicable claim period", reason: "Necessary case evidence" } }) });
     const code = await runOperatorCli(args(fixture.origin, config.path, "action", "legal-requests", legalId), cli.io);
     assert.equal(code, 1);
     assert.match(cli.output(), /payload_fd_required_for_interactive_input/u);
@@ -278,7 +278,7 @@ test("interactive stdin still requires an explicit payload descriptor", async ()
 
 test("token prompt still rejects when no controlling terminal is available", async () => {
   let requests = 0;
-  const fixture = await createTlsFixture((_request, response) => { requests += 1; response.end(JSON.stringify({ items: [], truncated: false })); });
+  const fixture = await createTlsFixture((_request, response) => { requests += 1; response.end(JSON.stringify({ items: [], truncated: false, nextCursor: null })); });
   const config = await configFile(fixture.origin);
   try {
     const cli = createIo({ inputIsTTY: false, stdinIsTTY: false });
@@ -300,7 +300,7 @@ test("revision mismatch is rejected before confirmation or mutation", async () =
   const config = await configFile(fixture.origin);
   try {
     await withTrustedTls(fixture.caCertificatePath, async () => {
-      const cli = createIo({ token: signedToken(), payload: JSON.stringify({ action: "close", expectedRevision: 0 }) });
+      const cli = createIo({ token: signedToken(), payload: JSON.stringify({ action: "close", expectedRevision: 0, disposition: { kind: "claim", necessaryFields: ["email", "narrative"], retentionUntil: "2030-01-01T00:00:00.000Z", basis: "Applicable claim period", reason: "Necessary case evidence" } }) });
       const code = await runOperatorCli(args(fixture.origin, config.path, "action", "legal-requests", legalId, "--payload-fd", "3"), cli.io);
       assert.equal(code, 1);
       assert.match(cli.output(), /revision_precondition_conflict/u);
@@ -332,7 +332,7 @@ test("a lost mutation response is ambiguous and triggers one state read without 
   const phrase = `apply legal-requests set_legal_hold to ${legalId}`;
   try {
     await withTrustedTls(fixture.caCertificatePath, async () => {
-      const cli = createIo({ token, confirmation: phrase, payload: JSON.stringify({ action: "set_legal_hold", expectedRevision: 0, active: true, reason: "fixture" }) });
+      const cli = createIo({ token, confirmation: phrase, payload: JSON.stringify({ action: "set_legal_hold", expectedRevision: 0, active: true, reviewBy: new Date(Date.now() + 86400000).toISOString(), reason: "fixture" }) });
       const code = await runOperatorCli(args(fixture.origin, config.path, "action", "legal-requests", legalId, "--payload-fd", "3"), cli.io);
       assert.equal(code, 2);
       assert.match(cli.output(), /AMBIGUOUS.*RECONCILIATION REQUIRED/iu);
@@ -370,7 +370,7 @@ test("HTTP 500 and malformed 200 mutation responses reconcile once without leaki
       const phrase = `apply legal-requests set_legal_hold to ${legalId}`;
       try {
         await withTrustedTls(fixture.caCertificatePath, async () => {
-          const cli = createIo({ token, confirmation: phrase, payload: JSON.stringify({ action: "set_legal_hold", expectedRevision: 0, active: true, reason: "private mutation reason" }) });
+          const cli = createIo({ token, confirmation: phrase, payload: JSON.stringify({ action: "set_legal_hold", expectedRevision: 0, active: true, reviewBy: new Date(Date.now() + 86400000).toISOString(), reason: "private mutation reason" }) });
           const code = await runOperatorCli(args(fixture.origin, config.path, "action", "legal-requests", legalId, "--payload-fd", "3"), cli.io);
           assert.equal(code, 2);
           assert.match(cli.output(), /AMBIGUOUS.*RECONCILIATION REQUIRED/u);
@@ -394,7 +394,7 @@ test("incident create prints and uses one stable ID before confirmation", async 
     writes += 1;
     requestedUrl = request.url ?? "";
     response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify({ item: { incidentId: id, classification: "triage", authorityDecision: "undecided", authorityDeliveryStatus: "not_started", subjectDecision: "undecided", subjectNotificationStatus: "not_started", awarenessAt: null, authorityDeadlineAt: null, closedAt: null, revision: 0, legalHold: false, nextAction: "acknowledge_awareness" } }));
+    response.end(JSON.stringify({ item: { incidentId: id, classification: "triage", authorityDecision: "undecided", authorityDeliveryStatus: "not_started", subjectDecision: "undecided", subjectNotificationStatus: "not_started", awarenessAt: null, authorityDeadlineAt: null, closedAt: null, revision: 0, legalHold: false, legalHoldReviewBy: null, nextAction: "acknowledge_awareness" } }));
   });
   const config = await configFile(fixture.origin);
   const payload = { title: "incident-private-payload-marker", details: "details", detectedAt: "2026-10-01T00:00:00.000Z", categories: "availability", dataSubjectCount: "1", recordCount: "1", specialData: false, confidentialityImpact: "none", integrityImpact: "none", availabilityImpact: "low", consequences: "none", likelihood: "low", severity: "low", containment: "contained", remediation: "done", prevention: "updated", postmortem: "complete" };
@@ -498,6 +498,27 @@ test("purchase case show/action use canonical hashed ID, revision and exact oper
       const cli = createIo({ token: signedToken(), payload: JSON.stringify(payload), confirmation: `apply purchase-cases close_unresolved to ${key}` });
       assert.equal(await runOperatorCli(args(fixture.origin, config.path, "action", "purchase-cases", key, "--payload-fd", "3"), cli.io), 0, cli.output());
       assert.equal(mutations, 1);
+    });
+  } finally { await fixture.close(); await config.cleanup(); }
+});
+
+test("list forwards a continuation cursor with its due filter over the real HTTPS transport", async () => {
+  const token = signedToken();
+  const cursor = Buffer.from(JSON.stringify({ v: 1, collection: "legalRequests", dueOnly: true, id: legalId })).toString("base64url");
+  let reads = 0;
+  const fixture = await createTlsFixture((request, response) => {
+    const url = new URL(request.url!, "https://fixture.test");
+    assert.equal(url.pathname, "/v1/operator/legal-requests");
+    assert.equal(url.searchParams.get("cursor"), cursor); assert.equal(url.searchParams.get("due"), "true");
+    reads += 1; response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ items: [], truncated: false, nextCursor: null }));
+  });
+  const config = await configFile(fixture.origin);
+  try {
+    await withTrustedTls(fixture.caCertificatePath, async () => {
+      const cli = createIo({ token });
+      assert.equal(await runOperatorCli(args(fixture.origin, config.path, "list", "legal-requests", "--cursor", cursor, "--due", "true"), cli.io), 0, cli.output());
+      assert.equal(reads, 1);
     });
   } finally { await fixture.close(); await config.cleanup(); }
 });

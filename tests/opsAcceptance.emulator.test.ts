@@ -208,9 +208,12 @@ test("OPS-B4 synthetic acceptance drives public intake, audited operator actions
       assert.ok(Array.isArray(authUsers.users));
       const [health, ready] = await Promise.all([fetch(`${tls!.origin}/health`), fetch(`${tls!.origin}/ready`)]);
       assert.equal(health.status, 200);
-      assert.equal(ready.status, 200);
-      const readyBody = await ready.json() as { status: string; checks: { database: boolean; authentication: boolean } };
-      assert.equal(readyBody.status, "ready");
+      // This operator fixture does not configure content packages. Full release
+      // readiness must fail while its actual Auth/Firestore dependencies remain healthy.
+      assert.equal(ready.status, 503);
+      const readyBody = await ready.json() as { status: string; checks: { database: boolean; authentication: boolean; contentPackages: boolean } };
+      assert.equal(readyBody.status, "not_ready");
+      assert.equal(readyBody.checks.contentPackages, false);
       assert.equal(readyBody.checks.database, true);
       assert.equal(readyBody.checks.authentication, true);
 
@@ -229,7 +232,6 @@ test("OPS-B4 synthetic acceptance drives public intake, audited operator actions
         trackId: "coding-interview", contentVersion: "v1", itemId: "question-ops-b4",
         reason: "incorrect_answer", description: privateContentDescription,
         context: { releasePackageId: "ops-b4", trackNode: null, modeRoute: "answer_review", locale: "en", appBuild: "ops-b4", platform: "ios", occurredAt: new Date().toISOString() },
-        linkAccount: false,
       });
       assert.equal(contentCreate.response.status, 201, contentCreate.text);
       assert.equal((contentCreate.json as { report: { status: string } }).report.status, "open");

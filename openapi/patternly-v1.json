@@ -7407,7 +7407,7 @@
       "x-patternly-security-profile": "operator",
       "x-patternly-consumer-scope": "backend-only",
       "get": {
-        "description": "List a bounded, pseudonymously audited operator projection of content reports. The response is capped at 100 and reports whether more items remain.",
+        "description": "Bounded operator page in immutable document-ID order. Continue with nextCursor and the same due filter, including empty pages. At most 100 items and 500 scanned records per page.",
         "responses": {
           "200": {
             "description": "Bounded content report queue",
@@ -7418,7 +7418,8 @@
                   "additionalProperties": false,
                   "required": [
                     "items",
-                    "truncated"
+                    "truncated",
+                    "nextCursor"
                   ],
                   "properties": {
                     "items": {
@@ -7429,8 +7430,29 @@
                     },
                     "truncated": {
                       "type": "boolean"
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 2048
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -7456,6 +7478,28 @@
             }
           }
         },
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          },
+          {
+            "name": "due",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
         "operationId": "get_v1_operator_content_reports",
         "security": [
           {
@@ -7654,7 +7698,7 @@
       "x-patternly-security-profile": "operator",
       "x-patternly-consumer-scope": "backend-only",
       "get": {
-        "description": "List a bounded, pseudonymously audited privacy-request projection. The response is capped at 100 and reports whether more items remain.",
+        "description": "Bounded operator page in immutable document-ID order. Continue with nextCursor and the same due filter, including empty pages. At most 100 items and 500 scanned records per page.",
         "responses": {
           "200": {
             "description": "Bounded privacy queue",
@@ -7665,19 +7709,155 @@
                   "additionalProperties": false,
                   "required": [
                     "items",
-                    "truncated"
+                    "truncated",
+                    "nextCursor"
                   ],
                   "properties": {
                     "items": {
                       "type": "array",
                       "items": {
-                        "$ref": "#/components/schemas/PrivacyRequestListItem"
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "requestId",
+                          "right",
+                          "channel",
+                          "status",
+                          "outcome",
+                          "receivedAt",
+                          "deadlineAt",
+                          "deliveredAt",
+                          "extendedAt",
+                          "revision",
+                          "nextReviewAt",
+                          "reviewReason"
+                        ],
+                        "properties": {
+                          "requestId": {
+                            "type": "string",
+                            "pattern": "^pr_[0-9a-f-]{36}$"
+                          },
+                          "right": {
+                            "$ref": "#/components/schemas/PrivacyRight"
+                          },
+                          "channel": {
+                            "type": "string",
+                            "enum": [
+                              "account",
+                              "public"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "received",
+                              "identity_verification_required",
+                              "in_review",
+                              "response_ready",
+                              "fulfilled",
+                              "partially_fulfilled",
+                              "refused",
+                              "closed"
+                            ]
+                          },
+                          "outcome": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "fulfilled",
+                                  "partially_fulfilled",
+                                  "refused"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "receivedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "deadlineAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "deliveredAt": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "extendedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "revision": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "nextReviewAt": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "reviewReason": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
                       }
                     },
                     "truncated": {
                       "type": "boolean"
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 2048
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -7703,6 +7883,28 @@
             }
           }
         },
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          },
+          {
+            "name": "due",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
         "operationId": "get_v1_operator_privacy_requests",
         "security": [
           {
@@ -7907,7 +8109,7 @@
       "x-patternly-security-profile": "operator",
       "x-patternly-consumer-scope": "backend-only",
       "get": {
-        "description": "List a bounded, pseudonymously audited legal-request projection. The response is capped at 100 and reports whether more items remain.",
+        "description": "Bounded operator page in immutable document-ID order. Continue with nextCursor and the same due filter, including empty pages. At most 100 items and 500 scanned records per page.",
         "responses": {
           "200": {
             "description": "Bounded legal queue",
@@ -7918,7 +8120,8 @@
                   "additionalProperties": false,
                   "required": [
                     "items",
-                    "truncated"
+                    "truncated",
+                    "nextCursor"
                   ],
                   "properties": {
                     "items": {
@@ -7929,8 +8132,29 @@
                     },
                     "truncated": {
                       "type": "boolean"
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 2048
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -7956,6 +8180,28 @@
             }
           }
         },
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          },
+          {
+            "name": "due",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
         "operationId": "get_v1_operator_legal_requests",
         "security": [
           {
@@ -8166,7 +8412,7 @@
       "x-patternly-security-profile": "operator",
       "x-patternly-consumer-scope": "backend-only",
       "get": {
-        "description": "List a bounded, pseudonymously audited security-incident projection. The response is capped at 100 and reports whether more items remain.",
+        "description": "Bounded operator page in immutable document-ID order. Continue with nextCursor and the same due filter, including empty pages. At most 100 items and 500 scanned records per page.",
         "responses": {
           "200": {
             "description": "Bounded security incident queue",
@@ -8177,7 +8423,8 @@
                   "additionalProperties": false,
                   "required": [
                     "items",
-                    "truncated"
+                    "truncated",
+                    "nextCursor"
                   ],
                   "properties": {
                     "items": {
@@ -8188,8 +8435,29 @@
                     },
                     "truncated": {
                       "type": "boolean"
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 2048
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -8215,6 +8483,28 @@
             }
           }
         },
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          },
+          {
+            "name": "due",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
         "operationId": "get_v1_operator_security_incidents",
         "security": [
           {
@@ -9182,7 +9472,8 @@
             "required": [
               "action",
               "expectedRevision",
-              "reason"
+              "reason",
+              "reviewBy"
             ],
             "properties": {
               "action": {
@@ -9196,6 +9487,10 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 4000
+              },
+              "reviewBy": {
+                "type": "string",
+                "format": "date-time"
               }
             }
           },
@@ -9227,7 +9522,36 @@
             "additionalProperties": false,
             "required": [
               "action",
-              "expectedRevision"
+              "expectedRevision",
+              "reason",
+              "nextReviewAt"
+            ],
+            "properties": {
+              "action": {
+                "const": "review_retention"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              "nextReviewAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision",
+              "reason"
             ],
             "properties": {
               "action": {
@@ -9236,6 +9560,11 @@
               "expectedRevision": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
               }
             }
           }
@@ -9351,6 +9680,7 @@
           "closedAt",
           "revision",
           "legalHold",
+          "legalHoldReviewBy",
           "nextAction"
         ],
         "properties": {
@@ -9432,6 +9762,17 @@
           "legalHold": {
             "type": "boolean"
           },
+          "legalHoldReviewBy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "nextAction": {
             "enum": [
               "acknowledge_awareness",
@@ -9445,6 +9786,27 @@
               "send_subject_notification",
               "close",
               "none"
+            ]
+          },
+          "nextReviewAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           }
         }
@@ -9610,6 +9972,7 @@
           "closedAt",
           "revision",
           "legalHold",
+          "legalHoldReviewBy",
           "nextAction",
           "title",
           "details",
@@ -9704,6 +10067,17 @@
           "legalHold": {
             "type": "boolean"
           },
+          "legalHoldReviewBy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "nextAction": {
             "enum": [
               "acknowledge_awareness",
@@ -9797,6 +10171,27 @@
             "items": {
               "$ref": "#/components/schemas/SecurityIncidentDelivery"
             }
+          },
+          "nextReviewAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -11369,6 +11764,34 @@
             "additionalProperties": false,
             "required": [
               "action",
+              "reason",
+              "nextReviewAt",
+              "expectedRevision"
+            ],
+            "properties": {
+              "action": {
+                "const": "record_review"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "nextReviewAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
               "outcome",
               "response",
               "reason",
@@ -11421,11 +11844,47 @@
             ],
             "properties": {
               "action": {
+                "const": "deliver"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision"
+            ],
+            "properties": {
+              "action": {
+                "const": "close"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "reason",
+              "expectedRevision"
+            ],
+            "properties": {
+              "action": {
+                "const": "close_unverified"
+              },
+              "reason": {
                 "type": "string",
-                "enum": [
-                  "deliver",
-                  "close"
-                ]
+                "minLength": 1,
+                "maxLength": 2000
               },
               "expectedRevision": {
                 "type": "integer",
@@ -12110,6 +12569,7 @@
           "answeredAt",
           "retentionUntil",
           "legalHold",
+          "legalHoldReviewBy",
           "revision"
         ],
         "properties": {
@@ -12175,9 +12635,41 @@
           "legalHold": {
             "type": "boolean"
           },
+          "legalHoldReviewBy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "revision": {
             "type": "integer",
             "minimum": 0
+          },
+          "nextReviewAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -12193,6 +12685,7 @@
           "answeredAt",
           "retentionUntil",
           "legalHold",
+          "legalHoldReviewBy",
           "revision",
           "narrative",
           "transactionId"
@@ -12260,6 +12753,17 @@
           "legalHold": {
             "type": "boolean"
           },
+          "legalHoldReviewBy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "revision": {
             "type": "integer",
             "minimum": 0
@@ -12275,6 +12779,27 @@
             ]
           },
           "transactionId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "nextReviewAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewReason": {
             "anyOf": [
               {
                 "type": "string"
@@ -12451,6 +12976,27 @@
           "revision": {
             "type": "integer",
             "minimum": 0
+          },
+          "nextReviewAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -12692,7 +13238,9 @@
           "executionEvidence",
           "responseAvailableUntil",
           "subjectVerified",
-          "extensionNoticeStatus"
+          "extensionNoticeStatus",
+          "nextReviewAt",
+          "reviewReason"
         ],
         "properties": {
           "requestId": {
@@ -12837,6 +13385,27 @@
                 "type": "null"
               }
             ]
+          },
+          "nextReviewAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -12949,6 +13518,7 @@
           "closedAt",
           "revision",
           "legalHold",
+          "legalHoldReviewBy",
           "nextAction",
           "title",
           "details",
@@ -13045,6 +13615,17 @@
           },
           "legalHold": {
             "type": "boolean"
+          },
+          "legalHoldReviewBy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "nextAction": {
             "type": "string"
@@ -13188,6 +13769,27 @@
             "items": {
               "$ref": "#/components/schemas/OperatorSecurityAuditEntry"
             }
+          },
+          "nextReviewAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -13204,6 +13806,7 @@
           "retentionUntil",
           "response",
           "legalHold",
+          "legalHoldReviewBy",
           "revision"
         ],
         "properties": {
@@ -13279,9 +13882,41 @@
           "legalHold": {
             "type": "boolean"
           },
+          "legalHoldReviewBy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "revision": {
             "type": "integer",
             "minimum": 0
+          },
+          "nextReviewAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -13305,6 +13940,7 @@
               "retentionUntil",
               "response",
               "legalHold",
+              "legalHoldReviewBy",
               "revision",
               "email",
               "narrative",
@@ -13383,13 +14019,31 @@
               "legalHold": {
                 "type": "boolean"
               },
+              "legalHoldReviewBy": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "revision": {
                 "type": "integer",
                 "minimum": 0
               },
               "email": {
-                "type": "string",
-                "format": "email"
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "narrative": {
                 "anyOf": [
@@ -13413,6 +14067,27 @@
                 ]
               }
             }
+          },
+          "nextReviewAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -13695,7 +14370,8 @@
             "additionalProperties": false,
             "required": [
               "action",
-              "expectedRevision"
+              "expectedRevision",
+              "disposition"
             ],
             "properties": {
               "action": {
@@ -13704,6 +14380,103 @@
               "expectedRevision": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "disposition": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "reason"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "const": "minimal_archive"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "retentionUntil",
+                      "basis",
+                      "reason",
+                      "necessaryFields"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "const": "claim"
+                      },
+                      "retentionUntil": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "basis": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "necessaryFields": {
+                        "type": "array",
+                        "maxItems": 4,
+                        "uniqueItems": true,
+                        "items": {
+                          "enum": [
+                            "email",
+                            "narrative",
+                            "transactionId",
+                            "response"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision",
+              "active",
+              "reason",
+              "reviewBy"
+            ],
+            "properties": {
+              "action": {
+                "const": "set_legal_hold"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "active": {
+                "const": true
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "reviewBy": {
+                "type": "string",
+                "format": "date-time"
               }
             }
           },
@@ -13725,12 +14498,81 @@
                 "minimum": 0
               },
               "active": {
-                "type": "boolean"
+                "const": false
               },
               "reason": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 1000
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expectedRevision",
+              "reason",
+              "nextReviewAt",
+              "necessaryFields",
+              "retentionUntil",
+              "basis",
+              "dispute"
+            ],
+            "properties": {
+              "action": {
+                "const": "review_retention"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "nextReviewAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "necessaryFields": {
+                "type": "array",
+                "maxItems": 4,
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "email",
+                    "narrative",
+                    "transactionId",
+                    "response"
+                  ]
+                }
+              },
+              "retentionUntil": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "basis": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "dispute": {
+                "enum": [
+                  "unchanged",
+                  "ongoing",
+                  "resolved_executed"
+                ]
+              },
+              "finalResolutionAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "executedAt": {
+                "type": "string",
+                "format": "date-time"
               }
             }
           }
