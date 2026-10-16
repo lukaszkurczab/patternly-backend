@@ -51,7 +51,10 @@ test("local smoke active entitlement passes the ordinary GET /v1/entitlements ro
   const app = buildApplication({
     environment: smokeEnvironment(source, keys),
     firestore: null,
-    stores: { users: { resolveExistingUser: async () => ({ userId: "local-smoke-user", authorizationGeneration: 1 }) } } as never,
+    stores: {
+      users: { resolveExistingUser: async () => ({ userId: "local-smoke-user", authorizationGeneration: 1 }) },
+      revenueCatWebhook: { identityAvailable: async () => true },
+    } as never,
     verifier: { verify: async () => ({ provider: "firebase", subject: "local-smoke-subject", emailVerified: true, authTime: Math.floor(Date.now() / 1000) }) },
     appCheckVerifier: localAppCheckVerifier(keys.appCheckToken),
     revenueCatEntitlementReader: reader,

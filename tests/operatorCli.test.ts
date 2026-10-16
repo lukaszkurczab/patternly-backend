@@ -191,7 +191,8 @@ test("expired, overlong, and future-issued tokens fail locally before HTTP", asy
     const invalidTokens = [
       signedToken({ iat: now - 600, exp: now - 1 }),
       signedToken({ iat: now - 1, exp: now + 3601 }),
-      signedToken({ iat: now + 31, exp: now + 300 }),
+      // Keep clear of the 30-second clock tolerance across a real-time tick.
+      signedToken({ iat: now + 120, exp: now + 300 }),
     ];
     for (const token of invalidTokens) {
       const cli = createIo({ token });
