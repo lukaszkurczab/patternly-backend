@@ -36,10 +36,19 @@ try {
   await saveActiveTrackId("coding-interview-dsa-problem-solving");
   for (let index = 0; index < 105; index++) {
     const sessionId = `paging-session-${index}`;
-    await saveTrainingSession(session("abandoned", sessionId), productionTrackAdmissionContext);
-    await addTrainingAttempt(attempt(`paging-attempt-${index}`, sessionId), productionTrackAdmissionContext);
+    // Match the mobile account-reset fixture's closed wire contract.
+    await saveTrainingSession({
+      ...session("abandoned", sessionId),
+      modeId: "coding-interview-guided-practice",
+      configurationSnapshot: { kind: "practice" },
+    }, productionTrackAdmissionContext);
+    await addTrainingAttempt({
+      ...attempt(`paging-attempt-${index}`, sessionId),
+      modeId: "coding-interview-guided-practice",
+      response: { type: "choice_single", optionId: "a" },
+    }, productionTrackAdmissionContext);
   }
-  await addReviewQueueItems([review("paging-review-1", "paging-attempt-0")], productionTrackAdmissionContext);
+  await addReviewQueueItems([{ ...review("paging-review-1", "paging-attempt-0"), sourceSessionId: "paging-session-0" }], productionTrackAdmissionContext);
   const before = await accountData.buildAccountDataSnapshot(productionLearningDataAdmissionContext);
   const calls = [];
   const api = createPatternlyApiClient({ apiOrigin: "https://paging.test.invalid", getIdToken: async () => auth.idToken, getAppCheckToken: async () => TEST_APP_CHECK_TOKEN,

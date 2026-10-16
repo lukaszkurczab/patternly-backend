@@ -114,7 +114,7 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
-        # Fixture input may contain a token; never dump arguments or input errors.
-        print(json.dumps({"exitCode": None, "reason": "fixture_bridge_failed"}))
+    except Exception as error:
+        # Emit only an error class/code; exception text may contain fixture secrets.
+        print(json.dumps({"exitCode": None, "reason": "fixture_bridge_failed", "category": type(error).__name__, "errno": getattr(error, "errno", None)}))
         sys.exit(1)

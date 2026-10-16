@@ -57,8 +57,9 @@ async function runNative(
       env: { NODE_EXTRA_CA_CERTS: caCertificatePath },
       payload, payloadOnStdin, steps, secrets,
     }));
-    assert.equal(await finished, 0, "native fixture bridge failed");
-    const result = JSON.parse(output) as TerminalResult;
+    const bridgeExitCode = await finished;
+    const result = JSON.parse(output) as TerminalResult & { category?: string; errno?: number };
+    assert.equal(bridgeExitCode, 0, `native fixture bridge failed: ${result.category ?? "unknown"}/${result.errno ?? "none"}`);
     assert.equal(result.reason, undefined, `native CLI did not complete its terminal flow: ${result.output}`);
     assert.equal(result.secretEchoed, false, "CLI exposed token or mutation body in its terminal output");
     assert.equal(result.echoRestored, true, "CLI did not restore terminal echo");
