@@ -1,8 +1,10 @@
 # Purchase receipt delivery — prompt 06 / M10
 
+> Porządki 16.10.2026: odnośniki do usuniętych raportów zastąpiono podsumowaniem ustaleń. Nie zachowano tu ich surowych dowodów; status i pozostały zakres określa jeden plan workspace.
+
 14.10.2026. Odbiór dotyczy lokalnego kodu osiągalnego przez `POST /v1/webhooks/revenuecat`. Nie jest odbiorem usług ani wydania. Historyczny raport solo M10 jest niedostępny; defekt potwierdzono w źródłach: wspólny catch obejmował SMTP i finalizację, a retry przejmował wygasłe `sending`.
 
-Aktualizacja17, 15.10.2026: [odbiór korelacji](../../patternly/docs/reports/premium-rc17-2026-10-15.md). Zasady niepewnej dostawy M10 pozostają; snapshot kodu i dowód06 poniżej odnoszą się do14.10.
+Aktualizacja17, 15.10.2026: [zachowane ustalenia; dawny raport usunięty](../../docs/reports/current-audit.md). Zasady niepewnej dostawy M10 pozostają; snapshot kodu i dowód06 poniżej odnoszą się do14.10.
 
 ## Trwały kontrakt
 
