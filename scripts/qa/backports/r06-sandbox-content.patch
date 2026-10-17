@@ -1,0 +1,1637 @@
+diff --git a/openapi/patternly-v1.json b/openapi/patternly-v1.json
+index 866396c..0e5f47b 100644
+--- a/openapi/patternly-v1.json
++++ b/openapi/patternly-v1.json
+@@ -83,7 +83,8 @@
+                       "required": [
+                         "database",
+                         "authentication",
+-                        "providerReader"
++                        "providerReader",
++                        "contentPackages"
+                       ],
+                       "properties": {
+                         "database": {
+@@ -94,6 +95,9 @@
+                         },
+                         "providerReader": {
+                           "type": "boolean"
++                        },
++                        "contentPackages": {
++                          "type": "boolean"
+                         }
+                       }
+                     }
+@@ -127,7 +131,8 @@
+                       "required": [
+                         "database",
+                         "authentication",
+-                        "providerReader"
++                        "providerReader",
++                        "contentPackages"
+                       ],
+                       "properties": {
+                         "database": {
+@@ -138,6 +143,9 @@
+                         },
+                         "providerReader": {
+                           "type": "boolean"
++                        },
++                        "contentPackages": {
++                          "type": "boolean"
+                         }
+                       }
+                     }
+@@ -4720,7 +4728,7 @@
+       "x-patternly-security-profile": "app_check_bearer",
+       "x-patternly-consumer-scope": "mobile",
+       "get": {
+-        "description": "Stream current immutable gzip package bytes after a fresh RevenueCat entitlement read. Local filesystem package storage is development-only.",
++        "description": "Authorize a short-lived generation-bound GCS GET descriptor after fresh entitlement verification. No byte-stream fallback.",
+         "parameters": [
+           {
+             "name": "trackId",
+@@ -4743,69 +4751,126 @@
+         ],
+         "responses": {
+           "200": {
+-            "description": "Exact verified gzip package bytes",
++            "description": "Download descriptor; signed URL expires within 60 seconds",
+             "headers": {
+-              "Content-Length": {
+-                "required": true,
+-                "schema": {
+-                  "type": "integer",
+-                  "minimum": 1
+-                }
+-              },
+               "Cache-Control": {
+                 "required": true,
+                 "schema": {
+                   "type": "string",
+                   "const": "private, no-store"
+                 }
+-              },
+-              "X-Content-Package-Sha256": {
+-                "required": true,
+-                "schema": {
+-                  "type": "string",
+-                  "pattern": "^[a-f0-9]{64}$"
+-                }
+-              },
+-              "X-Content-Artifact-Sha256": {
+-                "required": true,
+-                "schema": {
+-                  "type": "string",
+-                  "pattern": "^[a-f0-9]{64}$"
+-                }
+-              },
+-              "X-Content-Version": {
+-                "required": true,
+-                "schema": {
+-                  "type": "string"
+-                }
+-              },
+-              "X-Content-Release-Id": {
+-                "required": true,
+-                "schema": {
+-                  "type": "string",
+-                  "minLength": 1
+-                }
+-              },
+-              "X-Content-Minimum-App-Version": {
+-                "required": true,
+-                "schema": {
+-                  "type": "string",
+-                  "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][A-Za-z0-9.-]+)?$"
+-                }
+-              },
+-              "X-Content-Artifact-Size-Bytes": {
+-                "required": true,
+-                "schema": {
+-                  "type": "integer",
+-                  "minimum": 1
+-                }
+               }
+             },
+             "content": {
+-              "application/gzip": {
++              "application/json": {
+                 "schema": {
+-                  "type": "string",
+-                  "format": "binary"
++                  "type": "object",
++                  "additionalProperties": false,
++                  "required": [
++                    "schemaVersion",
++                    "manifest",
++                    "object",
++                    "downloadUrl",
++                    "expiresAt"
++                  ],
++                  "properties": {
++                    "schemaVersion": {
++                      "const": "patternly-content-download-v1"
++                    },
++                    "manifest": {
++                      "type": "object",
++                      "additionalProperties": false,
++                      "required": [
++                        "schemaVersion",
++                        "trackId",
++                        "nodeId",
++                        "contentVersion",
++                        "artifactSha256",
++                        "packageSha256",
++                        "contentReleaseId",
++                        "minimumAppVersion",
++                        "packageFormat",
++                        "compressedSizeBytes",
++                        "artifactSizeBytes",
++                        "packagePath"
++                      ],
++                      "properties": {
++                        "schemaVersion": {
++                          "const": "patternly-content-node-package-v1"
++                        },
++                        "trackId": {
++                          "type": "string"
++                        },
++                        "nodeId": {
++                          "type": "string"
++                        },
++                        "contentVersion": {
++                          "type": "string"
++                        },
++                        "artifactSha256": {
++                          "type": "string",
++                          "pattern": "^[a-f0-9]{64}$"
++                        },
++                        "packageSha256": {
++                          "type": "string",
++                          "pattern": "^[a-f0-9]{64}$"
++                        },
++                        "contentReleaseId": {
++                          "type": "string"
++                        },
++                        "minimumAppVersion": {
++                          "type": "string",
++                          "pattern": "^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$"
++                        },
++                        "packageFormat": {
++                          "const": "gzip"
++                        },
++                        "compressedSizeBytes": {
++                          "type": "integer",
++                          "minimum": 1,
++                          "maximum": 2097152
++                        },
++                        "artifactSizeBytes": {
++                          "type": "integer",
++                          "minimum": 1,
++                          "maximum": 8388608
++                        },
++                        "packagePath": {
++                          "type": "string"
++                        }
++                      }
++                    },
++                    "object": {
++                      "type": "object",
++                      "additionalProperties": false,
++                      "required": [
++                        "bucket",
++                        "path",
++                        "generation"
++                      ],
++                      "properties": {
++                        "bucket": {
++                          "type": "string"
++                        },
++                        "path": {
++                          "type": "string"
++                        },
++                        "generation": {
++                          "type": "string",
++                          "pattern": "^[1-9][0-9]{0,30}$"
++                        }
++                      }
++                    },
++                    "downloadUrl": {
++                      "type": "string",
++                      "format": "uri",
++                      "maxLength": 8192
++                    },
++                    "expiresAt": {
++                      "type": "string",
++                      "format": "date-time"
++                    }
++                  }
+                 }
+               }
+             }
+@@ -4831,7 +4896,7 @@
+             }
+           },
+           "403": {
+-            "description": "Current entitlement is required",
++            "description": "Current entitlement required",
+             "content": {
+               "application/json": {
+                 "schema": {
+@@ -4854,7 +4919,7 @@
+             }
+           },
+           "503": {
+-            "description": "Entitlement reader or package bytes unavailable",
++            "description": "Entitlement reader, package, object or signer unavailable",
+             "content": {
+               "application/json": {
+                 "schema": {
+diff --git a/src/api/app.ts b/src/api/app.ts
+index 8b881fb..ac133ee 100644
+--- a/src/api/app.ts
++++ b/src/api/app.ts
+@@ -1,3 +1,4 @@
++import { isSandboxPromotionalAccessAllowed } from "../config/sandboxPromotionalAccess.js";
+ import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+ import type { DestinationStream } from "pino";
+ import { createHash, createHmac, randomUUID } from "node:crypto";
+@@ -748,8 +749,16 @@ export function buildApplication(dependencies: ApplicationDependencies) {
+     }
+     const authentication = dependencies.verifier !== null && dependencies.appCheckVerifier !== null;
+     const providerReader = dependencies.environment.nodeEnv !== "production" || dependencies.revenueCatEntitlementReader != null;
+-    const ready = firestore && authentication && providerReader;
+-    return reply.code(ready ? 200 : 503).send({ status: ready ? "ready" : "not_ready", checks: { database: firestore, authentication, providerReader } });
++    let contentPackages = dependencies.environment.nodeEnv !== "production";
++    if (dependencies.environment.contentPackageReadiness) {
++      contentPackages = false;
++      if (dependencies.contentPackages) {
++        try { contentPackages = await dependencies.contentPackages.describeCurrent(dependencies.environment.contentPackageReadiness.trackId, dependencies.environment.contentPackageReadiness.nodeId) !== null; }
++        catch { contentPackages = false; }
++      }
++    }
++    const ready = firestore && authentication && providerReader && contentPackages;
++    return reply.code(ready ? 200 : 503).send({ status: ready ? "ready" : "not_ready", checks: { database: firestore, authentication, providerReader, contentPackages } });
+   });
+   app.get("/openapi.json", async () => OPENAPI_DOCUMENT);
+ 
+@@ -1344,11 +1353,25 @@ export function buildApplication(dependencies: ApplicationDependencies) {
+   app.get("/v1/tracks", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request) => ({ tracks: await requireStores(dependencies).tracks.readAccess(request.userId!) }));
+   app.get("/v1/content/versions", { preHandler: routeGuard("app_check_bearer", dependencies) }, async () => ({ versions: await requireStores(dependencies).content.readCurrent() }));
+   app.get("/v1/content/packages/:trackId/:nodeId", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
++    const sandboxPolicy = dependencies.environment.sandboxPromotionalAccess;
++    const sandboxAllowed = () => isSandboxPromotionalAccessAllowed(sandboxPolicy, {
++      firebaseProjectId: dependencies.environment.firebaseProjectId,
++      revenueCatProjectId: dependencies.environment.revenueCatProjectId,
++      revenueCatAppId: dependencies.environment.revenueCatAppId,
++      revenueCatEnvironment: dependencies.environment.revenueCatWebhookEnvironment,
++      revenueCatApiBaseUrl: dependencies.environment.revenueCatApiBaseUrl,
++      accountId: request.userId!,
++    });
++    if (sandboxPolicy && !sandboxAllowed()) return reply.code(403).send({ error: { code: "entitlement_required" } });
+     const params = request.params as { trackId?: unknown; nodeId?: unknown };
+     if (!isPackageId(params.trackId) || !isPackageId(params.nodeId)) return reply.code(400).send({ error: { code: "invalid_request" } });
+     if (!dependencies.revenueCatEntitlementReader) return reply.code(503).send({ error: { code: "entitlement_unavailable" } });
+     let entitlement;
+-    try { entitlement = await dependencies.revenueCatEntitlementReader.read(request.userId!); }
++    try {
++      if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
++      entitlement = await dependencies.revenueCatEntitlementReader.read(request.userId!);
++      if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
++    }
+     catch { return reply.code(503).send({ error: { code: "entitlement_unavailable" } }); }
+     if (entitlement.state === "unavailable") return reply.code(503).send({ error: { code: "entitlement_unavailable" } });
+     const now = Date.now();
+@@ -1359,19 +1382,16 @@ export function buildApplication(dependencies: ApplicationDependencies) {
+     }
+     if (!dependencies.contentPackages) return reply.code(503).send({ error: { code: "package_unavailable" } });
+     let packageData;
+-    try { packageData = await dependencies.contentPackages.readCurrent(params.trackId, params.nodeId); }
++    try { packageData = await dependencies.contentPackages.describeCurrent(params.trackId, params.nodeId); }
+     catch { return reply.code(503).send({ error: { code: "package_unavailable" } }); }
++    if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
++    await protect(request, reply, dependencies);
++    if (reply.sent) return;
++    if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
++    if (sandboxPolicy && !sandboxAllowed()) return reply.code(403).send({ error: { code: "entitlement_required" } });
+     if (!packageData) return reply.code(404).send({ error: { code: "not_found" } });
+-    reply.header("content-type", "application/gzip");
+-    reply.header("content-length", String(packageData.bytes.length));
+     reply.header("cache-control", "private, no-store");
+-    reply.header("x-content-package-sha256", packageData.manifest.packageSha256);
+-    reply.header("x-content-artifact-sha256", packageData.manifest.artifactSha256);
+-    reply.header("x-content-version", packageData.manifest.contentVersion);
+-    reply.header("x-content-release-id", packageData.manifest.contentReleaseId);
+-    reply.header("x-content-minimum-app-version", packageData.manifest.minimumAppVersion);
+-    reply.header("x-content-artifact-size-bytes", String(packageData.manifest.artifactSizeBytes));
+-    return reply.code(200).send(packageData.bytes);
++    return reply.code(200).send(packageData);
+   });
+   app.post("/v1/content/reports", { preHandler: routeGuard("app_check_optional_bearer", dependencies) }, async (request, reply) => {
+     const parsed = createContentReportSchema.safeParse(request.body);
+diff --git a/src/api/openapi.ts b/src/api/openapi.ts
+index f9a28e7..78b2432 100644
+--- a/src/api/openapi.ts
++++ b/src/api/openapi.ts
+@@ -211,7 +211,7 @@ const OPENAPI_DOCUMENT_RAW = {
+     "/v1/public/deletion-operations/status": { "x-patternly-security-profile": "app_check_only", "x-patternly-consumer-scope": "mobile", post: { security: [], description: "Resume an in-app deletion after its Firebase account has been removed, using the operation-bound secret", requestBody: { required: true, content: { "application/json": { schema: { "$ref": "#/components/schemas/PublicDeletionStatus" } } } }, responses: { "200": { description: "Deletion operation status" }, "404": { description: "Operation unavailable" } } } },
+     "/v1/tracks": { "x-patternly-security-profile": "app_check_bearer", "x-patternly-consumer-scope": "mobile", get: { responses: { "200": { description: "Account track access" } } } },
+     "/v1/content/versions": { "x-patternly-security-profile": "app_check_bearer", "x-patternly-consumer-scope": "mobile", get: { responses: { "200": { description: "Current immutable content metadata" } } } },
+-    "/v1/content/packages/{trackId}/{nodeId}": { "x-patternly-security-profile": "app_check_bearer", "x-patternly-consumer-scope": "mobile", get: { description: "Stream current immutable gzip package bytes after a fresh RevenueCat entitlement read. Local filesystem package storage is development-only.", parameters: [{ name: "trackId", in: "path", required: true, schema: { type: "string", pattern: "^[a-z0-9][a-z0-9._-]{0,127}$" } }, { name: "nodeId", in: "path", required: true, schema: { type: "string", pattern: "^[a-z0-9][a-z0-9._-]{0,127}$" } }], responses: { "200": { description: "Exact verified gzip package bytes", headers: { "Content-Length": { required: true, schema: { type: "integer", minimum: 1 } }, "Cache-Control": { required: true, schema: { type: "string", const: "private, no-store" } }, "X-Content-Package-Sha256": { required: true, schema: { type: "string", pattern: "^[a-f0-9]{64}$" } }, "X-Content-Artifact-Sha256": { required: true, schema: { type: "string", pattern: "^[a-f0-9]{64}$" } }, "X-Content-Version": { required: true, schema: { type: "string" } }, "X-Content-Release-Id": { required: true, schema: { type: "string", minLength: 1 } }, "X-Content-Minimum-App-Version": { required: true, schema: { type: "string", pattern: "^\\d+\\.\\d+\\.\\d+(?:[-+][A-Za-z0-9.-]+)?$" } }, "X-Content-Artifact-Size-Bytes": { required: true, schema: { type: "integer", minimum: 1 } } }, content: { "application/gzip": { schema: { type: "string", format: "binary" } } } }, "400": { description: "Invalid track or node identifier" }, "401": { description: "Authentication or App Check required" }, "403": { description: "Current entitlement is required" }, "404": { description: "Unpublished package" }, "503": { description: "Entitlement reader or package bytes unavailable" } } } },
++    "/v1/content/packages/{trackId}/{nodeId}": { "x-patternly-security-profile": "app_check_bearer", "x-patternly-consumer-scope": "mobile", get: { description: "Authorize a short-lived generation-bound GCS GET descriptor after fresh entitlement verification. No byte-stream fallback.", parameters: [{ name: "trackId", in: "path", required: true, schema: { type: "string", pattern: "^[a-z0-9][a-z0-9._-]{0,127}$" } }, { name: "nodeId", in: "path", required: true, schema: { type: "string", pattern: "^[a-z0-9][a-z0-9._-]{0,127}$" } }], responses: { "200": { description: "Download descriptor; signed URL expires within 60 seconds", headers: { "Cache-Control": { required: true, schema: { type: "string", const: "private, no-store" } } } }, "400": { description: "Invalid track or node identifier" }, "401": { description: "Authentication or App Check required" }, "403": { description: "Current entitlement required" }, "404": { description: "Unpublished package" }, "503": { description: "Entitlement reader, package, object or signer unavailable" } } } },
+     "/v1/content/reports": { "x-patternly-security-profile": "app_check_optional_bearer", "x-patternly-consumer-scope": "mobile", post: { security: [{ appCheckAuth: [] }], description: "App Check is required. Account and contact linkage are stored only when explicitly requested; account linkage additionally requires an optional Firebase bearer token.", parameters: [{ "$ref": "#/components/parameters/FirebaseAppCheck" }], requestBody: { required: true, content: { "application/json": { schema: { "$ref": "#/components/schemas/CreateContentReport" } } } }, responses: { "201": { description: "Content report accepted" }, "200": { description: "Duplicate client submission" }, "400": { description: "Invalid report" }, "401": { description: "Valid App Check required, account unavailable, or account linkage authentication required", "x-patternly-error-codes": ["app_check_required", "app_check_invalid", "authentication_required", "account_deleted", "authorization_generation_required", "authorization_generation_invalid", "authorization_generation_stale"] }, "409": { description: "Account authorization changed during report creation", "x-patternly-error-codes": ["authorization_generation_conflict"] }, "429": { description: "Anonymous report rate limit exceeded" } } } },
+     "/v1/admin/content-reports": { "x-patternly-security-profile": "admin", "x-patternly-consumer-scope": "mobile+web", get: { description: "Open, in-review, and resolved content reports for the configured administrator with a verified Firebase email.", responses: { "200": { description: "Content report triage queue" }, "401": { description: "Valid Firebase bearer token required" }, "403": { description: "Verified configured administrator required" } } } },
+     "/v1/admin/privacy-requests": { "x-patternly-security-profile": "admin", "x-patternly-consumer-scope": "web", get: { description: "Minimal deadline-ordered privacy request queue for the verified configured administrator", responses: { "200": { description: "Privacy request queue" }, "403": { description: "Administrator required" } } } },
+@@ -622,7 +622,7 @@ const adminQuestionsSchema = objectSchema({ questions: { type: "array", items: o
+ 
+ const successSchemas: Readonly<Record<string, OpenApiRecord>> = {
+   "GET /health": objectSchema({ status: { type: "string", const: "ok" }, service: { type: "string", const: "patternly-backend" } }, ["status", "service"]),
+-  "GET /ready": objectSchema({ status: { type: "string", enum: ["ready", "not_ready"] }, checks: objectSchema({ database: { type: "boolean" }, authentication: { type: "boolean" }, providerReader: { type: "boolean" } }, ["database", "authentication", "providerReader"]) }, ["status", "checks"]),
++  "GET /ready": objectSchema({ status: { type: "string", enum: ["ready", "not_ready"] }, checks: objectSchema({ database: { type: "boolean" }, authentication: { type: "boolean" }, providerReader: { type: "boolean" }, contentPackages: { type: "boolean" } }, ["database", "authentication", "providerReader", "contentPackages"]) }, ["status", "checks"]),
+   "GET /openapi.json": objectSchema({ openapi: { type: "string", minLength: 1 }, paths: objectSchema({}, [], true) }, ["openapi", "paths"], true),
+   "POST /v1/webhooks/revenuecat": objectSchema({ outcome: { type: "string", minLength: 1 }, duplicate: { type: "boolean" } }, ["outcome", "duplicate"]),
+   "POST /v1/account/registration": objectSchema({ registration: objectSchema({ created: { type: "boolean" }, user: userProfileSchema, acceptance: { anyOf: [objectSchema({ termsVersion: { type: "string" }, termsLocale: { type: "string", enum: ["en", "pl"] }, privacyPolicyVersion: { type: "string" }, privacyPolicyLocale: { type: "string", enum: ["en", "pl"] }, privacyPolicyAcknowledged: { type: "boolean", const: true }, acceptedAt: { type: "string", format: "date-time" } }, ["termsVersion", "termsLocale", "privacyPolicyVersion", "privacyPolicyLocale", "privacyPolicyAcknowledged", "acceptedAt"]), { type: "null" }] } }, ["created", "user", "acceptance"]) }, ["registration"]),
+@@ -666,7 +666,12 @@ const successSchemas: Readonly<Record<string, OpenApiRecord>> = {
+   "POST /v1/public/deletion-operations/status": ref("DeletionOperationStatus"),
+   "GET /v1/tracks": objectSchema({ tracks: { type: "array", items: trackAccessSchema } }, ["tracks"]),
+   "GET /v1/content/versions": objectSchema({ versions: { type: "array", items: contentVersionSchema } }, ["versions"]),
+-  "GET /v1/content/packages/{trackId}/{nodeId}": { type: "string", format: "binary" },
++  "GET /v1/content/packages/{trackId}/{nodeId}": objectSchema({
++    schemaVersion: { const: "patternly-content-download-v1" },
++    manifest: objectSchema({ schemaVersion: { const: "patternly-content-node-package-v1" }, trackId: { type: "string" }, nodeId: { type: "string" }, contentVersion: { type: "string" }, artifactSha256: { type: "string", pattern: "^[a-f0-9]{64}$" }, packageSha256: { type: "string", pattern: "^[a-f0-9]{64}$" }, contentReleaseId: { type: "string" }, minimumAppVersion: { type: "string", pattern: "^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$" }, packageFormat: { const: "gzip" }, compressedSizeBytes: { type: "integer", minimum: 1, maximum: 2097152 }, artifactSizeBytes: { type: "integer", minimum: 1, maximum: 8388608 }, packagePath: { type: "string" } }, ["schemaVersion", "trackId", "nodeId", "contentVersion", "artifactSha256", "packageSha256", "contentReleaseId", "minimumAppVersion", "packageFormat", "compressedSizeBytes", "artifactSizeBytes", "packagePath"]),
++    object: objectSchema({ bucket: { type: "string" }, path: { type: "string" }, generation: { type: "string", pattern: "^[1-9][0-9]{0,30}$" } }, ["bucket", "path", "generation"]),
++    downloadUrl: { type: "string", format: "uri", maxLength: 8192 }, expiresAt: { type: "string", format: "date-time" },
++  }, ["schemaVersion", "manifest", "object", "downloadUrl", "expiresAt"]),
+   "POST /v1/content/reports": ref("ContentReportResponse"),
+   "GET /v1/admin/content-reports": ref("AdminContentReportsResponse"),
+   "GET /v1/operator/content-reports": objectSchema({ items: { type: "array", items: ref("OperatorContentReportItem") }, truncated: { type: "boolean" } }, ["items", "truncated"]),
+diff --git a/src/config/environment.ts b/src/config/environment.ts
+index 0d50962..005a361 100644
+--- a/src/config/environment.ts
++++ b/src/config/environment.ts
+@@ -1,3 +1,4 @@
++import { parseSandboxPromotionalAccessPolicy, isSandboxPromotionalAccessAllowed, type SandboxPromotionalAccessPolicy } from "./sandboxPromotionalAccess.js";
+ import { z } from "zod";
+ import { parseOperatorAllowlist, type OperatorAllowlistEntry } from "../modules/operator-access/contracts.js";
+ 
+@@ -37,6 +38,8 @@ const environmentSchema = z.object({
+   RECOVERY_OPERATION_KEYS_JSON: z.string().min(1).optional(),
+   RECOVERY_OPERATION_RATE_LIMIT_MAX: z.coerce.number().int().positive().max(600).default(30),
+   RECOVERY_OPERATION_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().max(3_600).default(60),
++  REVENUECAT_PROJECT_ID: z.string().regex(/^proj[A-Za-z0-9]+$/u).optional(),
++  REVENUECAT_SANDBOX_PROMOTIONAL_ACCESS_JSON: z.string().min(1).optional(),
+   REVENUECAT_API_BASE_URL: z.string().url().default("https://api.revenuecat.com"),
+   REVENUECAT_READ_API_KEY: z.string().min(1).optional(),
+   REVENUECAT_WEBHOOK_SECRET: z.string().min(1).optional(),
+@@ -47,7 +50,9 @@ const environmentSchema = z.object({
+   CONTENT_CATALOG_ORIGIN: z.string().url().optional(),
+   ADMIN_CONTENT_ROOT: z.string().min(1).optional(),
+   ADMIN_CONTENT_RELEASE_ID: z.string().regex(ADMIN_CONTENT_RELEASE_ID_PATTERN).optional(),
+-  CONTENT_PACKAGE_LOCAL_ROOT: z.string().min(1).optional(),
++  CONTENT_PACKAGE_BUCKET: z.string().regex(/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/u).optional(),
++  CONTENT_PACKAGE_READINESS_TRACK_ID: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,127}$/u).optional(),
++  CONTENT_PACKAGE_READINESS_NODE_ID: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,127}$/u).optional(),
+ });
+ 
+ export type Environment = Readonly<{
+@@ -78,6 +83,8 @@ export type Environment = Readonly<{
+   recoveryOperationKeysJson: string | undefined;
+   recoveryOperationRateLimitMax: number;
+   recoveryOperationRateLimitWindowSeconds: number;
++  revenueCatProjectId: string | undefined;
++  sandboxPromotionalAccess: SandboxPromotionalAccessPolicy | null;
+   revenueCatApiBaseUrl: string;
+   revenueCatReadApiKey: string | undefined;
+   revenueCatWebhookSecret: string | undefined;
+@@ -88,7 +95,8 @@ export type Environment = Readonly<{
+   contentCatalogOrigin: string | undefined;
+   adminContentRoot: string | undefined;
+   adminContentReleaseId: string | undefined;
+-  contentPackageLocalRoot: string | undefined;
++  contentPackageBucket: string | undefined;
++  contentPackageReadiness: Readonly<{ trackId: string; nodeId: string }> | null;
+ }>;
+ 
+ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
+@@ -102,8 +110,18 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
+     }
+     if (!smtpConfiguration(value)) throw new Error("production_smtp_config_required");
+     if (!value.REVENUECAT_WEBHOOK_SECRET || !value.REVENUECAT_APP_ID || !value.REVENUECAT_ENTITLEMENT_ID || !value.REVENUECAT_PRODUCT_ID || !value.REVENUECAT_WEBHOOK_ENVIRONMENT) throw new Error("production_revenuecat_config_required");
+-    if (value.CONTENT_PACKAGE_LOCAL_ROOT !== undefined) throw new Error("production_local_content_package_storage_forbidden");
+   }
++  if (source.CONTENT_PACKAGE_LOCAL_ROOT !== undefined) throw new Error("local_content_package_transport_removed");
++  if (Boolean(value.CONTENT_PACKAGE_READINESS_TRACK_ID) !== Boolean(value.CONTENT_PACKAGE_READINESS_NODE_ID)
++    || (value.CONTENT_PACKAGE_READINESS_TRACK_ID && !value.CONTENT_PACKAGE_BUCKET)) throw new Error("invalid_content_package_readiness_config");
++  const sandboxPromotionalAccess = parseSandboxPromotionalAccessPolicy(value.REVENUECAT_SANDBOX_PROMOTIONAL_ACCESS_JSON);
++  if (sandboxPromotionalAccess && !isSandboxPromotionalAccessAllowed(sandboxPromotionalAccess, {
++    firebaseProjectId: value.FIREBASE_PROJECT_ID, revenueCatProjectId: value.REVENUECAT_PROJECT_ID,
++    revenueCatAppId: value.REVENUECAT_APP_ID, revenueCatEnvironment: value.REVENUECAT_WEBHOOK_ENVIRONMENT,
++    revenueCatApiBaseUrl: value.REVENUECAT_API_BASE_URL, accountId: sandboxPromotionalAccess.customerId,
++    // An expired policy must start safely and deny requests, rather than crash the service.
++    nowMs: Date.parse(sandboxPromotionalAccess.expiresAt) - 1,
++  })) throw new Error("invalid_sandbox_promotional_access_runtime");
+   const adminWebOrigin = parseAdminWebOrigin(value);
+   const operatorAccess = parseOperatorAccess(value);
+   return Object.freeze({
+@@ -129,6 +147,8 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
+     recoveryOperationKeysJson: value.RECOVERY_OPERATION_KEYS_JSON,
+     recoveryOperationRateLimitMax: value.RECOVERY_OPERATION_RATE_LIMIT_MAX,
+     recoveryOperationRateLimitWindowSeconds: value.RECOVERY_OPERATION_RATE_LIMIT_WINDOW_SECONDS,
++    revenueCatProjectId: value.REVENUECAT_PROJECT_ID,
++    sandboxPromotionalAccess,
+     revenueCatApiBaseUrl: value.REVENUECAT_API_BASE_URL,
+     revenueCatReadApiKey: value.REVENUECAT_READ_API_KEY,
+     revenueCatWebhookSecret: value.REVENUECAT_WEBHOOK_SECRET,
+@@ -139,7 +159,9 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
+     contentCatalogOrigin: value.CONTENT_CATALOG_ORIGIN,
+     adminContentRoot: value.ADMIN_CONTENT_ROOT,
+     adminContentReleaseId: value.ADMIN_CONTENT_RELEASE_ID,
+-    contentPackageLocalRoot: value.CONTENT_PACKAGE_LOCAL_ROOT,
++    contentPackageBucket: value.CONTENT_PACKAGE_BUCKET,
++    contentPackageReadiness: value.CONTENT_PACKAGE_READINESS_TRACK_ID && value.CONTENT_PACKAGE_READINESS_NODE_ID
++      ? Object.freeze({ trackId: value.CONTENT_PACKAGE_READINESS_TRACK_ID, nodeId: value.CONTENT_PACKAGE_READINESS_NODE_ID }) : null,
+   });
+ }
+ 
+diff --git a/src/config/sandboxPromotionalAccess.ts b/src/config/sandboxPromotionalAccess.ts
+new file mode 100644
+index 0000000..7443a4e
+--- /dev/null
++++ b/src/config/sandboxPromotionalAccess.ts
+@@ -0,0 +1,87 @@
++export const SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID = "patternly-app-sandbox" as const;
++export const SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID = "proj8ae78267" as const;
++export const SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID = "app7b06e9a4c1" as const;
++export const REVENUECAT_OFFICIAL_API_BASE_URL = "https://api.revenuecat.com" as const;
++
++export type SandboxPromotionalAccessPolicy = Readonly<{
++  firebaseProjectId: typeof SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID;
++  revenueCatProjectId: typeof SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID;
++  revenueCatAppId: typeof SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID;
++  customerId: string;
++  expiresAt: string;
++}>;
++
++export type SandboxPromotionalAccessRuntime = Readonly<{
++  firebaseProjectId?: string | undefined;
++  revenueCatProjectId?: string | undefined;
++  revenueCatAppId?: string | undefined;
++  revenueCatEnvironment?: "PRODUCTION" | "SANDBOX" | undefined;
++  revenueCatApiBaseUrl: string;
++  accountId: string;
++  nowMs?: number;
++}>;
++
++const POLICY_ERROR = "invalid_sandbox_promotional_access_config";
++
++function isRecord(value: unknown): value is Record<string, unknown> {
++  return typeof value === "object" && value !== null && !Array.isArray(value);
++}
++
++function parseIsoDate(value: unknown): string | undefined {
++  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/u.test(value)) return undefined;
++  const datePart = value.slice(0, 10);
++  const calendarDate = new Date(`${datePart}T00:00:00.000Z`);
++  if (!Number.isFinite(calendarDate.getTime()) || calendarDate.toISOString().slice(0, 10) !== datePart) return undefined;
++  const timestamp = Date.parse(value);
++  if (!Number.isFinite(timestamp)) return undefined;
++  try { return new Date(timestamp).toISOString(); } catch { return undefined; }
++}
++
++/** Parse and pin the temporary grant to the reviewed sandbox projects. */
++export function parseSandboxPromotionalAccessPolicy(value: string | undefined): SandboxPromotionalAccessPolicy | null {
++  if (value === undefined) return null;
++  if (value.length === 0) throw new Error(POLICY_ERROR);
++
++  let parsed: unknown;
++  try { parsed = JSON.parse(value); } catch { throw new Error(POLICY_ERROR); }
++  if (!isRecord(parsed)
++    || Object.keys(parsed).sort().join(",") !== "customerId,expiresAt,firebaseProjectId,revenueCatAppId,revenueCatProjectId"
++    || parsed.firebaseProjectId !== SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID
++    || parsed.revenueCatProjectId !== SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID
++    || parsed.revenueCatAppId !== SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID
++    || typeof parsed.customerId !== "string"
++    || parsed.customerId.length === 0
++    || parsed.customerId.trim() !== parsed.customerId
++    || parsed.customerId.length > 256) throw new Error(POLICY_ERROR);
++
++  const expiresAt = parseIsoDate(parsed.expiresAt);
++  if (expiresAt === undefined) throw new Error(POLICY_ERROR);
++
++  return Object.freeze({
++    firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++    revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++    revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
++    customerId: parsed.customerId,
++    expiresAt,
++  });
++}
++
++/** Shared route/client guard for project, account, environment, URL and cutoff. */
++export function isSandboxPromotionalAccessAllowed(
++  policy: SandboxPromotionalAccessPolicy | null | undefined,
++  runtime: SandboxPromotionalAccessRuntime,
++): policy is SandboxPromotionalAccessPolicy {
++  const nowMs = runtime.nowMs ?? Date.now();
++  return policy !== null
++    && policy !== undefined
++    && runtime.firebaseProjectId === SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID
++    && policy.firebaseProjectId === runtime.firebaseProjectId
++    && runtime.revenueCatProjectId === SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID
++    && policy.revenueCatProjectId === runtime.revenueCatProjectId
++    && policy.revenueCatAppId === runtime.revenueCatAppId
++    && runtime.revenueCatEnvironment === "SANDBOX"
++    && runtime.revenueCatApiBaseUrl.replace(/\/+$/u, "") === REVENUECAT_OFFICIAL_API_BASE_URL
++    && runtime.accountId === policy.customerId
++    && Number.isFinite(nowMs)
++    && nowMs < Date.parse(policy.expiresAt);
++}
+diff --git a/src/index.ts b/src/index.ts
+index 8117546..49650ee 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -1,3 +1,4 @@
++import { getStorage } from "firebase-admin/storage";
+ import { buildApplication } from "./api/app.js";
+ import { loadEnvironment } from "./config/environment.js";
+ import { createFirestoreRuntime } from "./infrastructure/firestore/client.js";
+@@ -8,7 +9,8 @@ import { createBootstrapLogger } from "./infrastructure/logging/logger.js";
+ import { createSmtpLegalRequestEmailSender, createSmtpPrivacyEmailSender, createSmtpPurchaseReceiptEmailSender, createSmtpSecurityIncidentEmailSender } from "./infrastructure/email/smtpPrivacyEmailSender.js";
+ import { createRevenueCatEntitlementReader } from "./infrastructure/revenuecat/client.js";
+ import { createOperatorTokenVerifier } from "./infrastructure/operator/oidcVerifier.js";
+-import { ContentPackageService, FirestoreContentPackagePointerStore, LocalFilesystemContentPackageStorage } from "./modules/content/packages.js";
++import { GcsContentPackageStorage } from "./infrastructure/content/gcsContentPackageStorage.js";
++import { ContentPackageService, FirestoreContentPackagePointerStore } from "./modules/content/packages.js";
+ 
+ async function main(): Promise<void> {
+   const bootstrapLogger = createBootstrapLogger();
+@@ -32,10 +34,10 @@ async function main(): Promise<void> {
+       operatorTokenVerifier: createOperatorTokenVerifier(environment),
+       stores: createFirestoreStores(firestore, environment),
+       revenueCatEntitlementReader: environment.revenueCatReadApiKey && environment.revenueCatEntitlementId && environment.revenueCatProductId && environment.revenueCatWebhookEnvironment
+-        ? createRevenueCatEntitlementReader({ baseUrl: environment.revenueCatApiBaseUrl, apiKey: environment.revenueCatReadApiKey, entitlementId: environment.revenueCatEntitlementId, productId: environment.revenueCatProductId, environment: environment.revenueCatWebhookEnvironment })
++        ? createRevenueCatEntitlementReader({ baseUrl: environment.revenueCatApiBaseUrl, apiKey: environment.revenueCatReadApiKey, entitlementId: environment.revenueCatEntitlementId, productId: environment.revenueCatProductId, environment: environment.revenueCatWebhookEnvironment, firebaseProjectId: environment.firebaseProjectId, revenueCatProjectId: environment.revenueCatProjectId, revenueCatAppId: environment.revenueCatAppId, sandboxPromotionalAccess: environment.sandboxPromotionalAccess })
+         : null,
+-      contentPackages: environment.contentPackageLocalRoot
+-        ? new ContentPackageService(new FirestoreContentPackagePointerStore(firestore.db), new LocalFilesystemContentPackageStorage(environment.contentPackageLocalRoot))
++      contentPackages: environment.contentPackageBucket
++        ? new ContentPackageService(new FirestoreContentPackagePointerStore(firestore.db), new GcsContentPackageStorage(getStorage(firestore.app).bucket(environment.contentPackageBucket)))
+         : null,
+       privacyRequestEmailSender,
+       legalRequestEmailSender,
+diff --git a/src/infrastructure/content/gcsContentPackageStorage.ts b/src/infrastructure/content/gcsContentPackageStorage.ts
+new file mode 100644
+index 0000000..58d1fa3
+--- /dev/null
++++ b/src/infrastructure/content/gcsContentPackageStorage.ts
+@@ -0,0 +1,60 @@
++import type { getStorage } from "firebase-admin/storage";
++import { CONTENT_PACKAGE_LIMITS, type ContentPackageStorage, type ContentNodePackageManifest, type ContentPackageDownloadDescriptor } from "../../modules/content/packages.js";
++
++type Bucket = ReturnType<ReturnType<typeof getStorage>["bucket"]>;
++const GENERATION = /^[1-9][0-9]{0,30}$/u;
++
++/** The only deployed byte provider. Local filesystem storage remains producer/test tooling. */
++export class GcsContentPackageStorage implements ContentPackageStorage {
++  constructor(private readonly bucket: Bucket) {}
++
++  async writeImmutable(packagePath: string, bytes: Buffer): Promise<void> {
++    if (bytes.length > CONTENT_PACKAGE_LIMITS.compressedBytes) throw new Error("content_package_bytes_invalid");
++    try {
++      await this.bucket.file(packagePath).save(bytes, {
++        resumable: false, validation: "crc32c", preconditionOpts: { ifGenerationMatch: 0 },
++        metadata: { contentType: "application/gzip", cacheControl: "private, no-store" },
++      });
++    } catch (error) {
++      if ((error as { code?: unknown })?.code !== 412) throw new Error("content_package_write_unavailable");
++      if (!(await this.read(packagePath)).equals(bytes)) throw new Error("content_package_immutable_conflict");
++    }
++  }
++
++  async read(packagePath: string): Promise<Buffer> {
++    const file = this.bucket.file(packagePath);
++    const [metadata] = await file.getMetadata();
++    if (metadata.bucket !== this.bucket.name || metadata.name !== packagePath || metadata.contentType !== "application/gzip" || metadata.contentEncoding
++      || typeof metadata.generation !== "string" || !GENERATION.test(metadata.generation)
++      || !Number.isSafeInteger(Number(metadata.size)) || Number(metadata.size) < 1 || Number(metadata.size) > CONTENT_PACKAGE_LIMITS.compressedBytes) throw new Error("content_package_object_invalid");
++    const [bytes] = await this.bucket.file(packagePath, { generation: String(metadata.generation) }).download({ validation: "crc32c", decompress: false });
++    if (bytes.length !== Number(metadata.size)) throw new Error("content_package_bytes_invalid");
++    return bytes;
++  }
++
++  async describe(manifest: ContentNodePackageManifest): Promise<ContentPackageDownloadDescriptor> {
++    try {
++      const [metadata] = await this.bucket.file(manifest.packagePath).getMetadata();
++      const generation = metadata.generation;
++      if (metadata.bucket !== this.bucket.name || metadata.name !== manifest.packagePath
++        || Number(metadata.size) !== manifest.compressedSizeBytes || metadata.contentType !== "application/gzip"
++        || metadata.contentEncoding || typeof generation !== "string" || !GENERATION.test(generation)) throw new Error("content_package_object_invalid");
++      // The SDK may cross a second while signing; derive expiry from its signed fields.
++      const expires = Math.floor(Date.now() / 1000) * 1000 + 60_000;
++      const [downloadUrl] = await this.bucket.file(manifest.packagePath).getSignedUrl({
++        version: "v4", action: "read", expires, queryParams: { generation },
++      });
++      const signed = new URL(downloadUrl);
++      const date = signed.searchParams.get("X-Goog-Date")?.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/u);
++      const issued = date ? Date.parse(`${date[1]}-${date[2]}-${date[3]}T${date[4]}:${date[5]}:${date[6]}Z`) : NaN;
++      const seconds = Number(signed.searchParams.get("X-Goog-Expires"));
++      const signedExpiry = issued + seconds * 1000;
++      if (signed.hostname !== "storage.googleapis.com" || signed.protocol !== "https:"
++        || signed.searchParams.get("generation") !== generation || !Number.isInteger(seconds) || seconds < 1 || seconds > 60
++        || !Number.isFinite(signedExpiry) || signedExpiry <= Date.now() || signedExpiry > Date.now() + 60_000) throw new Error("content_package_url_invalid");
++      return Object.freeze({ schemaVersion: "patternly-content-download-v1", manifest,
++        object: Object.freeze({ bucket: this.bucket.name, path: manifest.packagePath, generation }),
++        downloadUrl, expiresAt: new Date(signedExpiry).toISOString() });
++    } catch { throw new Error("content_package_unavailable"); }
++  }
++}
+diff --git a/src/infrastructure/revenuecat/client.ts b/src/infrastructure/revenuecat/client.ts
+index c1fd8d9..e299846 100644
+--- a/src/infrastructure/revenuecat/client.ts
++++ b/src/infrastructure/revenuecat/client.ts
+@@ -1,3 +1,8 @@
++import {
++  isSandboxPromotionalAccessAllowed,
++  type SandboxPromotionalAccessPolicy,
++} from "../../config/sandboxPromotionalAccess.js";
++
+ export type RevenueCatEnvironment = "PRODUCTION" | "SANDBOX";
+ 
+ export type RevenueCatEntitlementState = "active" | "grace" | "hold" | "expired" | "refunded" | "unavailable";
+@@ -17,6 +22,10 @@ export type RevenueCatReaderConfig = Readonly<{
+   entitlementId: string;
+   productId: string;
+   environment: RevenueCatEnvironment;
++  firebaseProjectId?: string | undefined;
++  revenueCatProjectId?: string | undefined;
++  revenueCatAppId?: string | undefined;
++  sandboxPromotionalAccess?: SandboxPromotionalAccessPolicy | null | undefined;
+ }>;
+ 
+ /**
+@@ -131,6 +140,53 @@ function hasNonEmptyString(value: unknown): value is string {
+   return typeof value === "string" && value.length > 0;
+ }
+ 
++function readPromotionalEntitlement(
++  config: RevenueCatReaderConfig,
++  userId: string,
++  subscriber: JsonRecord,
++  entitlement: JsonRecord,
++  requestDate: { milliseconds: number; iso: string },
++): RevenueCatEntitlementResult {
++  const unavailableResult = unavailable(config, requestDate.iso);
++  const policy = config.sandboxPromotionalAccess;
++  const allowed = isSandboxPromotionalAccessAllowed(policy, {
++    ...(config.firebaseProjectId === undefined ? {} : { firebaseProjectId: config.firebaseProjectId }),
++    ...(config.revenueCatProjectId === undefined ? {} : { revenueCatProjectId: config.revenueCatProjectId }),
++    ...(config.revenueCatAppId === undefined ? {} : { revenueCatAppId: config.revenueCatAppId }),
++    revenueCatEnvironment: config.environment,
++    revenueCatApiBaseUrl: config.baseUrl,
++    accountId: userId,
++  });
++  if (!allowed || policy.customerId !== userId || subscriber.original_app_user_id !== userId) return unavailableResult;
++
++  const productIdentifier = entitlement.product_identifier;
++  if (!hasNonEmptyString(productIdentifier) || !productIdentifier.startsWith("rc_promo_")) return unavailableResult;
++  const subscriptionsValue = subscriber.subscriptions;
++  if (!isRecord(subscriptionsValue)) return unavailableResult;
++  const subscription = subscriptionsValue[productIdentifier];
++  if (!isRecord(subscription)
++    || subscription.store !== "promotional"
++    || subscription.is_sandbox !== false) return unavailableResult;
++
++  const entitlementExpiresAt = parseProviderDate(entitlement.expires_date, false);
++  const subscriptionExpiresAt = parseProviderDate(subscription.expires_date, false);
++  const entitlementGraceAt = parseProviderDate(entitlement.grace_period_expires_date, true);
++  const subscriptionGraceAt = parseProviderDate(subscription.grace_period_expires_date, true);
++  const refundedAt = parseProviderDate(subscription.refunded_at, true);
++  const billingIssueAt = parseProviderDate(subscription.billing_issues_detected_at, true);
++  if (entitlementExpiresAt === undefined || entitlementExpiresAt === null
++    || subscriptionExpiresAt === undefined || subscriptionExpiresAt === null
++    || entitlementExpiresAt !== subscriptionExpiresAt
++    || entitlementGraceAt !== null || subscriptionGraceAt !== null
++    || refundedAt !== null || billingIssueAt !== null) return unavailableResult;
++
++  const policyExpiresAtMs = Date.parse(policy.expiresAt);
++  if (requestDate.milliseconds >= policyExpiresAtMs || Date.now() >= policyExpiresAtMs) return unavailableResult;
++  const expiresAtMs = Math.min(Date.parse(entitlementExpiresAt), policyExpiresAtMs);
++  if (expiresAtMs <= requestDate.milliseconds) return makeResult(config, "expired", requestDate.iso, new Date(expiresAtMs).toISOString());
++  return makeResult(config, "active", requestDate.iso, new Date(expiresAtMs).toISOString());
++}
++
+ function resolveOptions(
+   config: RevenueCatReaderConfig,
+   optionsOrFetch: RevenueCatReaderOptions | RevenueCatFetch | undefined,
+@@ -215,10 +271,17 @@ function parseResponse(
+   const entitlement = entitlements[config.entitlementId];
+   const subscription = subscriptions[config.productId];
+ 
+-  if (entitlement === undefined || entitlement === null || subscription === undefined || subscription === null) {
++  if (entitlement === undefined || entitlement === null) {
+     return makeResult(config, "expired", requestDate.iso);
+   }
+-  if (!isRecord(entitlement) || !isRecord(subscription)) return unavailable(config, requestDate.iso);
++  if (!isRecord(entitlement)) return unavailable(config, requestDate.iso);
++
++  if (hasNonEmptyString(entitlement.product_identifier) && entitlement.product_identifier.startsWith("rc_promo_")) {
++    return readPromotionalEntitlement(config, userId, subscriber, entitlement, requestDate);
++  }
++
++  if (subscription === undefined || subscription === null) return makeResult(config, "expired", requestDate.iso);
++  if (!isRecord(subscription)) return unavailable(config, requestDate.iso);
+ 
+   if (entitlement.product_identifier !== config.productId) return unavailable(config, requestDate.iso);
+   if (typeof subscription.is_sandbox !== "boolean" || subscription.is_sandbox !== (config.environment === "SANDBOX")) return unavailable(config, requestDate.iso);
+@@ -259,6 +322,10 @@ export function createRevenueCatEntitlementReader(
+     entitlementId: config.entitlementId,
+     productId: config.productId,
+     environment: config.environment,
++    ...(config.firebaseProjectId === undefined ? {} : { firebaseProjectId: config.firebaseProjectId }),
++    ...(config.revenueCatProjectId === undefined ? {} : { revenueCatProjectId: config.revenueCatProjectId }),
++    ...(config.revenueCatAppId === undefined ? {} : { revenueCatAppId: config.revenueCatAppId }),
++    ...(config.sandboxPromotionalAccess === undefined ? {} : { sandboxPromotionalAccess: config.sandboxPromotionalAccess }),
+   });
+   const { fetch: fetchImpl, timeoutMs } = resolveOptions(config, optionsOrFetch);
+ 
+diff --git a/src/modules/account-lifecycle/store.ts b/src/modules/account-lifecycle/store.ts
+index ffc5ee1..98edac4 100644
+--- a/src/modules/account-lifecycle/store.ts
++++ b/src/modules/account-lifecycle/store.ts
+@@ -14,7 +14,7 @@ import type {
+   RecoveryOperationRuntime,
+ } from "./contracts.js";
+ import type { PseudonymKeyRing } from "../../infrastructure/security/pseudonymKeyRing.js";
+-import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
++import { assertExpectedAuthorizationGeneration, storedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
+ import { RecoveryOperationCipher } from "./recoveryOperationCipher.js";
+ import type { RecoveryOperationCipherContext, RecoveryOperationCipherEnvelope } from "./recoveryOperationCipher.js";
+ 
+@@ -357,16 +357,22 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
+           || slot.expectedAuthorizationGeneration !== expectedAuthorizationGeneration
+           || (slot.kind === "account_recovery" && priorData.kind !== "recovery")
+           || (slot.kind === "recovery_reissue" && priorData.kind !== "reissue")) throw new Error("security_operation_conflict");
+-        if (priorData.status !== "in_progress" && priorData.status !== "provider_retryable" && priorData.status !== "result_available") throw new Error("security_operation_conflict");
+-        const priorDeadline = Math.min(
+-          timestampMillis(priorData.resultExpiresAt),
+-          timestampMillis(slot.leaseUntil),
+-          priorData.kind === "reissue" ? timestampMillis(priorData.retryDeadline) : Number.POSITIVE_INFINITY,
+-          priorResult?.exists ? timestampMillis(asRecord(priorResult.data(), "recovery_operation_result").expiresAt) : Number.POSITIVE_INFINITY,
+-        );
+-        if (priorDeadline > nowMs) throw new Error("operation_in_progress");
+-        transaction.set(priorOperationRef, this.recoveryTerminalFields("superseded"), { merge: true });
+-        if (priorResult.exists) transaction.delete(priorResultRef);
++        // A failed legacy issue may have terminalized its result but retained
++        // this exact slot. Only a fresh reauthenticated issue may replace it.
++        const staleSupersededIssue = priorData.kind === "reissue" && priorData.status === "superseded"
++          && priorData.operationId === slot.operationId && !priorResult.exists;
++        if (!staleSupersededIssue) {
++          if (priorData.status !== "in_progress" && priorData.status !== "provider_retryable" && priorData.status !== "result_available") throw new Error("security_operation_conflict");
++          const priorDeadline = Math.min(
++            timestampMillis(priorData.resultExpiresAt),
++            timestampMillis(slot.leaseUntil),
++            priorData.kind === "reissue" ? timestampMillis(priorData.retryDeadline) : Number.POSITIVE_INFINITY,
++            priorResult?.exists ? timestampMillis(asRecord(priorResult.data(), "recovery_operation_result").expiresAt) : Number.POSITIVE_INFINITY,
++          );
++          if (priorDeadline > nowMs) throw new Error("operation_in_progress");
++          transaction.set(priorOperationRef, this.recoveryTerminalFields("superseded"), { merge: true });
++          if (priorResult.exists) transaction.delete(priorResultRef);
++        }
+       }
+ 
+       if (orphanReissueRef && orphanReissueRef.id !== (typeof currentSlotValue === "object" && currentSlotValue !== null && !Array.isArray(currentSlotValue)
+@@ -455,7 +461,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
+         && (slot as Record<string, unknown>).kind === "recovery_reissue"
+         && (slot as Record<string, unknown>).operationId === operationId
+         && (slot as Record<string, unknown>).fence === data.fence
+-        && userData.authorizationGeneration === expectedAuthorizationGeneration;
++        && storedAuthorizationGeneration(userData) === expectedAuthorizationGeneration;
+       if (!ownsSlot) {
+         transaction.set(operationRef, this.recoveryTerminalFields("superseded"), { merge: true });
+         if (result?.exists) transaction.delete(resultRef);
+diff --git a/src/modules/billing/revenuecatWebhookStore.ts b/src/modules/billing/revenuecatWebhookStore.ts
+index 989878a..077f40a 100644
+--- a/src/modules/billing/revenuecatWebhookStore.ts
++++ b/src/modules/billing/revenuecatWebhookStore.ts
+@@ -9,6 +9,7 @@ export type PurchaseReceiptDelivery = Readonly<{ userId: string; receiptId: stri
+ export type RevenueCatWebhookResult = Readonly<{ outcome: "processed" | "ignored"; duplicate: boolean; receipt?: PurchaseReceiptDelivery }>;
+ export interface RevenueCatWebhookStore {
+   process(event: RevenueCatEvent, appId: string, expectedEnvironment: "PRODUCTION" | "SANDBOX", entitlementId: string, productId: string): Promise<RevenueCatWebhookResult>;
++  identityAvailable(userId: string): Promise<boolean>;
+   markReceiptDelivery(userId: string, receiptId: string, deliveryClaimId: string, status: "sent" | "failed"): Promise<boolean>;
+ }
+ function strictlyNewer(timestamp: number, eventId: string, snapshot: { exists: boolean; get(field: string): unknown }): boolean {
+@@ -30,6 +31,10 @@ function hasActiveAuthorization(snapshot: { exists: boolean; data(): Record<stri
+ 
+ export class FirestoreRevenueCatWebhookStore implements RevenueCatWebhookStore {
+   constructor(private readonly db: Firestore) {}
++  async identityAvailable(userId: string): Promise<boolean> {
++    const user = await this.db.collection(COLLECTIONS.users).doc(userId).get();
++    return hasActiveAuthorization(user) && user.get("billingIdentityConflict") !== true;
++  }
+   async process(event: RevenueCatEvent, appId: string, expectedEnvironment: "PRODUCTION" | "SANDBOX", entitlementId: string, productId: string): Promise<RevenueCatWebhookResult> {
+     const parsed = revenueCatEventSchema.parse(event);
+     const key = createHash("sha256").update(`${appId}\0${expectedEnvironment}\0${parsed.id}`, "utf8").digest("hex");
+diff --git a/src/modules/content/packages.ts b/src/modules/content/packages.ts
+index a507429..b155c45 100644
+--- a/src/modules/content/packages.ts
++++ b/src/modules/content/packages.ts
+@@ -45,7 +45,7 @@ export function validateContentNodePackageManifest(value: unknown): ContentNodeP
+   if (Object.keys(row).sort().join("\0") !== [...keys].sort().join("\0")
+     || row.schemaVersion !== CONTENT_PACKAGE_SCHEMA || !isPackageId(row.trackId) || !isPackageId(row.nodeId)
+     || !isPackageId(row.contentVersion) || !isPackageId(row.contentReleaseId)
+-    || typeof row.minimumAppVersion !== "string" || !/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/u.test(row.minimumAppVersion)
++    || typeof row.minimumAppVersion !== "string" || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.test(row.minimumAppVersion)
+     || row.packageFormat !== "gzip" || typeof row.artifactSha256 !== "string" || !SHA256.test(row.artifactSha256)
+     || typeof row.packageSha256 !== "string" || !SHA256.test(row.packageSha256)
+     || !Number.isSafeInteger(row.compressedSizeBytes) || Number(row.compressedSizeBytes) < 1 || Number(row.compressedSizeBytes) > CONTENT_PACKAGE_LIMITS.compressedBytes
+@@ -72,7 +72,16 @@ export interface ContentPackagePointerStore {
+   readCurrent(trackId: string, nodeId: string): Promise<ContentNodePackageManifest | null>;
+ }
+ 
++export type ContentPackageDownloadDescriptor = Readonly<{
++  schemaVersion: "patternly-content-download-v1";
++  manifest: ContentNodePackageManifest;
++  object: Readonly<{ bucket: string; path: string; generation: string }>;
++  downloadUrl: string;
++  expiresAt: string;
++}>;
++
+ export interface ContentPackageStorage {
++  describe?(manifest: ContentNodePackageManifest): Promise<ContentPackageDownloadDescriptor>;
+   writeImmutable(packagePath: string, bytes: Buffer): Promise<void>;
+   read(packagePath: string): Promise<Buffer>;
+ }
+@@ -137,14 +146,12 @@ export class ContentPackageService {
+     return manifest;
+   }
+ 
+-  public async readCurrent(trackId: string, nodeId: string): Promise<Readonly<{ manifest: ContentNodePackageManifest; bytes: Buffer }> | null> {
+-    const manifest = await this.pointers.readCurrent(trackId, nodeId);
+-    if (!manifest) return null;
+-    try {
+-      const bytes = await this.storage.read(manifest.packagePath);
+-      verifyContentNodePackage(manifest, bytes);
+-      return Object.freeze({ manifest, bytes });
+-    } catch { throw new Error("content_package_unavailable"); }
++  public async describeCurrent(trackId: string, nodeId: string): Promise<ContentPackageDownloadDescriptor | null> {
++    const value = await this.pointers.readCurrent(trackId, nodeId);
++    if (!value) return null;
++    const manifest = validateContentNodePackageManifest(value);
++    if (manifest.trackId !== trackId || manifest.nodeId !== nodeId || !this.storage.describe) throw new Error("content_package_unavailable");
++    return this.storage.describe(manifest);
+   }
+ }
+ 
+diff --git a/tests/aud08Recovery.emulator.test.ts b/tests/aud08Recovery.emulator.test.ts
+index ba0e62e..b7ccad8 100644
+--- a/tests/aud08Recovery.emulator.test.ts
++++ b/tests/aud08Recovery.emulator.test.ts
+@@ -6,7 +6,7 @@ import { resolve } from "node:path";
+ import test, { after, before, describe } from "node:test";
+ import { deleteApp as deleteAdminApp, initializeApp as initializeAdminApp } from "firebase-admin/app";
+ import { getAuth as getAdminAuth } from "firebase-admin/auth";
+-import { getFirestore } from "firebase-admin/firestore";
++import { FieldValue, getFirestore } from "firebase-admin/firestore";
+ import { COLLECTIONS } from "../src/infrastructure/firestore/paths.js";
+ import { createFirebaseAdminAuth } from "../src/infrastructure/firebase/adminAuth.js";
+ import { RecoveryOperationCipher } from "../src/modules/account-lifecycle/recoveryOperationCipher.js";
+@@ -462,6 +462,86 @@ TEST_GROUP(ENABLED
+     assert.equal(hashes.size, 10);
+   });
+ 
++  test("legacy generation-one accounts retain issued codes through status replay and ACK", async () => {
++    const fixture = await makeAccount();
++    const userRef = db.collection(COLLECTIONS.users).doc(fixture.userId);
++    await userRef.update({ authorizationGeneration: FieldValue.delete(), authorizationState: FieldValue.delete() });
++    const store = new FirestoreAccountLifecycleStore(db, accountAuth, fixture.ring, { cipher: fixture.cipher });
++    const operationId = randomUUID();
++    createdOperationIds.push(operationId);
++    const issued = await store.issueRecoveryCodes(fixture.userId, 1, operationId, Math.floor(Date.now() / 1_000));
++    assert.equal(issued.status, "result_available");
++    if (issued.status !== "result_available") throw new Error("legacy_reissue_result_missing");
++    assert.equal(issued.codes.length, 10);
++    assert.deepEqual(await store.readRecoveryCodeIssueStatus(operationId, fixture.userId, 1), issued);
++    assert.equal((await db.collection(COLLECTIONS.accountRecoveryOperationResults).doc(operationId).get()).exists, true);
++    assert.equal((await userRef.get()).get("authorizationGeneration"), undefined);
++    await assert.rejects(store.readRecoveryCodeIssueStatus(operationId, fixture.userId, 2), { message: "authorization_generation_conflict" });
++    assert.deepEqual(await store.readRecoveryCodeIssueStatus(operationId, fixture.userId, 1), issued);
++    assert.equal((await store.acknowledgeRecoveryCodeIssue(operationId, fixture.userId, 1)).status, "acknowledged");
++    assert.equal((await db.collection(COLLECTIONS.accountRecoveryOperationResults).doc(operationId).get()).exists, false);
++    assert.equal((await userRef.get()).get("securityOperation"), undefined);
++    assert.equal((await db.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", fixture.userId).get()).size, 10);
++  });
++
++  test("a fresh legacy issue replaces only its exact superseded slot without a result", async () => {
++    const fixture = await makeAccount();
++    const userRef = db.collection(COLLECTIONS.users).doc(fixture.userId);
++    await userRef.update({ authorizationGeneration: FieldValue.delete(), authorizationState: FieldValue.delete() });
++    const store = new FirestoreAccountLifecycleStore(db, accountAuth, fixture.ring, { cipher: fixture.cipher });
++    const previousId = randomUUID();
++    const nextId = randomUUID();
++    createdOperationIds.push(previousId, nextId);
++    const reauthenticatedAt = Math.floor(Date.now() / 1_000);
++    const previous = await store.issueRecoveryCodes(fixture.userId, 1, previousId, reauthenticatedAt);
++    assert.equal(previous.status, "result_available");
++    const previousRef = db.collection(COLLECTIONS.accountRecoveryOperations).doc(previousId);
++    await previousRef.update({ status: "superseded" });
++    await db.collection(COLLECTIONS.accountRecoveryOperationResults).doc(previousId).delete();
++    const previousSnapshot = (await previousRef.get()).data();
++    const next = await store.issueRecoveryCodes(fixture.userId, 1, nextId, reauthenticatedAt);
++    assert.equal(next.status, "result_available");
++    if (next.status !== "result_available") throw new Error("replacement_result_missing");
++    assert.equal(next.codes.length, 10);
++    assert.deepEqual(await store.issueRecoveryCodes(fixture.userId, 1, nextId, reauthenticatedAt), next);
++    assert.deepEqual((await previousRef.get()).data(), previousSnapshot);
++    assert.equal((await userRef.get()).get("securityOperation.operationId"), nextId);
++    const indices = await db.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", fixture.userId).get();
++    assert.equal(indices.size, 10);
++    assert.ok(indices.docs.every((document) => document.get("generationId") === next.generationId));
++    assert.equal((await store.acknowledgeRecoveryCodeIssue(nextId, fixture.userId, 1)).status, "acknowledged");
++  });
++
++  for (const invalidSlot of ["fence", "generation", "operation_id", "user", "kind", "result_present"] as const) {
++    test(`superseded-slot replacement rejects ${invalidSlot} without changing the prior generation`, async () => {
++      const fixture = await makeAccount();
++      const userRef = db.collection(COLLECTIONS.users).doc(fixture.userId);
++      const store = new FirestoreAccountLifecycleStore(db, accountAuth, fixture.ring, { cipher: fixture.cipher });
++      const previousId = randomUUID();
++      const nextId = randomUUID();
++      createdOperationIds.push(previousId, nextId);
++      const reauthenticatedAt = Math.floor(Date.now() / 1_000);
++      const previous = await store.issueRecoveryCodes(fixture.userId, 1, previousId, reauthenticatedAt);
++      assert.equal(previous.status, "result_available");
++      if (previous.status !== "result_available") throw new Error("previous_result_missing");
++      const previousRef = db.collection(COLLECTIONS.accountRecoveryOperations).doc(previousId);
++      await previousRef.update({ status: "superseded" });
++      if (invalidSlot !== "result_present") await db.collection(COLLECTIONS.accountRecoveryOperationResults).doc(previousId).delete();
++      if (invalidSlot === "fence") await userRef.update({ "securityOperation.fence": randomUUID() });
++      if (invalidSlot === "generation") await userRef.update({ "securityOperation.expectedAuthorizationGeneration": 2 });
++      if (invalidSlot === "operation_id") await previousRef.update({ operationId: randomUUID() });
++      if (invalidSlot === "user") await previousRef.update({ userId: randomUUID() });
++      if (invalidSlot === "kind") await previousRef.update({ kind: "recovery", resultingAuthorizationGeneration: 1 });
++      const slotBefore = (await userRef.get()).get("securityOperation");
++      await assert.rejects(store.issueRecoveryCodes(fixture.userId, 1, nextId, reauthenticatedAt), { message: "security_operation_conflict" });
++      assert.equal((await db.collection(COLLECTIONS.accountRecoveryOperations).doc(nextId).get()).exists, false);
++      assert.deepEqual((await userRef.get()).get("securityOperation"), slotBefore);
++      const indices = await db.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", fixture.userId).get();
++      assert.equal(indices.size, 10);
++      assert.ok(indices.docs.every((document) => document.get("generationId") === previous.generationId));
++    });
++  }
++
+   test("live recovery ownership blocks reissue until the current generation is ACKed", async () => {
+     const fixture = await makeAccount();
+     const runtime = { cipher: fixture.cipher } as const;
+diff --git a/tests/contentPackages.emulator.test.ts b/tests/contentPackages.emulator.test.ts
+index d9b7b0d..216732b 100644
+--- a/tests/contentPackages.emulator.test.ts
++++ b/tests/contentPackages.emulator.test.ts
+@@ -1,16 +1,14 @@
+ import assert from "node:assert/strict";
+ import test from "node:test";
+ import { createHash } from "node:crypto";
+-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+-import os from "node:os";
+-import path from "node:path";
+ import { gzipSync } from "node:zlib";
+-import { ContentPackageService, FirestoreContentPackagePointerStore, LocalFilesystemContentPackageStorage, contentNodePackagePath } from "../src/modules/content/packages.js";
++import { gcsPackageFixture } from "./fixtures/gcsPackageFixture.js";
++import { ContentPackageService, FirestoreContentPackagePointerStore, contentNodePackagePath } from "../src/modules/content/packages.js";
+ import { TEST_APP_CHECK_TOKEN, clearFirestore, createEmulatorContext, createVerifiedAuthUser, registerAuthUser } from "./support.js";
+ 
+-test("emulator package route enforces App Check and fresh entitlement and streams only verified bytes", async () => {
++test("emulator package route enforces App Check and fresh entitlement and issues only generation-bound descriptors", async () => {
+   await clearFirestore();
+-  const root = await mkdtemp(path.join(os.tmpdir(), "patternly-content-package-emulator-"));
++  const gcs = gcsPackageFixture();
+   let result: "active" | "grace" | "hold" | "expired" | "refunded" | "unavailable" | "throw" = "active";
+   let providerExpiresAt = "2099-01-01T00:00:00.000Z";
+   let providerGraceExpiresAt = "2099-01-02T00:00:00.000Z";
+@@ -23,9 +21,9 @@ test("emulator package route enforces App Check and fresh entitlement and stream
+       return { entitlement: "premium", productId: "monthly", state: result, providerExpiresAt, providerGraceExpiresAt, providerObservedAt: new Date().toISOString() };
+     } },
+     createContentPackages: (db) => {
+-      const service = new ContentPackageService(new FirestoreContentPackagePointerStore(db), new LocalFilesystemContentPackageStorage(root));
+-      const readCurrent = service.readCurrent.bind(service);
+-      service.readCurrent = async (...args) => { packageReadCount += 1; return readCurrent(...args); };
++      const service = new ContentPackageService(new FirestoreContentPackagePointerStore(db), gcs.storage);
++      const readCurrent = service.describeCurrent.bind(service);
++      service.describeCurrent = async (...args) => { packageReadCount += 1; return readCurrent(...args); };
+       return service;
+     },
+   });
+@@ -43,18 +41,24 @@ test("emulator package route enforces App Check and fresh entitlement and stream
+     assert.equal(unknown.statusCode, 404);
+     await context.app.inject({ method: "GET", url: "/v1/content/packages/bad%2Ftrack/premium-node", headers }).then((response) => assert.equal(response.statusCode, 400));
+     await context.app.inject({ method: "GET", url: "/v1/content/packages/sample-track/premium-node", headers }).then((response) => assert.equal(response.statusCode, 404));
+-    const service = new ContentPackageService(new FirestoreContentPackagePointerStore(context.db), new LocalFilesystemContentPackageStorage(root));
++    const service = new ContentPackageService(new FirestoreContentPackagePointerStore(context.db), gcs.storage);
+     await service.publish(manifest, compressed);
+     const active = await context.app.inject({ method: "GET", url: "/v1/content/packages/sample-track/premium-node", headers });
+     assert.equal(active.statusCode, 200);
+-    assert.deepEqual(active.rawPayload, compressed);
+-    assert.equal(active.headers["content-length"], String(compressed.length));
+-    assert.equal(active.headers["x-content-package-sha256"], manifest.packageSha256);
+-    assert.equal(active.headers["x-content-release-id"], manifest.contentReleaseId);
+-    assert.equal(active.headers["x-content-minimum-app-version"], manifest.minimumAppVersion);
+-    assert.equal(active.headers["x-content-artifact-size-bytes"], String(manifest.artifactSizeBytes));
+-    for (const header of ["x-content-release-id", "x-content-minimum-app-version", "x-content-artifact-size-bytes"]) assert.ok(active.headers[header]);
++    assert.match(String(active.headers["content-type"]), /application\/json/u);
++    assert.equal(active.headers["cache-control"], "private, no-store");
++    assert.deepEqual(active.json().manifest, manifest);
++    assert.equal(active.json().object.generation, "12345678901234567");
++    assert.equal(new URL(active.json().downloadUrl).searchParams.get("generation"), active.json().object.generation);
+     assert.equal(requestedUsers.at(-1), user.userId);
++    const userRef = context.db.collection("users").doc(user.userId);
++    await userRef.update({ billingIdentityConflict: true });
++    const providerReadsBeforeConflict = requestedUsers.length;
++    const identityBlocked = await context.app.inject({ method: "GET", url: "/v1/content/packages/sample-track/premium-node", headers });
++    assert.equal(identityBlocked.statusCode, 503);
++    assert.deepEqual(identityBlocked.json(), { error: { code: "identity_reconciliation_required" } });
++    assert.equal(requestedUsers.length, providerReadsBeforeConflict, "billing identity conflicts must block descriptor authorization before provider access");
++    await userRef.update({ billingIdentityConflict: false });
+     result = "grace";
+     assert.equal((await context.app.inject({ method: "GET", url: "/v1/content/packages/sample-track/premium-node", headers })).statusCode, 200);
+     for (const denied of ["hold", "expired", "refunded"] as const) {
+@@ -96,17 +100,15 @@ test("emulator package route enforces App Check and fresh entitlement and stream
+     result = "active";
+     providerExpiresAt = "2099-01-01T00:00:00.000Z";
+     providerGraceExpiresAt = "2099-01-02T00:00:00.000Z";
+-    const packageFile = path.join(root, manifest.packagePath);
+-    await writeFile(packageFile, Buffer.from("corrupt"));
++    gcs.bytes.set(manifest.packagePath, Buffer.from("corrupt"));
+     const corrupt = await context.app.inject({ method: "GET", url: "/v1/content/packages/sample-track/premium-node", headers });
+     assert.equal(corrupt.statusCode, 503);
+     assert.deepEqual(corrupt.json(), { error: { code: "package_unavailable" } });
+-    await rm(packageFile);
++    gcs.bytes.delete(manifest.packagePath);
+     const missing = await context.app.inject({ method: "GET", url: "/v1/content/packages/sample-track/premium-node", headers });
+     assert.equal(missing.statusCode, 503);
+     assert.deepEqual(missing.json(), { error: { code: "package_unavailable" } });
+   } finally {
+     await context.close();
+-    await rm(root, { recursive: true, force: true });
+   }
+ });
+diff --git a/tests/contentPackages.test.ts b/tests/contentPackages.test.ts
+index 4aa0d8d..5d567b7 100644
+--- a/tests/contentPackages.test.ts
++++ b/tests/contentPackages.test.ts
+@@ -21,6 +21,7 @@ test("strict package manifest binds path, compressed bytes and opaque artifact b
+   assert.throws(() => verifyContentNodePackage({ ...value.manifest, packagePath: "packages/../escape.gzip" }, value.compressed), /manifest_invalid/u);
+   assert.throws(() => verifyContentNodePackage(value.manifest, Buffer.from("different")), /bytes_invalid/u);
+   assert.throws(() => verifyContentNodePackage({ ...value.manifest, artifactSha256: "0".repeat(64) }, value.compressed), /artifact_invalid/u);
++  for (const minimumAppVersion of ["1.0.0-beta", "01.0.0", "1.0.0+build"]) assert.throws(() => verifyContentNodePackage({ ...value.manifest, minimumAppVersion }, value.compressed), /manifest_invalid/u);
+   assert.throws(() => contentNodePackagePath("../escape", "unit-test", value.manifest.packageSha256), /identity_invalid/u);
+ });
+ 
+@@ -38,7 +39,7 @@ test("filesystem storage contains paths and publisher activates only after immut
+     const service = new ContentPackageService(pointers, storage);
+     await service.publish(value.manifest, value.compressed);
+     assert.deepEqual(events, ["manifest", "pointer"]);
+-    assert.deepEqual((await service.readCurrent("sample-track", "unit-test"))?.bytes, value.compressed);
++    assert.deepEqual(await storage.read(value.manifest.packagePath), value.compressed);
+     await assert.rejects(storage.read("packages/../../etc/passwd"), /path_invalid/u);
+     await assert.rejects(storage.writeImmutable(value.manifest.packagePath, Buffer.from("conflict")), /immutable_conflict/u);
+   } finally { await rm(root, { recursive: true, force: true }); }
+@@ -54,3 +55,70 @@ test("publication leaves pointer unchanged when package bytes cannot be verified
+     assert.equal(activated, false);
+   } finally { await rm(root, { recursive: true, force: true }); }
+ });
++
++
++test("GCS descriptor pins metadata generation, refuses transformed bytes, unavailable signer and immutable conflict", async () => {
++  const { gcsPackageFixture } = await import("./fixtures/gcsPackageFixture.js");
++  const gcs = gcsPackageFixture(), value = fixture();
++  const service = new ContentPackageService({ writeImmutableManifest: async () => {}, activate: async () => {}, readCurrent: async () => value.manifest }, gcs.storage);
++  await service.publish(value.manifest, value.compressed);
++  const descriptor = await service.describeCurrent("sample-track", "unit-test");
++  assert.equal(descriptor?.object.path, value.manifest.packagePath);
++  assert.equal(new URL(descriptor!.downloadUrl).searchParams.get("generation"), descriptor?.object.generation);
++  assert.ok(Date.parse(descriptor!.expiresAt) > Date.now() && Date.parse(descriptor!.expiresAt) <= Date.now() + 60000);
++  const row = gcs.metadata.get(value.manifest.packagePath)!;
++  for (const patch of [{ contentEncoding: "gzip" }, { contentType: "text/plain" }, { generation: "0" }, { bucket: "wrong" }, { name: "wrong" }]) {
++    const before = { ...row }; Object.assign(row, patch);
++    await assert.rejects(service.describeCurrent("sample-track", "unit-test"), /unavailable/u);
++    for (const key of Object.keys(row)) delete row[key]; Object.assign(row, before);
++  }
++  gcs.setSignerUnavailable(true);
++  await assert.rejects(service.describeCurrent("sample-track", "unit-test"), /unavailable/u);
++  gcs.setSignerUnavailable(false);
++  await gcs.storage.writeImmutable(value.manifest.packagePath, value.compressed);
++  await assert.rejects(gcs.storage.writeImmutable(value.manifest.packagePath, Buffer.from("wrong")), /immutable_conflict/u);
++  assert.equal((gcs.calls.find((call) => call.operation === "save")!.options as { preconditionOpts: { ifGenerationMatch: number } }).preconditionOpts.ifGenerationMatch, 0);
++});
++
++test("real installed GCS SDK signs the generation query and bounded signed expiry locally (no provider proof)", async () => {
++  const { generateKeyPairSync } = await import("node:crypto");
++  const { initializeApp, cert, deleteApp } = await import("firebase-admin/app");
++  const { getStorage } = await import("firebase-admin/storage");
++  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048, privateKeyEncoding: { type: "pkcs8", format: "pem" }, publicKeyEncoding: { type: "spki", format: "pem" } });
++  const app = initializeApp({ credential: cert({ projectId: "demo-local-signing", clientEmail: "local@demo-local-signing.iam.gserviceaccount.com", privateKey }) }, "content-package-local-signing");
++  try {
++    const { GcsContentPackageStorage } = await import("../src/infrastructure/content/gcsContentPackageStorage.js");
++    const value = fixture();
++    const bucket = getStorage(app).bucket("patternly-local-contract");
++    const file = bucket.file(value.manifest.packagePath);
++    // Only metadata is modeled. Signing below is the installed SDK, no network call/key file.
++    const storage = new GcsContentPackageStorage({ name: bucket.name, file: () => ({
++      getMetadata: async () => [{ bucket: bucket.name, name: value.manifest.packagePath, generation: "12345678901234567", size: String(value.compressed.length), contentType: "application/gzip" }],
++      getSignedUrl: file.getSignedUrl.bind(file),
++    }) } as never);
++    const descriptor = await storage.describe(value.manifest);
++    const parsed = new URL(descriptor.downloadUrl);
++    assert.equal(parsed.hostname, "storage.googleapis.com");
++    assert.equal(parsed.searchParams.get("generation"), "12345678901234567");
++    const seconds = Number(parsed.searchParams.get("X-Goog-Expires"));
++    assert.ok(seconds >= 1 && seconds <= 60);
++    assert.equal(parsed.searchParams.get("X-Goog-Algorithm"), "GOOG4-RSA-SHA256");
++    const signedAt = parsed.searchParams.get("X-Goog-Date")!;
++    const issued = Date.parse(`${signedAt.slice(0,4)}-${signedAt.slice(4,6)}-${signedAt.slice(6,8)}T${signedAt.slice(9,11)}:${signedAt.slice(11,13)}:${signedAt.slice(13,15)}Z`);
++    assert.equal(Date.parse(descriptor.expiresAt), issued + seconds * 1000);
++    assert.ok(Date.parse(descriptor.expiresAt) > Date.now() && Date.parse(descriptor.expiresAt) <= Date.now() + 60_000);
++  } finally { await deleteApp(app); }
++});
++
++
++test("publication refuses an existing object with matching bytes but unusable HTTP metadata before pointer activation", async () => {
++  const { gcsPackageFixture } = await import("./fixtures/gcsPackageFixture.js");
++  for (const patch of [{ contentEncoding: "gzip" }, { contentType: "text/plain" }, { bucket: "wrong-bucket" }, { name: "wrong-object" }]) {
++    const gcs = gcsPackageFixture(), value = fixture(), events: string[] = [];
++    await gcs.storage.writeImmutable(value.manifest.packagePath, value.compressed);
++    Object.assign(gcs.metadata.get(value.manifest.packagePath)!, patch);
++    const service = new ContentPackageService({ writeImmutableManifest: async () => { events.push("manifest"); }, activate: async () => { events.push("pointer"); }, readCurrent: async () => null }, gcs.storage);
++    await assert.rejects(service.publish(value.manifest, value.compressed), /object_invalid/u);
++    assert.deepEqual(events, []);
++  }
++});
+diff --git a/tests/environment.test.ts b/tests/environment.test.ts
+index e912680..e4773ac 100644
+--- a/tests/environment.test.ts
++++ b/tests/environment.test.ts
+@@ -3,6 +3,7 @@ import test from "node:test";
+ import { spawnSync } from "node:child_process";
+ import { loadEnvironment } from "../src/config/environment.js";
+ import { createFirestoreStores } from "../src/infrastructure/firestore/stores.js";
++import { SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID, SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID, SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID } from "../src/config/sandboxPromotionalAccess.js";
+ 
+ const production = {
+   NODE_ENV: "production",
+@@ -41,7 +42,39 @@ test("production rejects either Firebase emulator host before runtime configurat
+       { message: "production_firebase_emulator_config_forbidden" },
+     );
+   }
+-  assert.throws(() => loadEnvironment({ ...production, CONTENT_PACKAGE_LOCAL_ROOT: "/var/lib/patternly/packages" }), { message: "production_local_content_package_storage_forbidden" });
++  assert.throws(() => loadEnvironment({ ...production, CONTENT_PACKAGE_LOCAL_ROOT: "/var/lib/patternly/packages" }), { message: "local_content_package_transport_removed" });
++  assert.equal(loadEnvironment(production).contentPackageReadiness, null);
++  const contentPackageConfig = { ...production, CONTENT_PACKAGE_BUCKET: "patternly-private-content", CONTENT_PACKAGE_READINESS_TRACK_ID: "accepted-track", CONTENT_PACKAGE_READINESS_NODE_ID: "accepted-node" };
++  assert.deepEqual(loadEnvironment(contentPackageConfig).contentPackageReadiness, { trackId: "accepted-track", nodeId: "accepted-node" });
++  for (const invalid of [{ ...production, CONTENT_PACKAGE_READINESS_NODE_ID: "node" }, { ...production, CONTENT_PACKAGE_READINESS_TRACK_ID: "track", CONTENT_PACKAGE_READINESS_NODE_ID: "node" }, { ...contentPackageConfig, CONTENT_PACKAGE_READINESS_NODE_ID: "../bad" }]) assert.throws(() => loadEnvironment(invalid));
++});
++
++test("sandbox promotional runtime pins Firebase and RevenueCat project, app, and environment while allowing expired policy boot", () => {
++  const policyJson = (expiresAt: string) => JSON.stringify({
++    firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++    revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++    revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
++    customerId: "sandbox-test-account",
++    expiresAt,
++  });
++  const configured = {
++    ...production,
++    FIREBASE_PROJECT_ID: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++    REVENUECAT_PROJECT_ID: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++    REVENUECAT_APP_ID: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
++    REVENUECAT_WEBHOOK_ENVIRONMENT: "SANDBOX",
++    REVENUECAT_SANDBOX_PROMOTIONAL_ACCESS_JSON: policyJson("2026-10-18T12:00:00Z"),
++  };
++  assert.equal(loadEnvironment(configured).sandboxPromotionalAccess?.customerId, "sandbox-test-account");
++  for (const invalid of [
++    { ...configured, FIREBASE_PROJECT_ID: "patternly-app" },
++    { ...configured, REVENUECAT_PROJECT_ID: "projWrong42" },
++    { ...configured, REVENUECAT_APP_ID: "app-wrong" },
++    { ...configured, REVENUECAT_WEBHOOK_ENVIRONMENT: "PRODUCTION" },
++  ]) assert.throws(() => loadEnvironment(invalid), { message: "invalid_sandbox_promotional_access_runtime" });
++
++  const expired = loadEnvironment({ ...configured, REVENUECAT_SANDBOX_PROMOTIONAL_ACCESS_JSON: policyJson("2020-01-01T00:00:00Z") });
++  assert.equal(expired.sandboxPromotionalAccess?.expiresAt, "2020-01-01T00:00:00.000Z");
+ });
+ 
+ test("explicit local emulator configuration remains accepted outside production", () => {
+diff --git a/tests/fixtures/gcsPackageFixture.ts b/tests/fixtures/gcsPackageFixture.ts
+new file mode 100644
+index 0000000..3a0bf42
+--- /dev/null
++++ b/tests/fixtures/gcsPackageFixture.ts
+@@ -0,0 +1,29 @@
++import { GcsContentPackageStorage } from "../../src/infrastructure/content/gcsContentPackageStorage.js";
++
++/** Contract model only; not evidence for Cloud Storage or IAM. */
++export function gcsPackageFixture() {
++  const bytes = new Map<string, Buffer>();
++  const metadata = new Map<string, Record<string, unknown>>();
++  const calls: Array<{ operation: string; path: string; options?: unknown }> = [];
++  let signerUnavailable = false;
++  const bucket = { name: "patternly-local-contract", file(path: string, options?: { generation?: string }) {
++    return {
++      async save(value: Buffer, config: { preconditionOpts: { ifGenerationMatch: number }; metadata: Record<string, unknown> }) {
++        calls.push({ operation: "save", path, options: config });
++        if (bytes.has(path)) throw { code: 412 };
++        bytes.set(path, Buffer.from(value));
++        metadata.set(path, { bucket: bucket.name, name: path, generation: "12345678901234567", size: String(value.length), ...config.metadata });
++      },
++      async getMetadata() { calls.push({ operation: "metadata", path }); const row = metadata.get(path); const value = bytes.get(path); if (!row || !value) throw new Error("missing"); return [{ ...row, size: String(value.length) }]; },
++      async download(config: unknown) { calls.push({ operation: "download", path, options: { ...options, config } }); const value = bytes.get(path); if (!value) throw new Error("missing"); return [Buffer.from(value)]; },
++      async getSignedUrl(config: { expires: number; queryParams: { generation: string } }) {
++        calls.push({ operation: "sign", path, options: config });
++        if (signerUnavailable) throw new Error("signer_unavailable");
++        const issued = Math.floor(Date.now() / 1000) * 1000;
++        const query = new URLSearchParams({ generation: config.queryParams.generation, "X-Goog-Algorithm": "GOOG4-RSA-SHA256", "X-Goog-Date": new Date(issued).toISOString().replace(/[-:]/gu, "").replace(".000", ""), "X-Goog-Expires": String((config.expires - issued) / 1000), "X-Goog-Signature": "fixture-only" });
++        return [`https://storage.googleapis.com/${bucket.name}/${path}?${query}`];
++      },
++    };
++  } };
++  return { storage: new GcsContentPackageStorage(bucket as never), bytes, metadata, calls, setSignerUnavailable: (value: boolean) => { signerUnavailable = value; } };
++}
+diff --git a/tests/openapiContracts.test.ts b/tests/openapiContracts.test.ts
+index 0d0b3af..389ea4c 100644
+--- a/tests/openapiContracts.test.ts
++++ b/tests/openapiContracts.test.ts
+@@ -78,7 +78,7 @@ test("unready runtime response matches the documented 503 schema", async () => {
+     const documented = readyResponse.content["application/json"].schema;
+     const validate = new Ajv2020({ strict: false }).compile(documented);
+     assert.equal(validate(response.json()), true, JSON.stringify(validate.errors));
+-    assert.deepEqual(response.json(), { status: "not_ready", checks: { database: false, authentication: true, providerReader: true } });
++    assert.deepEqual(response.json(), { status: "not_ready", checks: { database: false, authentication: true, providerReader: true, contentPackages: true } });
+   } finally {
+     await app.close();
+   }
+diff --git a/tests/revenuecatClient.test.ts b/tests/revenuecatClient.test.ts
+index a378b8b..4434bb8 100644
+--- a/tests/revenuecatClient.test.ts
++++ b/tests/revenuecatClient.test.ts
+@@ -6,6 +6,11 @@ import {
+   type RevenueCatFetch,
+   type RevenueCatReaderConfig,
+ } from "../src/infrastructure/revenuecat/client.js";
++import {
++  SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++  SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
++  SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++} from "../src/config/sandboxPromotionalAccess.js";
+ 
+ const observedAt = "2026-09-22T12:00:00.000Z";
+ const observedAtMs = Date.parse(observedAt);
+@@ -155,6 +160,96 @@ test("RevenueCat alias or transferred customer cannot confirm another Patternly
+   assert.equal(result.state, "unavailable");
+ });
+ 
++const promoCustomerId = "11111111-1111-4111-8111-111111111111";
++const promoProductId = "rc_promo_premium_custom";
++
++function promoPayload(overrides: {
++  requestDateMs?: number;
++  originalAppUserId?: string;
++  entitlement?: Record<string, unknown>;
++  subscription?: Record<string, unknown>;
++} = {}): Record<string, unknown> {
++  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
++  return {
++    request_date_ms: overrides.requestDateMs ?? Date.now() - 1_000,
++    subscriber: {
++      original_app_user_id: overrides.originalAppUserId ?? promoCustomerId,
++      entitlements: {
++        premium: {
++          product_identifier: promoProductId,
++          expires_date: expiresAt,
++          grace_period_expires_date: null,
++          ...overrides.entitlement,
++        },
++      },
++      subscriptions: {
++        [promoProductId]: {
++          expires_date: expiresAt,
++          grace_period_expires_date: null,
++          refunded_at: null,
++          is_sandbox: false,
++          store: "promotional",
++          billing_issues_detected_at: null,
++          ...overrides.subscription,
++        },
++      },
++    },
++  };
++}
++
++function promoReader(body: unknown, policyExpiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1_000).toISOString()) {
++  return createRevenueCatEntitlementReader({
++    ...config,
++    baseUrl: "https://api.revenuecat.com",
++    environment: "SANDBOX",
++    firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++    revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++    revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
++    sandboxPromotionalAccess: {
++      firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++      revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++      revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
++      customerId: promoCustomerId,
++      expiresAt: policyExpiresAt,
++    },
++  }, { fetch: async () => jsonResponse(body) });
++}
++
++test("sandbox promotional entitlement maps to the configured Patternly Premium namespace and caps expiry at policy cutoff", async () => {
++  const policyExpiry = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
++  const result = await promoReader(promoPayload(), policyExpiry).read(promoCustomerId);
++  assert.equal(result.entitlement, "premium");
++  assert.equal(result.productId, "monthly");
++  assert.equal(result.state, "active");
++  assert.equal(result.providerExpiresAt, policyExpiry);
++  assert.equal(result.providerGraceExpiresAt, null);
++});
++
++test("sandbox promotional entitlement requires exact account, project, app, sandbox and promotional product contract", async () => {
++  for (const body of [
++    promoPayload({ originalAppUserId: "firebase-uid" }),
++    promoPayload({ entitlement: { product_identifier: "rc_promo_unknown" } }),
++    promoPayload({ entitlement: { expires_date: new Date(Date.now() + 48 * 60 * 60 * 1_000).toISOString() } }),
++    promoPayload({ subscription: { store: "app_store" } }),
++    promoPayload({ subscription: { is_sandbox: true } }),
++    promoPayload({ subscription: { refunded_at: observedAt } }),
++    promoPayload({ subscription: { grace_period_expires_date: graceExpiry } }),
++    promoPayload({ subscription: { billing_issues_detected_at: observedAt } }),
++  ]) assert.equal((await promoReader(body).read(promoCustomerId)).state, "unavailable");
++
++  assert.equal((await promoReader(promoPayload()).read("another-account")).state, "unavailable");
++  assert.equal((await createRevenueCatEntitlementReader({ ...config, environment: "PRODUCTION" }, { fetch: async () => jsonResponse(promoPayload()) }).read(promoCustomerId)).state, "unavailable");
++});
++
++test("sandbox promotional entitlement respects both provider and local policy cutoffs", async () => {
++  const providerAfterCutoff = Date.now() + 2_000;
++  const policyCutoff = new Date(providerAfterCutoff - 1_000).toISOString();
++  assert.equal((await promoReader(promoPayload({ requestDateMs: providerAfterCutoff }), policyCutoff).read(promoCustomerId)).state, "unavailable");
++
++  const localExpiredCutoff = new Date(Date.now() - 1_000).toISOString();
++  assert.equal((await promoReader(promoPayload(), localExpiredCutoff).read(promoCustomerId)).state, "unavailable");
++});
++
+ test("missing entitlement or subscription map is unavailable rather than an authoritative expiry", async () => {
+   const noEntitlementMap = payload();
+   const noSubscriptionMap = payload();
+diff --git a/tests/sandboxPromotionalAccess.test.ts b/tests/sandboxPromotionalAccess.test.ts
+new file mode 100644
+index 0000000..55f43d9
+--- /dev/null
++++ b/tests/sandboxPromotionalAccess.test.ts
+@@ -0,0 +1,61 @@
++import assert from "node:assert/strict";
++import test from "node:test";
++import {
++  isSandboxPromotionalAccessAllowed,
++  parseSandboxPromotionalAccessPolicy,
++  REVENUECAT_OFFICIAL_API_BASE_URL,
++  SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++  SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
++  SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++} from "../src/config/sandboxPromotionalAccess.js";
++
++const policy = parseSandboxPromotionalAccessPolicy(JSON.stringify({
++  firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++  revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++  revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
++  customerId: "backend-account-uuid",
++  expiresAt: "2026-10-18T12:00:00Z",
++}))!;
++
++const runtime = {
++  firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++  revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++  revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
++  revenueCatEnvironment: "SANDBOX" as const,
++  revenueCatApiBaseUrl: REVENUECAT_OFFICIAL_API_BASE_URL,
++  accountId: "backend-account-uuid",
++  nowMs: Date.parse("2026-10-17T12:00:00Z"),
++};
++
++test("sandbox promotional policy is absent when unset and normalizes a valid finite ISO cutoff", () => {
++  assert.equal(parseSandboxPromotionalAccessPolicy(undefined), null);
++  assert.throws(() => parseSandboxPromotionalAccessPolicy(""), { message: "invalid_sandbox_promotional_access_config" });
++  assert.equal(policy.expiresAt, "2026-10-18T12:00:00.000Z");
++  assert.equal(isSandboxPromotionalAccessAllowed(policy, runtime), true);
++});
++
++test("sandbox promotional policy parser rejects malformed, production, wrong-project and invalid-date policies", () => {
++  for (const input of [
++    "{",
++    JSON.stringify({ firebaseProjectId: "patternly-app", revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID, customerId: "account", expiresAt: "2026-10-18T12:00:00Z" }),
++    JSON.stringify({ firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID, revenueCatProjectId: "proj-production", customerId: "account", expiresAt: "2026-10-18T12:00:00Z" }),
++    JSON.stringify({ firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID, revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID, revenueCatAppId: "app-wrong", customerId: "account", expiresAt: "2026-10-18T12:00:00Z" }),
++    JSON.stringify({ firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID, revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID, revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID, customerId: "account", expiresAt: "2026-10-18T12:00:00Z", ignored: true }),
++    JSON.stringify({ firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID, revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID, customerId: "account", expiresAt: "never" }),
++    JSON.stringify({ firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID, revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID, customerId: "account", expiresAt: "2026-02-30T12:00:00Z" }),
++  ]) assert.throws(() => parseSandboxPromotionalAccessPolicy(input), { message: "invalid_sandbox_promotional_access_config" });
++});
++
++test("sandbox promotional access fails closed for identity, project, environment, endpoint or cutoff mismatch", () => {
++  for (const override of [
++    { accountId: "firebase-uid" },
++    { firebaseProjectId: "patternly-app" },
++    { revenueCatProjectId: "proj-production" },
++    { revenueCatAppId: "app-wrong" },
++    { revenueCatEnvironment: "PRODUCTION" as const },
++    { revenueCatApiBaseUrl: "https://attacker.example" },
++    { revenueCatApiBaseUrl: "https://api.revenuecat.com/v2" },
++    { nowMs: Date.parse(policy.expiresAt) },
++  ]) assert.equal(isSandboxPromotionalAccessAllowed(policy, { ...runtime, ...override }), false);
++  assert.equal(isSandboxPromotionalAccessAllowed(null, runtime), false);
++});
+diff --git a/tests/sandboxPromotionalPackages.emulator.test.ts b/tests/sandboxPromotionalPackages.emulator.test.ts
+new file mode 100644
+index 0000000..9e6ac25
+--- /dev/null
++++ b/tests/sandboxPromotionalPackages.emulator.test.ts
+@@ -0,0 +1,166 @@
++import assert from "node:assert/strict";
++import test from "node:test";
++import { createHash } from "node:crypto";
++import { getApps, initializeApp } from "firebase-admin/app";
++import { gcsPackageFixture } from "./fixtures/gcsPackageFixture.js";
++import { gzipSync } from "node:zlib";
++import { buildApplication } from "../src/api/app.js";
++import { createFirebaseTokenVerifier } from "../src/infrastructure/firebase/verifier.js";
++import { ContentPackageService, FirestoreContentPackagePointerStore, contentNodePackagePath } from "../src/modules/content/packages.js";
++import { REVENUECAT_OFFICIAL_API_BASE_URL, parseSandboxPromotionalAccessPolicy, SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID, SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID, SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID } from "../src/config/sandboxPromotionalAccess.js";
++import type { Environment } from "../src/config/environment.js";
++import { TEST_APP_CHECK_TOKEN, clearFirestore, createEmulatorContext, createVerifiedAuthUser, createVerifiedRegisteredAuthUser, registerAuthUser, testEnvironment } from "./support.js";
++
++test("sandbox promotional package access is owner-bound and rechecked at the expiry cutoff", async () => {
++  await clearFirestore();
++  const authApp = getApps().find((app) => app.name === "[DEFAULT]") ?? initializeApp({ projectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID });
++  assert.equal(authApp.options.projectId, SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID);
++  const ownerAuth = await createVerifiedAuthUser();
++  const policyExpiresAtMs = Date.now() + 10 * 60_000;
++  const policyJson = JSON.stringify({
++    firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++    revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++    revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
++    customerId: ownerAuth.localId,
++    expiresAt: new Date(policyExpiresAtMs).toISOString(),
++  });
++  const policy = parseSandboxPromotionalAccessPolicy(policyJson)!;
++  const environment: Environment = Object.freeze({
++    ...testEnvironment,
++    firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++    firebaseAuthIssuer: `https://securetoken.google.com/${SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID}`,
++    revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++    revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
++    revenueCatWebhookEnvironment: "SANDBOX",
++    revenueCatApiBaseUrl: REVENUECAT_OFFICIAL_API_BASE_URL,
++    sandboxPromotionalAccess: policy,
++  });
++  const gcs = gcsPackageFixture();
++  const requestedUsers: string[] = [];
++  const providerExpiresAt = "2099-01-01T00:00:00.000Z";
++  let advanceClockAfterSigning = false;
++  let service: ContentPackageService | undefined;
++  const context = createEmulatorContext({
++    environment,
++    revenueCatEntitlementReader: { read: async (userId) => {
++      requestedUsers.push(userId);
++      return { entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() };
++    } },
++    createContentPackages: (db) => {
++      service = new ContentPackageService(new FirestoreContentPackagePointerStore(db), gcs.storage);
++      const describe = service.describeCurrent.bind(service);
++      service.describeCurrent = async (...args) => {
++        const descriptor = await describe(...args);
++        if (advanceClockAfterSigning) Date.now = () => policyExpiresAtMs + 1;
++        return descriptor;
++      };
++      return service;
++    },
++  });
++  let expiredApp: ReturnType<typeof buildApplication> | undefined;
++  let promotionalApp: ReturnType<typeof buildApplication> | undefined;
++  try {
++    const owner = await registerAuthUser(context, ownerAuth);
++    assert.equal(owner.localId, ownerAuth.localId);
++    const other = await createVerifiedRegisteredAuthUser(context);
++    const ownerPolicy = parseSandboxPromotionalAccessPolicy(JSON.stringify({
++      firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++      revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++      revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
++      customerId: owner.userId,
++      expiresAt: new Date(policyExpiresAtMs).toISOString(),
++    }))!;
++    const ownerEnvironment: Environment = Object.freeze({ ...environment, sandboxPromotionalAccess: ownerPolicy });
++    promotionalApp = buildApplication({
++      environment: ownerEnvironment,
++      firestore: null,
++      verifier: createFirebaseTokenVerifier(ownerEnvironment),
++      appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
++      stores: context.stores,
++      revenueCatEntitlementReader: { read: async (userId: string) => {
++        requestedUsers.push(userId);
++        return { entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() };
++      } },
++      contentPackages: service!,
++    });
++    const artifact = Buffer.from('{"opaque":"owner-scoped promotional fixture"}', "utf8");
++    const compressed = gzipSync(artifact, { level: 9 });
++    const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
++    const manifest = { schemaVersion: "patternly-content-node-package-v1", trackId: "sample-track", nodeId: "promo-node", contentVersion: "v1", artifactSha256: sha256(artifact), packageSha256: sha256(compressed), contentReleaseId: "release-1", minimumAppVersion: "1.0.0", packageFormat: "gzip", compressedSizeBytes: compressed.length, artifactSizeBytes: artifact.length, packagePath: contentNodePackagePath("sample-track", "promo-node", sha256(compressed)) };
++    await service!.publish(manifest, compressed);
++    const expected = await service!.describeCurrent("sample-track", "promo-node");
++    assert.ok(expected);
++    gcs.calls.length = 0;
++    const headers = { authorization: `Bearer ${owner.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
++    const otherHeaders = { authorization: `Bearer ${other.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
++
++    const deniedOwner = await promotionalApp.inject({ method: "GET", url: "/v1/content/packages/sample-track/promo-node", headers: otherHeaders });
++    assert.equal(deniedOwner.statusCode, 403);
++    assert.deepEqual(deniedOwner.json(), { error: { code: "entitlement_required" } });
++    assert.equal(requestedUsers.length, 0, "a different account must be denied before provider access");
++    assert.equal(gcs.calls.filter((call) => call.operation === "sign").length, 0, "a different account must be denied before signing");
++
++    const allowed = await promotionalApp.inject({ method: "GET", url: "/v1/content/packages/sample-track/promo-node", headers });
++    assert.equal(allowed.statusCode, 200);
++    const body = allowed.json();
++    const signedUrl = new URL(body.downloadUrl);
++    const signedDate = signedUrl.searchParams.get("X-Goog-Date")!;
++    const issuedAt = Date.parse(`${signedDate.slice(0, 4)}-${signedDate.slice(4, 6)}-${signedDate.slice(6, 8)}T${signedDate.slice(9, 11)}:${signedDate.slice(11, 13)}:${signedDate.slice(13, 15)}Z`);
++    assert.deepEqual(body, {
++      schemaVersion: "patternly-content-download-v1",
++      manifest,
++      object: { bucket: "patternly-local-contract", path: manifest.packagePath, generation: "12345678901234567" },
++      downloadUrl: body.downloadUrl,
++      expiresAt: new Date(issuedAt + Number(signedUrl.searchParams.get("X-Goog-Expires")) * 1_000).toISOString(),
++    });
++    assert.equal(allowed.headers["cache-control"], "private, no-store");
++    assert.equal(signedUrl.searchParams.get("generation"), body.object.generation);
++    assert.deepEqual(requestedUsers, [owner.userId]);
++
++    const signsBeforeCutoff = gcs.calls.filter((call) => call.operation === "sign").length;
++    const providerReadsBeforeCutoff = requestedUsers.length;
++    const originalDateNow = Date.now;
++    advanceClockAfterSigning = true;
++    let crossedCutoff;
++    try {
++      crossedCutoff = await promotionalApp.inject({ method: "GET", url: "/v1/content/packages/sample-track/promo-node", headers });
++    } finally {
++      Date.now = originalDateNow;
++      advanceClockAfterSigning = false;
++    }
++    assert.equal(crossedCutoff!.statusCode, 403, "the grant cutoff must be checked again after signing and protection");
++    assert.deepEqual(crossedCutoff!.json(), { error: { code: "entitlement_required" } });
++    assert.equal(requestedUsers.length, providerReadsBeforeCutoff + 1);
++    assert.equal(gcs.calls.filter((call) => call.operation === "sign").length, signsBeforeCutoff + 1);
++
++    const expiredPolicy = parseSandboxPromotionalAccessPolicy(JSON.stringify({
++      firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++      revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++      revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
++      customerId: owner.userId,
++      expiresAt: new Date(Date.now() - 60_000).toISOString(),
++    }))!;
++    const expiredEnvironment: Environment = Object.freeze({ ...environment, sandboxPromotionalAccess: expiredPolicy });
++    if (!service) throw new Error("content_package_service_missing");
++    expiredApp = buildApplication({
++      environment: expiredEnvironment,
++      firestore: null,
++      verifier: createFirebaseTokenVerifier(expiredEnvironment),
++      appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
++      stores: context.stores,
++      revenueCatEntitlementReader: { read: async (userId: string) => { requestedUsers.push(userId); return { entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() }; } },
++      contentPackages: service,
++    });
++    const signsBeforeExpiredRequest = gcs.calls.filter((call) => call.operation === "sign").length;
++    const providerReadsBeforeExpiredRequest = requestedUsers.length;
++    const expiredResponse = await expiredApp.inject({ method: "GET", url: "/v1/content/packages/sample-track/promo-node", headers });
++    assert.equal(expiredResponse.statusCode, 403);
++    assert.deepEqual(expiredResponse.json(), { error: { code: "entitlement_required" } });
++    assert.equal(requestedUsers.length, providerReadsBeforeExpiredRequest, "an expired policy boots safely and denies before provider access");
++    assert.equal(gcs.calls.filter((call) => call.operation === "sign").length, signsBeforeExpiredRequest, "an expired policy denies before signing");
++  } finally {
++    await expiredApp?.close();
++    await promotionalApp?.close();
++    await context.close();
++  }
++});
+diff --git a/tests/support.ts b/tests/support.ts
+index 1fe8bb7..f625e9a 100644
+--- a/tests/support.ts
++++ b/tests/support.ts
+@@ -53,8 +53,8 @@ export type EmulatorContext = Readonly<{
+   deletedSubjects: readonly string[];
+ }>;
+ 
+-export function createEmulatorContext(options: Readonly<{ projectId?: string; revenueCatEntitlementReader?: import("../src/infrastructure/revenuecat/client.js").RevenueCatEntitlementReader | null; contentPackages?: import("../src/modules/content/packages.js").ContentPackageService | null; createContentPackages?: (db: import("firebase-admin/firestore").Firestore) => import("../src/modules/content/packages.js").ContentPackageService }> = {}): EmulatorContext {
+-  const environment = options.projectId ? Object.freeze({ ...testEnvironment, firebaseProjectId: options.projectId, firebaseAuthIssuer: `https://securetoken.google.com/${options.projectId}` }) : testEnvironment;
++export function createEmulatorContext(options: Readonly<{ projectId?: string; environment?: Environment; revenueCatEntitlementReader?: import("../src/infrastructure/revenuecat/client.js").RevenueCatEntitlementReader | null; contentPackages?: import("../src/modules/content/packages.js").ContentPackageService | null; createContentPackages?: (db: import("firebase-admin/firestore").Firestore) => import("../src/modules/content/packages.js").ContentPackageService }> = {}): EmulatorContext {
++  const environment = options.environment ?? (options.projectId ? Object.freeze({ ...testEnvironment, firebaseProjectId: options.projectId, firebaseAuthIssuer: `https://securetoken.google.com/${options.projectId}` }) : testEnvironment);
+   const runtime = createFirestoreRuntime(environment);
+   const privacyLinks: Array<Readonly<{ recipient: string; purpose: "verify" | "response" | "extension"; requestId: string; token: string; code: string; extensionReason?: string }>> = [];
+   const purchaseReceipts: import("../src/modules/billing/revenuecatWebhookStore.js").PurchaseReceiptDelivery[] = [];

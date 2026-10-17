@@ -3,6 +3,7 @@ import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { loadEnvironment } from "../src/config/environment.js";
 import { createFirestoreStores } from "../src/infrastructure/firestore/stores.js";
+import { SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID, SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID, SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID } from "../src/config/sandboxPromotionalAccess.js";
 
 const production = {
   NODE_ENV: "production",
@@ -43,6 +44,34 @@ test("production rejects either Firebase emulator host before runtime configurat
     );
   }
   assert.throws(() => loadEnvironment({ ...production, CONTENT_PACKAGE_LOCAL_ROOT: "/var/lib/patternly/packages" }), { message: "local_content_package_transport_removed" });
+});
+
+test("sandbox promotional runtime pins Firebase and RevenueCat project, app, and environment while allowing expired policy boot", () => {
+  const policyJson = (expiresAt: string) => JSON.stringify({
+    firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
+    revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
+    revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
+    customerId: "sandbox-test-account",
+    expiresAt,
+  });
+  const configured = {
+    ...production,
+    FIREBASE_PROJECT_ID: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
+    REVENUECAT_PROJECT_ID: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
+    REVENUECAT_APP_ID: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
+    REVENUECAT_WEBHOOK_ENVIRONMENT: "SANDBOX",
+    REVENUECAT_SANDBOX_PROMOTIONAL_ACCESS_JSON: policyJson("2026-10-18T12:00:00Z"),
+  };
+  assert.equal(loadEnvironment(configured).sandboxPromotionalAccess?.customerId, "sandbox-test-account");
+  for (const invalid of [
+    { ...configured, FIREBASE_PROJECT_ID: "patternly-app" },
+    { ...configured, REVENUECAT_PROJECT_ID: "projWrong42" },
+    { ...configured, REVENUECAT_APP_ID: "app-wrong" },
+    { ...configured, REVENUECAT_WEBHOOK_ENVIRONMENT: "PRODUCTION" },
+  ]) assert.throws(() => loadEnvironment(invalid), { message: "invalid_sandbox_promotional_access_runtime" });
+
+  const expired = loadEnvironment({ ...configured, REVENUECAT_SANDBOX_PROMOTIONAL_ACCESS_JSON: policyJson("2020-01-01T00:00:00Z") });
+  assert.equal(expired.sandboxPromotionalAccess?.expiresAt, "2020-01-01T00:00:00.000Z");
 });
 
 test("explicit local emulator configuration remains accepted outside production", () => {

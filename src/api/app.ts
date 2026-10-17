@@ -1,3 +1,4 @@
+import { isSandboxPromotionalAccessAllowed } from "../config/sandboxPromotionalAccess.js";
 import { validateOperatorCursor } from "../modules/retention/operatorPage.js";
 import { dispatchPurchaseReceipt } from "../modules/billing/purchaseReceiptDispatcher.js";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
@@ -1386,6 +1387,16 @@ export function buildApplication(dependencies: ApplicationDependencies) {
   app.get("/v1/tracks", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request) => ({ tracks: await requireStores(dependencies).tracks.readAccess(request.userId!) }));
   app.get("/v1/content/versions", { preHandler: routeGuard("app_check_bearer", dependencies) }, async () => ({ versions: await requireStores(dependencies).content.readCurrent() }));
   app.get("/v1/content/packages/:trackId/:nodeId", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
+    const sandboxPolicy = dependencies.environment.sandboxPromotionalAccess;
+    const sandboxAllowed = () => isSandboxPromotionalAccessAllowed(sandboxPolicy, {
+      firebaseProjectId: dependencies.environment.firebaseProjectId,
+      revenueCatProjectId: dependencies.environment.revenueCatProjectId,
+      revenueCatAppId: dependencies.environment.revenueCatAppId,
+      revenueCatEnvironment: dependencies.environment.revenueCatWebhookEnvironment,
+      revenueCatApiBaseUrl: dependencies.environment.revenueCatApiBaseUrl,
+      accountId: request.userId!,
+    });
+    if (sandboxPolicy && !sandboxAllowed()) return reply.code(403).send({ error: { code: "entitlement_required" } });
     const params = request.params as { trackId?: unknown; nodeId?: unknown };
     if (!isPackageId(params.trackId) || !isPackageId(params.nodeId)) return reply.code(400).send({ error: { code: "invalid_request" } });
     if (!dependencies.revenueCatEntitlementReader) return reply.code(503).send({ error: { code: "entitlement_unavailable" } });
@@ -1411,6 +1422,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     await protect(request, reply, dependencies);
     if (reply.sent) return;
     if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
+    if (sandboxPolicy && !sandboxAllowed()) return reply.code(403).send({ error: { code: "entitlement_required" } });
     if (!packageData) return reply.code(404).send({ error: { code: "not_found" } });
     reply.header("cache-control", "private, no-store");
     return reply.code(200).send(packageData);

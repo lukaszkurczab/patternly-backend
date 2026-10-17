@@ -34,7 +34,7 @@ async function main(): Promise<void> {
       operatorTokenVerifier: createOperatorTokenVerifier(environment),
       stores: createFirestoreStores(firestore, environment),
       revenueCatEntitlementReader: environment.revenueCatReadApiKey && environment.revenueCatEntitlementId && environment.revenueCatProductId && environment.revenueCatWebhookEnvironment
-        ? createRevenueCatEntitlementReader({ baseUrl: environment.revenueCatApiBaseUrl, apiKey: environment.revenueCatReadApiKey, entitlementId: environment.revenueCatEntitlementId, productId: environment.revenueCatProductId, environment: environment.revenueCatWebhookEnvironment })
+        ? createRevenueCatEntitlementReader({ baseUrl: environment.revenueCatApiBaseUrl, apiKey: environment.revenueCatReadApiKey, entitlementId: environment.revenueCatEntitlementId, productId: environment.revenueCatProductId, environment: environment.revenueCatWebhookEnvironment, firebaseProjectId: environment.firebaseProjectId, revenueCatProjectId: environment.revenueCatProjectId, revenueCatAppId: environment.revenueCatAppId, sandboxPromotionalAccess: environment.sandboxPromotionalAccess })
         : null,
       contentPackages: environment.contentPackageBucket
         ? new ContentPackageService(new FirestoreContentPackagePointerStore(firestore.db), new GcsContentPackageStorage(getStorage(firestore.app).bucket(environment.contentPackageBucket)))

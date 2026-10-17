@@ -59,8 +59,8 @@ export type EmulatorContext = Readonly<{
   deletedSubjects: readonly string[];
 }>;
 
-export function createEmulatorContext(options: Readonly<{ projectId?: string; purchaseReceiptEmailSender?: import("../src/infrastructure/email/smtpPrivacyEmailSender.js").PurchaseReceiptEmailSender | null; revenueCatEntitlementReader?: import("../src/infrastructure/revenuecat/client.js").RevenueCatEntitlementReader | null; contentPackages?: import("../src/modules/content/packages.js").ContentPackageService | null; createContentPackages?: (db: import("firebase-admin/firestore").Firestore) => import("../src/modules/content/packages.js").ContentPackageService }> = {}): EmulatorContext {
-  const environment = options.projectId ? Object.freeze({ ...testEnvironment, firebaseProjectId: options.projectId, firebaseAuthIssuer: `https://securetoken.google.com/${options.projectId}` }) : testEnvironment;
+export function createEmulatorContext(options: Readonly<{ projectId?: string; environment?: Environment; purchaseReceiptEmailSender?: import("../src/infrastructure/email/smtpPrivacyEmailSender.js").PurchaseReceiptEmailSender | null; revenueCatEntitlementReader?: import("../src/infrastructure/revenuecat/client.js").RevenueCatEntitlementReader | null; contentPackages?: import("../src/modules/content/packages.js").ContentPackageService | null; createContentPackages?: (db: import("firebase-admin/firestore").Firestore) => import("../src/modules/content/packages.js").ContentPackageService }> = {}): EmulatorContext {
+  const environment = options.environment ?? (options.projectId ? Object.freeze({ ...testEnvironment, firebaseProjectId: options.projectId, firebaseAuthIssuer: `https://securetoken.google.com/${options.projectId}` }) : testEnvironment);
   const runtime = createFirestoreRuntime(environment);
   const privacyLinks: Array<Readonly<{ recipient: string; purpose: "verify" | "response" | "extension"; requestId: string; token: string; code: string; extensionReason?: string }>> = [];
   const purchaseReceipts: import("../src/modules/billing/revenuecatWebhookStore.js").PurchaseReceiptDelivery[] = [];

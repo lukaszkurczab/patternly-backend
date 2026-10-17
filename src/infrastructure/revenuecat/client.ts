@@ -1,3 +1,8 @@
+import {
+  isSandboxPromotionalAccessAllowed,
+  type SandboxPromotionalAccessPolicy,
+} from "../../config/sandboxPromotionalAccess.js";
+
 export type RevenueCatEnvironment = "PRODUCTION" | "SANDBOX";
 
 export type RevenueCatEntitlementState = "active" | "grace" | "hold" | "expired" | "refunded" | "unavailable";
@@ -17,6 +22,10 @@ export type RevenueCatReaderConfig = Readonly<{
   entitlementId: string;
   productId: string;
   environment: RevenueCatEnvironment;
+  firebaseProjectId?: string | undefined;
+  revenueCatProjectId?: string | undefined;
+  revenueCatAppId?: string | undefined;
+  sandboxPromotionalAccess?: SandboxPromotionalAccessPolicy | null | undefined;
 }>;
 
 /**
@@ -131,6 +140,53 @@ function hasNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function readPromotionalEntitlement(
+  config: RevenueCatReaderConfig,
+  userId: string,
+  subscriber: JsonRecord,
+  entitlement: JsonRecord,
+  requestDate: { milliseconds: number; iso: string },
+): RevenueCatEntitlementResult {
+  const unavailableResult = unavailable(config, requestDate.iso);
+  const policy = config.sandboxPromotionalAccess;
+  const allowed = isSandboxPromotionalAccessAllowed(policy, {
+    ...(config.firebaseProjectId === undefined ? {} : { firebaseProjectId: config.firebaseProjectId }),
+    ...(config.revenueCatProjectId === undefined ? {} : { revenueCatProjectId: config.revenueCatProjectId }),
+    ...(config.revenueCatAppId === undefined ? {} : { revenueCatAppId: config.revenueCatAppId }),
+    revenueCatEnvironment: config.environment,
+    revenueCatApiBaseUrl: config.baseUrl,
+    accountId: userId,
+  });
+  if (!allowed || policy.customerId !== userId || subscriber.original_app_user_id !== userId) return unavailableResult;
+
+  const productIdentifier = entitlement.product_identifier;
+  if (!hasNonEmptyString(productIdentifier) || !productIdentifier.startsWith("rc_promo_")) return unavailableResult;
+  const subscriptionsValue = subscriber.subscriptions;
+  if (!isRecord(subscriptionsValue)) return unavailableResult;
+  const subscription = subscriptionsValue[productIdentifier];
+  if (!isRecord(subscription)
+    || subscription.store !== "promotional"
+    || subscription.is_sandbox !== false) return unavailableResult;
+
+  const entitlementExpiresAt = parseProviderDate(entitlement.expires_date, false);
+  const subscriptionExpiresAt = parseProviderDate(subscription.expires_date, false);
+  const entitlementGraceAt = parseProviderDate(entitlement.grace_period_expires_date, true);
+  const subscriptionGraceAt = parseProviderDate(subscription.grace_period_expires_date, true);
+  const refundedAt = parseProviderDate(subscription.refunded_at, true);
+  const billingIssueAt = parseProviderDate(subscription.billing_issues_detected_at, true);
+  if (entitlementExpiresAt === undefined || entitlementExpiresAt === null
+    || subscriptionExpiresAt === undefined || subscriptionExpiresAt === null
+    || entitlementExpiresAt !== subscriptionExpiresAt
+    || entitlementGraceAt !== null || subscriptionGraceAt !== null
+    || refundedAt !== null || billingIssueAt !== null) return unavailableResult;
+
+  const policyExpiresAtMs = Date.parse(policy.expiresAt);
+  if (requestDate.milliseconds >= policyExpiresAtMs || Date.now() >= policyExpiresAtMs) return unavailableResult;
+  const expiresAtMs = Math.min(Date.parse(entitlementExpiresAt), policyExpiresAtMs);
+  if (expiresAtMs <= requestDate.milliseconds) return makeResult(config, "expired", requestDate.iso, new Date(expiresAtMs).toISOString());
+  return makeResult(config, "active", requestDate.iso, new Date(expiresAtMs).toISOString());
+}
+
 function resolveOptions(
   config: RevenueCatReaderConfig,
   optionsOrFetch: RevenueCatReaderOptions | RevenueCatFetch | undefined,
@@ -215,10 +271,17 @@ function parseResponse(
   const entitlement = entitlements[config.entitlementId];
   const subscription = subscriptions[config.productId];
 
-  if (entitlement === undefined || entitlement === null || subscription === undefined || subscription === null) {
+  if (entitlement === undefined || entitlement === null) {
     return makeResult(config, "expired", requestDate.iso);
   }
-  if (!isRecord(entitlement) || !isRecord(subscription)) return unavailable(config, requestDate.iso);
+  if (!isRecord(entitlement)) return unavailable(config, requestDate.iso);
+
+  if (hasNonEmptyString(entitlement.product_identifier) && entitlement.product_identifier.startsWith("rc_promo_")) {
+    return readPromotionalEntitlement(config, userId, subscriber, entitlement, requestDate);
+  }
+
+  if (subscription === undefined || subscription === null) return makeResult(config, "expired", requestDate.iso);
+  if (!isRecord(subscription)) return unavailable(config, requestDate.iso);
 
   if (entitlement.product_identifier !== config.productId) return unavailable(config, requestDate.iso);
   if (typeof subscription.is_sandbox !== "boolean" || subscription.is_sandbox !== (config.environment === "SANDBOX")) return unavailable(config, requestDate.iso);
@@ -259,6 +322,10 @@ export function createRevenueCatEntitlementReader(
     entitlementId: config.entitlementId,
     productId: config.productId,
     environment: config.environment,
+    ...(config.firebaseProjectId === undefined ? {} : { firebaseProjectId: config.firebaseProjectId }),
+    ...(config.revenueCatProjectId === undefined ? {} : { revenueCatProjectId: config.revenueCatProjectId }),
+    ...(config.revenueCatAppId === undefined ? {} : { revenueCatAppId: config.revenueCatAppId }),
+    ...(config.sandboxPromotionalAccess === undefined ? {} : { sandboxPromotionalAccess: config.sandboxPromotionalAccess }),
   });
   const { fetch: fetchImpl, timeoutMs } = resolveOptions(config, optionsOrFetch);
 

@@ -6,6 +6,11 @@ import {
   type RevenueCatFetch,
   type RevenueCatReaderConfig,
 } from "../src/infrastructure/revenuecat/client.js";
+import {
+  SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
+  SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
+  SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
+} from "../src/config/sandboxPromotionalAccess.js";
 
 const observedAt = "2026-09-22T12:00:00.000Z";
 const observedAtMs = Date.parse(observedAt);
@@ -153,6 +158,96 @@ test("RevenueCat product or environment mismatch is unavailable", async () => {
 test("RevenueCat alias or transferred customer cannot confirm another Patternly account", async () => {
   const result = await readerFor(payload({ originalAppUserId: "other-user" })).read("user-1");
   assert.equal(result.state, "unavailable");
+});
+
+const promoCustomerId = "11111111-1111-4111-8111-111111111111";
+const promoProductId = "rc_promo_premium_custom";
+
+function promoPayload(overrides: {
+  requestDateMs?: number;
+  originalAppUserId?: string;
+  entitlement?: Record<string, unknown>;
+  subscription?: Record<string, unknown>;
+} = {}): Record<string, unknown> {
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
+  return {
+    request_date_ms: overrides.requestDateMs ?? Date.now() - 1_000,
+    subscriber: {
+      original_app_user_id: overrides.originalAppUserId ?? promoCustomerId,
+      entitlements: {
+        premium: {
+          product_identifier: promoProductId,
+          expires_date: expiresAt,
+          grace_period_expires_date: null,
+          ...overrides.entitlement,
+        },
+      },
+      subscriptions: {
+        [promoProductId]: {
+          expires_date: expiresAt,
+          grace_period_expires_date: null,
+          refunded_at: null,
+          is_sandbox: false,
+          store: "promotional",
+          billing_issues_detected_at: null,
+          ...overrides.subscription,
+        },
+      },
+    },
+  };
+}
+
+function promoReader(body: unknown, policyExpiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1_000).toISOString()) {
+  return createRevenueCatEntitlementReader({
+    ...config,
+    baseUrl: "https://api.revenuecat.com",
+    environment: "SANDBOX",
+    firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
+    revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
+    revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
+    sandboxPromotionalAccess: {
+      firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
+      revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
+      revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
+      customerId: promoCustomerId,
+      expiresAt: policyExpiresAt,
+    },
+  }, { fetch: async () => jsonResponse(body) });
+}
+
+test("sandbox promotional entitlement maps to the configured Patternly Premium namespace and caps expiry at policy cutoff", async () => {
+  const policyExpiry = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+  const result = await promoReader(promoPayload(), policyExpiry).read(promoCustomerId);
+  assert.equal(result.entitlement, "premium");
+  assert.equal(result.productId, "monthly");
+  assert.equal(result.state, "active");
+  assert.equal(result.providerExpiresAt, policyExpiry);
+  assert.equal(result.providerGraceExpiresAt, null);
+});
+
+test("sandbox promotional entitlement requires exact account, project, app, sandbox and promotional product contract", async () => {
+  for (const body of [
+    promoPayload({ originalAppUserId: "firebase-uid" }),
+    promoPayload({ entitlement: { product_identifier: "rc_promo_unknown" } }),
+    promoPayload({ entitlement: { expires_date: new Date(Date.now() + 48 * 60 * 60 * 1_000).toISOString() } }),
+    promoPayload({ subscription: { store: "app_store" } }),
+    promoPayload({ subscription: { is_sandbox: true } }),
+    promoPayload({ subscription: { refunded_at: observedAt } }),
+    promoPayload({ subscription: { grace_period_expires_date: graceExpiry } }),
+    promoPayload({ subscription: { billing_issues_detected_at: observedAt } }),
+  ]) assert.equal((await promoReader(body).read(promoCustomerId)).state, "unavailable");
+
+  assert.equal((await promoReader(promoPayload()).read("another-account")).state, "unavailable");
+  assert.equal((await createRevenueCatEntitlementReader({ ...config, environment: "PRODUCTION" }, { fetch: async () => jsonResponse(promoPayload()) }).read(promoCustomerId)).state, "unavailable");
+});
+
+test("sandbox promotional entitlement respects both provider and local policy cutoffs", async () => {
+  const providerAfterCutoff = Date.now() + 2_000;
+  const policyCutoff = new Date(providerAfterCutoff - 1_000).toISOString();
+  assert.equal((await promoReader(promoPayload({ requestDateMs: providerAfterCutoff }), policyCutoff).read(promoCustomerId)).state, "unavailable");
+
+  const localExpiredCutoff = new Date(Date.now() - 1_000).toISOString();
+  assert.equal((await promoReader(promoPayload(), localExpiredCutoff).read(promoCustomerId)).state, "unavailable");
 });
 
 test("missing entitlement or subscription map is unavailable rather than an authoritative expiry", async () => {

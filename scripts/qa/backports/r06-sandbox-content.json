@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "baseCommit": "4d8efbd6cab8f8fc31d39970fd8e6abb1a0c45eb",
+  "patch": "r06-sandbox-content.patch",
+  "patchSha256": "2b5b1a3024ebcc69917690da5ce16e6160e27aa52ae9b807c98c987982ee6932",
+  "scope": "Preserved recovery hotfix plus sandbox promotional access and GCS content descriptor transport; no unrelated current HEAD changes. Apply with git apply to the exact base.",
+  "files": [
+    "openapi/patternly-v1.json",
+    "src/api/app.ts",
+    "src/api/openapi.ts",
+    "src/config/environment.ts",
+    "src/config/sandboxPromotionalAccess.ts",
+    "src/index.ts",
+    "src/infrastructure/content/gcsContentPackageStorage.ts",
+    "src/infrastructure/revenuecat/client.ts",
+    "src/modules/account-lifecycle/store.ts",
+    "src/modules/billing/revenuecatWebhookStore.ts",
+    "src/modules/content/packages.ts",
+    "tests/aud08Recovery.emulator.test.ts",
+    "tests/contentPackages.emulator.test.ts",
+    "tests/contentPackages.test.ts",
+    "tests/environment.test.ts",
+    "tests/fixtures/gcsPackageFixture.ts",
+    "tests/openapiContracts.test.ts",
+    "tests/revenuecatClient.test.ts",
+    "tests/sandboxPromotionalAccess.test.ts",
+    "tests/sandboxPromotionalPackages.emulator.test.ts",
+    "tests/support.ts"
+  ],
+  "providerPolicy": "Deployment supplies exactly one backend account and finite cutoff; no customer values or credentials in patch.",
+  "buildComparison": "Production source matches deployed image. After build, one unit-test customer ID was replaced with an anonymous UUID; no runtime code changed."
+}
