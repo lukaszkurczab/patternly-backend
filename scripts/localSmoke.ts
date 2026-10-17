@@ -50,6 +50,18 @@ export function localSmokeRevenueCatEntitlementReader(stateValue?: string): Reve
       return Object.freeze({
         entitlement: localSmokeEntitlement,
         productId: localSmokeProductId,
+        projectId: "proj8ae78267",
+        mapVersion: "premium-map-v1",
+        environment: "SANDBOX" as const,
+        reason: null,
+        sources: state === "active" ? [{
+          platform: "ios" as const, store: "APP_STORE" as const,
+          appId: "app7b06e9a4c1", rcProductId: "prod8d07384c8c",
+          storeProductId: localSmokeProductId, basePlanId: null,
+          state: "active" as const, reason: null, managementURL: null,
+          providerExpiresAt: new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString(),
+          providerGraceExpiresAt: null,
+        }] : [],
         state,
         providerExpiresAt: state === "active" ? new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString() : null,
         providerGraceExpiresAt: null,

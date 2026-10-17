@@ -34,7 +34,9 @@
     "test:sync-conflict:emulator": "node scripts/run-sync-conflict-tests.mjs",
     "test:session-revocation:emulator": "node scripts/run-session-revocation-emulator-tests.mjs",
     "test:terminal-wire:emulator": "node scripts/run-terminal-wire-tests.mjs",
-    "test:retention:emulator": "node scripts/run-retention-completion-tests.mjs"
+    "test:retention:emulator": "node scripts/run-retention-completion-tests.mjs",
+    "test:premium:emulator": "node scripts/run-premium-local-tests.mjs",
+    "test:premium:client": "node --import tsx scripts/check-premium-client.mjs"
   },
   "dependencies": {
     "fastify": "^5.12.1",

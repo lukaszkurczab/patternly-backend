@@ -109,8 +109,9 @@ const emulatorPassword = "Patternly-test-123!";
 export async function createAuthUser(email = `emulator-${randomUUID()}@example.com`): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
   const response = await fetch(`http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=patternly-emulator`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, password: emulatorPassword, returnSecureToken: true }),
+    headers: { "content-type": "application/json", authorization: "Bearer owner" },
+    // Explicit project routing is required when a disposable emulator hosts a second fixture project.
+    body: JSON.stringify({ email, password: emulatorPassword, returnSecureToken: true, targetProjectId: projectId }),
   });
   if (!response.ok) {
     const failure = await response.text();
@@ -122,15 +123,17 @@ export async function createAuthUser(email = `emulator-${randomUUID()}@example.c
     throw new Error(`auth_emulator_signup_failed:${response.status}:${failure}`);
   }
   const payload = await response.json() as { email: string; idToken: string; localId: string };
-  if (!payload.email || !payload.idToken || !payload.localId) throw new Error("auth_emulator_signup_invalid");
-  return Object.freeze(payload);
+  if (!payload.email || !payload.localId) throw new Error("auth_emulator_signup_invalid");
+  // Admin-routed sign-up creates the fixture account without minting an end-user token.
+  return payload.idToken ? Object.freeze(payload) : signInAuthUser(payload.email);
 }
 
 async function signInAuthUser(email: string): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
   const response = await fetch(`http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=patternly-emulator`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, password: emulatorPassword, returnSecureToken: true }),
+    headers: { "content-type": "application/json", authorization: "Bearer owner" },
+    // Explicit project routing is required when a disposable emulator hosts a second fixture project.
+    body: JSON.stringify({ email, password: emulatorPassword, returnSecureToken: true, targetProjectId: projectId }),
   });
   if (!response.ok) throw new Error(`auth_emulator_signin_failed:${response.status}:${await response.text()}`);
   const payload = await response.json() as { email: string; idToken: string; localId: string };

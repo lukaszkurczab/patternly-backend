@@ -6,8 +6,12 @@ import { FirestorePurchaseCorrelation, transactionKey, digest, PURCHASE_WINDOW_M
 import { revenueCatEventSchema } from "../src/modules/billing/revenuecatWebhook.js";
 import { RetentionPurgeService } from "../src/modules/retention-purge/service.js";
 import { clearFirestore, createEmulatorContext, createVerifiedAuthUser, registerAuthUser, TEST_APP_CHECK_TOKEN } from "./support.js";
+import { premiumSnapshotScope } from "./fixtures/premiumSnapshot.js";
 
-const context = createEmulatorContext({ revenueCatEntitlementReader: { read: async () => ({ entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt: new Date(Date.now() + 600000).toISOString(), providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() }) } });
+// The provider reader is authoritative. Start expired so confirmation tests can
+// exercise the purchase path, then pass this same reader through webhook refresh.
+const reader = { read: async () => ({ ...premiumSnapshotScope, entitlement: "premium", productId: "monthly", state: "expired" as const, providerExpiresAt: new Date(Date.now() - 600000).toISOString(), providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() }) };
+const context = createEmulatorContext({ revenueCatEntitlementReader: reader });
 const db = context.db, scope = { projectId: "projtest", appId: "app-1", environment: "SANDBOX" as const, productId: "monthly" };
 let now = Date.now();
 const correlation = () => new FirestorePurchaseCorrelation(db, scope, () => now);
@@ -15,7 +19,7 @@ const store = context.stores.revenueCatWebhook;
 test.beforeEach(async () => { await clearFirestore(); now = Date.now() - 2000; });
 test.after(async () => { await clearFirestore(); await context.close(); });
 const event = (owner: string, txId: string, purchasedAt = now + 1000, overrides: Record<string, unknown> = {}) => revenueCatEventSchema.parse({ id: randomUUID(), type: "INITIAL_PURCHASE", app_user_id: owner, original_app_user_id: owner, store: "APP_STORE", event_timestamp_ms: Date.now(), expiration_at_ms: Date.now() + 600000, purchased_at_ms: purchasedAt, transaction_id: txId, app_id: scope.appId, entitlement_ids: ["premium"], product_id: "monthly", environment: "SANDBOX", ...overrides });
-const processEvent = (e: ReturnType<typeof event>) => store.process(e, scope.appId, scope.environment, "premium", scope.productId);
+const processEvent = (e: ReturnType<typeof event>) => store.process(e, scope.appId, scope.environment, "premium", scope.productId, reader);
 const userRef = (id: string) => db.collection("users").doc(id);
 async function seed(owner = randomUUID()) {
   await userRef(owner).set({ contactEmail: "owner@example.com", contactEmailVerified: true, acceptedTermsVersion: "v1", createdAt: Timestamp.fromMillis(now) });
@@ -41,6 +45,10 @@ for (const order of ["candidate_first", "webhook_first", "parallel"] as const) {
 }
 test("confirmation and claim retries preserve history and never reauthorize SDK; mismatch conflicts", async () => {
   const { owner, id, confirmation } = await seed();
+  const confirmationRef = userRef(owner).collection("purchaseConfirmations").doc(id);
+  const historical = (await confirmationRef.get()).data()!;
+  delete historical.store;
+  await confirmationRef.set(historical);
   await correlation().record(owner, 1, confirmation);
   await assert.rejects(correlation().record(owner, 1, { ...confirmation, storefrontPrice: "1 PLN" }), /purchase_confirmation_conflict/);
   assert.equal((await correlation().command(owner, 1, id, "claim")).dispatchAllowed, false);

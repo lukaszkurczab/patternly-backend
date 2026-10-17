@@ -1005,7 +1005,7 @@
       "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
-        "description": "Record the immutable pre-contract offer and express immediate-start request before opening App Store checkout.",
+        "description": "Record the immutable pre-contract offer and express immediate-start request before opening the selected store checkout.",
         "responses": {
           "201": {
             "description": "Confirmation recorded",
@@ -1168,6 +1168,13 @@
                   "immediateStartRequested": {
                     "type": "boolean",
                     "const": true
+                  },
+                  "store": {
+                    "type": "string",
+                    "enum": [
+                      "APP_STORE",
+                      "PLAY_STORE"
+                    ]
                   }
                 }
               }
@@ -2108,6 +2115,11 @@
                           "productId",
                           "state",
                           "source",
+                          "projectId",
+                          "mapVersion",
+                          "environment",
+                          "reason",
+                          "sources",
                           "providerExpiresAt",
                           "providerGraceExpiresAt",
                           "providerObservedAt"
@@ -2132,11 +2144,159 @@
                               "grace",
                               "hold",
                               "expired",
-                              "refunded"
+                              "refunded",
+                              "unavailable"
                             ]
                           },
                           "source": {
                             "const": "revenuecat"
+                          },
+                          "projectId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "mapVersion": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "environment": {
+                            "type": "string",
+                            "enum": [
+                              "SANDBOX",
+                              "PRODUCTION"
+                            ]
+                          },
+                          "reason": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "paused",
+                                  "identity_conflict",
+                                  "promotional"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "sources": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "platform",
+                                "store",
+                                "appId",
+                                "rcProductId",
+                                "storeProductId",
+                                "basePlanId",
+                                "state",
+                                "reason",
+                                "managementURL",
+                                "providerExpiresAt",
+                                "providerGraceExpiresAt"
+                              ],
+                              "properties": {
+                                "platform": {
+                                  "type": "string",
+                                  "enum": [
+                                    "ios",
+                                    "android"
+                                  ]
+                                },
+                                "store": {
+                                  "type": "string",
+                                  "enum": [
+                                    "APP_STORE",
+                                    "PLAY_STORE"
+                                  ]
+                                },
+                                "appId": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "rcProductId": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "storeProductId": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "basePlanId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "active",
+                                    "grace",
+                                    "hold",
+                                    "paused",
+                                    "expired",
+                                    "refunded"
+                                  ]
+                                },
+                                "reason": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "paused",
+                                        "account_hold"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "managementURL": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "format": "uri"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "providerExpiresAt": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "providerGraceExpiresAt": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              }
+                            }
                           },
                           "providerExpiresAt": {
                             "anyOf": [

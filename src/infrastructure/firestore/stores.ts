@@ -53,7 +53,7 @@ export function createFirestoreStores(runtime: FirestoreRuntime, environment: En
     rateLimitMax: environment.reportRateLimitMax,
     rateLimitWindowSeconds: environment.reportRateLimitWindowSeconds,
   });
-  const purchaseScope = environment.revenueCatProjectId && environment.revenueCatAppId && environment.revenueCatProductId && environment.revenueCatWebhookEnvironment ? { projectId: environment.revenueCatProjectId, appId: environment.revenueCatAppId, productId: environment.revenueCatProductId, environment: environment.revenueCatWebhookEnvironment } : null;
+  const purchaseScope = environment.premiumMap ?? (environment.nodeEnv === "test" && environment.revenueCatProjectId && environment.revenueCatAppId && environment.revenueCatProductId && environment.revenueCatWebhookEnvironment ? { projectId: environment.revenueCatProjectId, appId: environment.revenueCatAppId, productId: environment.revenueCatProductId, environment: environment.revenueCatWebhookEnvironment } : null);
   return Object.freeze({
     firebaseAuth,
     users: new FirestoreUserStore(runtime.db, pseudonymKeyRing, purchaseScope),
@@ -73,7 +73,7 @@ export function createFirestoreStores(runtime: FirestoreRuntime, environment: En
     privacyRequests: new FirestorePrivacyRequestStore(runtime.db, environment.privacyResponseKeyBase64, environment.privacyAuditHmacSecret),
     securityIncidents: new FirestoreSecurityIncidentStore(runtime.db, environment.privacyResponseKeyBase64, environment.privacyAuditHmacSecret),
     purchases: new FirestorePurchaseCorrelation(runtime.db, purchaseScope),
-    revenueCatWebhook: new FirestoreRevenueCatWebhookStore(runtime.db, environment.revenueCatProjectId),
+    revenueCatWebhook: new FirestoreRevenueCatWebhookStore(runtime.db, environment.premiumMap ?? (environment.nodeEnv === "test" ? environment.revenueCatProjectId : undefined)),
     legalRequests: new FirestoreLegalRequestStore(runtime.db, environment.privacyAuditHmacSecret),
   });
 }

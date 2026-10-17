@@ -1,3 +1,4 @@
+import { premiumSnapshotScope } from "./fixtures/premiumSnapshot.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
@@ -44,7 +45,7 @@ test("sandbox promotional package access is owner-bound and rechecked at the exp
     environment,
     revenueCatEntitlementReader: { read: async (userId) => {
       requestedUsers.push(userId);
-      return { entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() };
+      return { ...premiumSnapshotScope, entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() };
     } },
     createContentPackages: (db) => {
       service = new ContentPackageService(new FirestoreContentPackagePointerStore(db), gcs.storage);
@@ -79,7 +80,7 @@ test("sandbox promotional package access is owner-bound and rechecked at the exp
       stores: context.stores,
       revenueCatEntitlementReader: { read: async (userId: string) => {
         requestedUsers.push(userId);
-        return { entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() };
+        return { ...premiumSnapshotScope, entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() };
       } },
       contentPackages: service!,
     });
@@ -148,7 +149,7 @@ test("sandbox promotional package access is owner-bound and rechecked at the exp
       verifier: createFirebaseTokenVerifier(expiredEnvironment),
       appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
       stores: context.stores,
-      revenueCatEntitlementReader: { read: async (userId: string) => { requestedUsers.push(userId); return { entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() }; } },
+      revenueCatEntitlementReader: { read: async (userId: string) => { requestedUsers.push(userId); return { ...premiumSnapshotScope, entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() }; } },
       contentPackages: service,
     });
     const signsBeforeExpiredRequest = gcs.calls.filter((call) => call.operation === "sign").length;

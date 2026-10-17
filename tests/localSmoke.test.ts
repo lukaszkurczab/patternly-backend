@@ -27,6 +27,11 @@ test("local smoke entitlement fixture defaults to the mobile identity with an ex
   assert.deepEqual(result, {
     entitlement: "premium",
     productId: "com.lkurczab.patternly.premium.monthly",
+    projectId: "proj8ae78267",
+    mapVersion: "premium-map-v1",
+    environment: "SANDBOX",
+    reason: null,
+    sources: [],
     state: "expired",
     providerExpiresAt: null,
     providerGraceExpiresAt: null,

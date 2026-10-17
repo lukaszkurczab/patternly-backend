@@ -2,10 +2,19 @@ import {
   isSandboxPromotionalAccessAllowed,
   type SandboxPromotionalAccessPolicy,
 } from "../../config/sandboxPromotionalAccess.js";
+import { type PremiumMap, type StoreBinding } from "../../config/premiumMap.js";
 
 export type RevenueCatEnvironment = "PRODUCTION" | "SANDBOX";
 
 export type RevenueCatEntitlementState = "active" | "grace" | "hold" | "expired" | "refunded" | "unavailable";
+export type RevenueCatSourceState = "active" | "grace" | "hold" | "paused" | "expired" | "refunded";
+export type RevenueCatEntitlementSource = Readonly<StoreBinding & {
+  state: RevenueCatSourceState;
+  reason: "paused" | "account_hold" | null;
+  managementURL: string | null;
+  providerExpiresAt: string | null;
+  providerGraceExpiresAt: string | null;
+}>;
 
 export type RevenueCatEntitlementResult = Readonly<{
   entitlement: string;
@@ -14,11 +23,18 @@ export type RevenueCatEntitlementResult = Readonly<{
   providerExpiresAt: string | null;
   providerGraceExpiresAt: string | null;
   providerObservedAt: string;
+  projectId: string;
+  mapVersion: string;
+  environment: RevenueCatEnvironment;
+  reason: "paused" | "identity_conflict" | "promotional" | null;
+  sources: readonly RevenueCatEntitlementSource[];
 }>;
 
 export type RevenueCatReaderConfig = Readonly<{
   baseUrl: string;
   apiKey: string;
+  /** V2 scoped secret keys are separate from the V1 subscriber credential. */
+  v2ApiKey?: string | undefined;
   entitlementId: string;
   productId: string;
   environment: RevenueCatEnvironment;
@@ -26,6 +42,8 @@ export type RevenueCatReaderConfig = Readonly<{
   revenueCatProjectId?: string | undefined;
   revenueCatAppId?: string | undefined;
   sandboxPromotionalAccess?: SandboxPromotionalAccessPolicy | null | undefined;
+  premiumMap?: PremiumMap | null | undefined;
+  allowTestFixtures?: boolean | undefined;
 }>;
 
 /**
@@ -121,14 +139,22 @@ function makeResult(
   providerObservedAt: string,
   providerExpiresAt: string | null = null,
   providerGraceExpiresAt: string | null = null,
+  options: { reason?: RevenueCatEntitlementResult["reason"]; sources?: readonly RevenueCatEntitlementSource[] } = {},
 ): RevenueCatEntitlementResult {
+  const map = config.premiumMap;
+  if (!map) throw new TypeError("revenuecat_map_required");
   return Object.freeze({
-    entitlement: config.entitlementId,
-    productId: config.productId,
+    entitlement: "premium",
+    productId: "com.lkurczab.patternly.premium.monthly",
     state,
     providerExpiresAt,
     providerGraceExpiresAt,
     providerObservedAt,
+    projectId: map.projectId,
+    mapVersion: map.version,
+    environment: map.environment,
+    reason: options.reason ?? null,
+    sources: Object.freeze([...(options.sources ?? [])]),
   });
 }
 
@@ -183,8 +209,8 @@ function readPromotionalEntitlement(
   const policyExpiresAtMs = Date.parse(policy.expiresAt);
   if (requestDate.milliseconds >= policyExpiresAtMs || Date.now() >= policyExpiresAtMs) return unavailableResult;
   const expiresAtMs = Math.min(Date.parse(entitlementExpiresAt), policyExpiresAtMs);
-  if (expiresAtMs <= requestDate.milliseconds) return makeResult(config, "expired", requestDate.iso, new Date(expiresAtMs).toISOString());
-  return makeResult(config, "active", requestDate.iso, new Date(expiresAtMs).toISOString());
+  if (expiresAtMs <= requestDate.milliseconds) return makeResult(config, "expired", requestDate.iso, new Date(expiresAtMs).toISOString(), null, { reason: "promotional" });
+  return makeResult(config, "active", requestDate.iso, new Date(expiresAtMs).toISOString(), null, { reason: "promotional" });
 }
 
 function resolveOptions(
@@ -205,6 +231,7 @@ function validateConfig(config: RevenueCatReaderConfig): void {
   if (!isRecord(config) || !hasNonEmptyString(config.baseUrl) || !hasNonEmptyString(config.apiKey) || !hasNonEmptyString(config.entitlementId) || !hasNonEmptyString(config.productId) || (config.environment !== "PRODUCTION" && config.environment !== "SANDBOX")) {
     throw new TypeError("revenuecat_config_invalid");
   }
+  if (config.premiumMap && config.entitlementId !== config.premiumMap.entitlementId) throw new TypeError("revenuecat_entitlement_mismatch");
 }
 
 async function fetchJson(
@@ -252,63 +279,184 @@ async function fetchJson(
   }
 }
 
-function parseResponse(
+function parseV2Timestamp(value: unknown, allowNull = false): string | null | undefined {
+  if (value === null && allowNull) return null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) return undefined;
+  try { return new Date(value).toISOString(); } catch { return undefined; }
+}
+
+function transactionId(value: unknown): string | undefined {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return String(value);
+  return undefined;
+}
+
+async function fetchAllPages(
+  fetchImpl: RevenueCatFetch,
+  firstUrl: string,
+  apiKey: string,
+  timeoutMs: number,
+  requiredPrefix: string,
+): Promise<JsonRecord[]> {
+  const entries: JsonRecord[] = [];
+  const visited = new Set<string>();
+  let url: string | null = firstUrl;
+  for (let pageCount = 0; url !== null; pageCount += 1) {
+    if (pageCount >= 500 || visited.has(url)) throw new RevenueCatProviderUnavailableError("invalid_response");
+    visited.add(url);
+    const current: URL = new URL(url);
+    const first = new URL(firstUrl);
+    if (current.origin !== first.origin || !current.pathname.startsWith(requiredPrefix)) throw new RevenueCatProviderUnavailableError("invalid_response");
+    const payload = await fetchJson(fetchImpl, url, apiKey, timeoutMs);
+    if (!isRecord(payload) || !Array.isArray(payload.items)) throw new RevenueCatProviderUnavailableError("invalid_response");
+    for (const item of payload.items) {
+      if (!isRecord(item)) throw new RevenueCatProviderUnavailableError("invalid_response");
+      entries.push(item);
+    }
+    const next = payload.next_page;
+    if (next === undefined || next === null) url = null;
+    else if (typeof next === "string" && next.length > 0) url = new URL(next, current).toString();
+    else throw new RevenueCatProviderUnavailableError("invalid_response");
+  }
+  return entries;
+}
+
+function catalogBinding(map: PremiumMap, binding: StoreBinding, product: JsonRecord): boolean {
+  const app = product.app;
+  return isRecord(app) && product.id === binding.rcProductId && product.app_id === binding.appId
+    && app.id === binding.appId && app.project_id === map.projectId
+    && app.type === (binding.store === "APP_STORE" ? "app_store" : "play_store")
+    && product.type === "subscription"
+    && product.state === "active"
+    && product.store_identifier === (binding.platform === "android" ? `${binding.storeProductId}:${binding.basePlanId}` : binding.storeProductId)
+    ;
+}
+
+function parseV1Owner(payload: unknown, userId: string): { subscriber: JsonRecord; requestDate: { milliseconds: number; iso: string } } {
+  if (!isRecord(payload) || !isRecord(payload.subscriber)) throw new RevenueCatProviderUnavailableError("invalid_response");
+  const requestDate = parseRequestDate(payload.request_date_ms);
+  if (!requestDate) throw new RevenueCatProviderUnavailableError("invalid_response");
+  if (!isRecord(payload.subscriber.subscriptions) || !isRecord(payload.subscriber.entitlements)) throw new RevenueCatProviderUnavailableError("invalid_response");
+  return { subscriber: payload.subscriber, requestDate };
+}
+
+function v1GraceEnd(
+  subscriber: JsonRecord,
+  binding: StoreBinding,
+  expectedEnvironment: RevenueCatEnvironment,
+  exactTransaction: string,
+  entitlementId: string,
+): string | undefined {
+  const subscriptions = subscriber.subscriptions as JsonRecord;
+  const key = binding.platform === "android" ? `${binding.storeProductId}:${binding.basePlanId}` : binding.storeProductId;
+  const record = subscriptions[key];
+  if (!isRecord(record) || record.store !== (binding.store === "APP_STORE" ? "app_store" : "play_store")
+    || record.is_sandbox !== (expectedEnvironment === "SANDBOX") || transactionId(record.store_transaction_id) !== exactTransaction) return undefined;
+  const grace = parseProviderDate(record.grace_period_expires_date, true);
+  if (grace === undefined || grace === null) return undefined;
+  const entitlementValue = (subscriber.entitlements as JsonRecord)[entitlementId];
+  if (entitlementValue !== undefined && entitlementValue !== null) {
+    if (!isRecord(entitlementValue)) return undefined;
+    if (entitlementValue.product_identifier === key) {
+      const entitlementGrace = parseProviderDate(entitlementValue.grace_period_expires_date, true);
+      if (entitlementGrace === undefined || (entitlementGrace !== null && entitlementGrace !== grace)) return undefined;
+    }
+  }
+  return grace;
+}
+
+function managementURL(value: unknown, store: StoreBinding["store"]): string | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== "string") return undefined;
+  try {
+    const url = new URL(value);
+    const expectedHost = store === "APP_STORE" ? url.hostname === "apps.apple.com" : url.hostname === "play.google.com";
+    return url.protocol === "https:" && expectedHost && !url.username && !url.password ? url.toString() : undefined;
+  } catch { return undefined; }
+}
+
+async function parseV2Result(
   config: RevenueCatReaderConfig,
   userId: string,
-  payload: unknown,
-): RevenueCatEntitlementResult {
-  if (!isRecord(payload)) throw new RevenueCatProviderUnavailableError("invalid_response");
-  const requestDate = parseRequestDate(payload.request_date_ms);
-  if (!requestDate || !isRecord(payload.subscriber)) throw new RevenueCatProviderUnavailableError("invalid_response");
-
-  const subscriber = payload.subscriber;
-  if (subscriber.original_app_user_id !== userId) return unavailable(config, requestDate.iso);
-  const entitlementsValue = subscriber.entitlements;
-  const subscriptionsValue = subscriber.subscriptions;
-  if (!isRecord(entitlementsValue) || !isRecord(subscriptionsValue)) return unavailable(config, requestDate.iso);
-  const entitlements = entitlementsValue;
-  const subscriptions = subscriptionsValue;
-  const entitlement = entitlements[config.entitlementId];
-  const subscription = subscriptions[config.productId];
-
-  if (entitlement === undefined || entitlement === null) {
-    return makeResult(config, "expired", requestDate.iso);
+  v1Payload: unknown,
+  subscriptions: JsonRecord[],
+  products: JsonRecord[],
+  entitlementResourceId: string,
+): Promise<RevenueCatEntitlementResult> {
+  const map = config.premiumMap!;
+  const { subscriber, requestDate } = parseV1Owner(v1Payload, userId);
+  if (subscriber.original_app_user_id !== userId) return makeResult(config, "unavailable", requestDate.iso, null, null, { reason: "identity_conflict" });
+  const v2Rows: RevenueCatEntitlementSource[] = [];
+  for (const subscription of subscriptions) {
+    if (subscription.customer_id !== userId || subscription.original_customer_id !== userId) {
+      return makeResult(config, "unavailable", requestDate.iso, null, null, { reason: "identity_conflict" });
+    }
+    if (subscription.product_id === null) {
+      if (subscription.store !== "promotional") return unavailable(config, requestDate.iso);
+      continue;
+    }
+    if (!hasNonEmptyString(subscription.product_id)) return unavailable(config, requestDate.iso);
+    const matchingProducts = products.filter((product) => product.id === subscription.product_id);
+    const premiumBinding = map.bindings.find((binding) => matchingProducts.some((product) => catalogBinding(map, binding, product)));
+    const entitlementList = subscription.entitlements;
+    if (!isRecord(entitlementList) || !Array.isArray(entitlementList.items)) return unavailable(config, requestDate.iso);
+    if (entitlementList.next_page !== undefined && entitlementList.next_page !== null) return unavailable(config, requestDate.iso);
+    const premiumEntitlements = entitlementList.items.filter((item) => isRecord(item) && item.id === entitlementResourceId && item.project_id === map.projectId);
+    const claimsPremium = premiumEntitlements.length === 1;
+    if (!premiumBinding) {
+      if (subscription.gives_access === true && claimsPremium) return unavailable(config, requestDate.iso);
+      continue;
+    }
+    const store = premiumBinding.store === "APP_STORE" ? "app_store" : "play_store";
+    const environmentMatches = subscription.environment === (map.environment === "SANDBOX" ? "sandbox" : "production");
+    if (subscription.store !== store || !environmentMatches || !claimsPremium || typeof subscription.gives_access !== "boolean"
+      || typeof subscription.pending_payment !== "boolean" || typeof subscription.status !== "string") return unavailable(config, requestDate.iso);
+    const end = parseV2Timestamp(subscription.ends_at, true);
+    if (end === undefined) return unavailable(config, requestDate.iso);
+    const management = managementURL(subscription.management_url, premiumBinding.store);
+    if (management === undefined) return unavailable(config, requestDate.iso);
+    let sourceState: RevenueCatSourceState;
+    let reason: RevenueCatEntitlementSource["reason"] = null;
+    let grace: string | null = null;
+    const status = subscription.status;
+    if (!["active", "in_grace_period", "in_billing_retry", "paused", "expired", "unknown", "trialing", "incomplete"].includes(status)) return unavailable(config, requestDate.iso);
+    if (status === "unknown" || status === "trialing" || status === "incomplete" || subscription.pending_payment === true) return unavailable(config, requestDate.iso);
+    if (subscription.gives_access) {
+      if (status === "active") {
+        if (!end || Date.parse(end) <= requestDate.milliseconds) return unavailable(config, requestDate.iso);
+        sourceState = "active";
+      } else if (status === "in_grace_period") {
+        const exactTransaction = transactionId(subscription.store_subscription_identifier);
+        if (!exactTransaction) return unavailable(config, requestDate.iso);
+        grace = v1GraceEnd(subscriber, premiumBinding, map.environment, exactTransaction, config.entitlementId) ?? null;
+        if (!grace || Date.parse(grace) <= requestDate.milliseconds) return unavailable(config, requestDate.iso);
+        sourceState = "grace";
+      } else return unavailable(config, requestDate.iso);
+    } else if (status === "paused") {
+      sourceState = "paused";
+      reason = "paused";
+    } else if (status === "in_billing_retry") {
+      sourceState = "hold";
+      reason = "account_hold";
+    } else if (status === "expired") {
+      sourceState = "expired";
+    } else return unavailable(config, requestDate.iso);
+    v2Rows.push(Object.freeze({ ...premiumBinding, state: sourceState, reason, managementURL: management, providerExpiresAt: end, providerGraceExpiresAt: grace }));
   }
-  if (!isRecord(entitlement)) return unavailable(config, requestDate.iso);
-
-  if (hasNonEmptyString(entitlement.product_identifier) && entitlement.product_identifier.startsWith("rc_promo_")) {
-    return readPromotionalEntitlement(config, userId, subscriber, entitlement, requestDate);
+  const accessSources = v2Rows.filter((row) => row.state === "active" || row.state === "grace");
+  if (accessSources.length === 0) {
+    const paused = v2Rows.some((row) => row.state === "paused");
+    const hold = v2Rows.some((row) => row.state === "hold");
+    return makeResult(config, paused ? "hold" : hold ? "hold" : "expired", requestDate.iso, null, null, { reason: paused ? "paused" : null, sources: v2Rows });
   }
-
-  if (subscription === undefined || subscription === null) return makeResult(config, "expired", requestDate.iso);
-  if (!isRecord(subscription)) return unavailable(config, requestDate.iso);
-
-  if (entitlement.product_identifier !== config.productId) return unavailable(config, requestDate.iso);
-  if (typeof subscription.is_sandbox !== "boolean" || subscription.is_sandbox !== (config.environment === "SANDBOX")) return unavailable(config, requestDate.iso);
-  if (subscription.store !== "app_store") return unavailable(config, requestDate.iso);
-
-  const entitlementExpiresAt = parseProviderDate(entitlement.expires_date, false);
-  const subscriptionExpiresAt = parseProviderDate(subscription.expires_date, false);
-  if (entitlementExpiresAt === undefined || entitlementExpiresAt === null || subscriptionExpiresAt === undefined || subscriptionExpiresAt === null || entitlementExpiresAt !== subscriptionExpiresAt) return unavailable(config, requestDate.iso);
-
-  const entitlementGraceAt = parseProviderDate(entitlement.grace_period_expires_date, true);
-  const subscriptionGraceAt = parseProviderDate(subscription.grace_period_expires_date, true);
-  const refundedAt = parseProviderDate(subscription.refunded_at, true);
-  const billingIssueAt = parseProviderDate(subscription.billing_issues_detected_at, true);
-  if (entitlementGraceAt === undefined || subscriptionGraceAt === undefined || refundedAt === undefined || billingIssueAt === undefined) return unavailable(config, requestDate.iso);
-  if (entitlementGraceAt !== null && subscriptionGraceAt !== null && entitlementGraceAt !== subscriptionGraceAt) return unavailable(config, requestDate.iso);
-
-  const providerGraceExpiresAt = subscriptionGraceAt ?? entitlementGraceAt;
-  const observedAtMs = requestDate.milliseconds;
-  const expiresAtMs = Date.parse(entitlementExpiresAt);
-  const graceExpiresAtMs = providerGraceExpiresAt === null ? null : Date.parse(providerGraceExpiresAt);
-  const hasFutureExpiry = expiresAtMs > observedAtMs;
-  const hasFutureGrace = graceExpiresAtMs !== null && graceExpiresAtMs > observedAtMs;
-
-  if (refundedAt !== null) return makeResult(config, "refunded", requestDate.iso, entitlementExpiresAt, providerGraceExpiresAt);
-  if (hasFutureGrace) return makeResult(config, "grace", requestDate.iso, entitlementExpiresAt, providerGraceExpiresAt);
-  if (billingIssueAt !== null) return makeResult(config, "hold", requestDate.iso, entitlementExpiresAt, providerGraceExpiresAt);
-  return makeResult(config, hasFutureExpiry ? "active" : "expired", requestDate.iso, entitlementExpiresAt, providerGraceExpiresAt);
+  const winningSource = [...accessSources].sort((left, right) => {
+    const leftEnd = left.state === "grace" ? left.providerGraceExpiresAt : left.providerExpiresAt;
+    const rightEnd = right.state === "grace" ? right.providerGraceExpiresAt : right.providerExpiresAt;
+    return Date.parse(rightEnd ?? "") - Date.parse(leftEnd ?? "");
+  })[0];
+  if (!winningSource || !winningSource.providerExpiresAt) return unavailable(config, requestDate.iso);
+  return makeResult(config, winningSource.state === "active" ? "active" : "grace", requestDate.iso,
+    winningSource.providerExpiresAt, winningSource.providerGraceExpiresAt, { sources: v2Rows });
 }
 
 export function createRevenueCatEntitlementReader(
@@ -316,12 +464,17 @@ export function createRevenueCatEntitlementReader(
   optionsOrFetch?: RevenueCatReaderOptions | RevenueCatFetch,
 ): RevenueCatEntitlementReader {
   validateConfig(config);
+  if (!config.premiumMap || (config.premiumMap.fixture && config.allowTestFixtures !== true)) throw new TypeError("revenuecat_map_required");
+  if (config.revenueCatProjectId !== undefined && config.revenueCatProjectId !== config.premiumMap.projectId) throw new TypeError("revenuecat_project_mismatch");
   const normalizedConfig = Object.freeze({
     baseUrl: config.baseUrl.replace(/\/+$/u, ""),
     apiKey: config.apiKey,
+    v2ApiKey: config.v2ApiKey,
     entitlementId: config.entitlementId,
     productId: config.productId,
     environment: config.environment,
+    premiumMap: config.premiumMap,
+    allowTestFixtures: config.allowTestFixtures,
     ...(config.firebaseProjectId === undefined ? {} : { firebaseProjectId: config.firebaseProjectId }),
     ...(config.revenueCatProjectId === undefined ? {} : { revenueCatProjectId: config.revenueCatProjectId }),
     ...(config.revenueCatAppId === undefined ? {} : { revenueCatAppId: config.revenueCatAppId }),
@@ -332,9 +485,34 @@ export function createRevenueCatEntitlementReader(
   return Object.freeze({
     async read(userId: string): Promise<RevenueCatEntitlementResult> {
       if (typeof userId !== "string") throw new TypeError("revenuecat_user_id_invalid");
-      const endpoint = `${normalizedConfig.baseUrl}/v1/subscribers/${encodeURIComponent(userId)}`;
-      const payload = await fetchJson(fetchImpl, endpoint, normalizedConfig.apiKey, timeoutMs);
-      return parseResponse(normalizedConfig, userId, payload);
+      if (!hasNonEmptyString(userId)) throw new TypeError("revenuecat_user_id_invalid");
+      const projectPath = `/v2/projects/${encodeURIComponent(normalizedConfig.premiumMap!.projectId)}`;
+      const firstProducts = `${normalizedConfig.baseUrl}${projectPath}/products?expand=items.app`;
+      const customerSubscriptions = `${normalizedConfig.baseUrl}${projectPath}/customers/${encodeURIComponent(userId)}/subscriptions`;
+      const ownerUrl = `${normalizedConfig.baseUrl}/v1/subscribers/${encodeURIComponent(userId)}`;
+      const v1Payload = await fetchJson(fetchImpl, ownerUrl, normalizedConfig.apiKey, timeoutMs);
+      const ownerData = parseV1Owner(v1Payload, userId);
+      if (ownerData.subscriber.original_app_user_id !== userId) {
+        return makeResult(normalizedConfig, "unavailable", ownerData.requestDate.iso, null, null, { reason: "identity_conflict" });
+      }
+      const entitlement = (ownerData.subscriber.entitlements as JsonRecord)[normalizedConfig.premiumMap!.entitlementId];
+      if (isRecord(entitlement) && hasNonEmptyString(entitlement.product_identifier) && entitlement.product_identifier.startsWith("rc_promo_")) {
+        return readPromotionalEntitlement(normalizedConfig, userId, ownerData.subscriber, entitlement, ownerData.requestDate);
+      }
+      if (!normalizedConfig.v2ApiKey?.trim()) throw new RevenueCatProviderUnavailableError("invalid_response");
+      const [productRows, subscriptionRows, entitlementRows] = await Promise.all([
+        fetchAllPages(fetchImpl, firstProducts, normalizedConfig.v2ApiKey, timeoutMs, `${projectPath}/products`),
+        fetchAllPages(fetchImpl, customerSubscriptions, normalizedConfig.v2ApiKey, timeoutMs, `${projectPath}/customers/${encodeURIComponent(userId)}/subscriptions`),
+        fetchAllPages(fetchImpl, `${normalizedConfig.baseUrl}${projectPath}/entitlements`, normalizedConfig.v2ApiKey, timeoutMs, `${projectPath}/entitlements`),
+      ]);
+      const matchingEntitlements = entitlementRows.filter((entry) => entry.project_id === normalizedConfig.premiumMap!.projectId && entry.lookup_key === normalizedConfig.premiumMap!.entitlementId);
+      if (matchingEntitlements.length !== 1 || !hasNonEmptyString(matchingEntitlements[0]?.id)) throw new RevenueCatProviderUnavailableError("invalid_response");
+      for (const binding of normalizedConfig.premiumMap!.bindings) {
+        if (productRows.filter((product) => catalogBinding(normalizedConfig.premiumMap!, binding, product)).length !== 1) {
+          throw new RevenueCatProviderUnavailableError("invalid_response");
+        }
+      }
+      return parseV2Result(normalizedConfig, userId, v1Payload, subscriptionRows, productRows, matchingEntitlements[0]!.id as string);
     },
   });
 }

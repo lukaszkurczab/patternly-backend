@@ -1,0 +1,25 @@
+{
+  "version": "premium-map-fixture-v1",
+  "projectId": "fixture-project",
+  "entitlementId": "premium",
+  "environment": "SANDBOX",
+  "fixture": true,
+  "bindings": [
+    {
+      "platform": "ios",
+      "store": "APP_STORE",
+      "appId": "fixture-ios",
+      "rcProductId": "fixture-rc-ios",
+      "storeProductId": "fixture.ios.monthly",
+      "basePlanId": null
+    },
+    {
+      "platform": "android",
+      "store": "PLAY_STORE",
+      "appId": "fixture-play",
+      "rcProductId": "fixture-rc-play",
+      "storeProductId": "fixture_play_monthly",
+      "basePlanId": "monthly"
+    }
+  ]
+}

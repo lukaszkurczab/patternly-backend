@@ -634,19 +634,41 @@ function routeGuard(profile: RouteGuard, dependencies: ApplicationDependencies, 
 
 type RouteHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> | unknown;
 
+/** A store sheet may only follow a fresh, account-wide negative provider read. */
+async function assertPurchaseAvailable(dependencies: ApplicationDependencies, accountId: string): Promise<void> {
+  const store = requireStores(dependencies).revenueCatWebhook;
+  if (!await store.identityAvailable(accountId)) throw new Error("identity_reconciliation_required");
+  const reader = dependencies.revenueCatEntitlementReader;
+  if (!reader) throw new Error("revenuecat_read_unavailable");
+  let result: Awaited<ReturnType<typeof reader.read>>;
+  try { result = await reader.read(accountId); }
+  catch { throw new Error("revenuecat_read_unavailable"); }
+  if (result.reason === "identity_conflict") {
+    await store.markIdentityConflict(accountId);
+    throw new Error("identity_reconciliation_required");
+  }
+  if (!await store.identityAvailable(accountId)) throw new Error("identity_reconciliation_required");
+  if (result.state === "unavailable") throw new Error("revenuecat_read_unavailable");
+  if (["active", "grace", "hold"].includes(result.state)
+    || result.sources.some((source) => ["active", "grace", "hold", "paused"].includes(source.state))) {
+    throw new Error("purchase_subscription_exists");
+  }
+}
+
 function createWebhookHandler(dependencies: ApplicationDependencies): RouteHandler {
   const handler: RouteHandler = async (request, reply) => {
     const configuration = dependencies.environment;
-    if (!configuration.revenueCatProjectId || !configuration.revenueCatWebhookSecret || !configuration.revenueCatAppId || !configuration.revenueCatEntitlementId || !configuration.revenueCatProductId || !configuration.revenueCatWebhookEnvironment) return reply.code(503).send({ error: { code: "revenuecat_not_configured" } });
+    if (!configuration.revenueCatWebhookSecret || (!configuration.premiumMap && (configuration.nodeEnv !== "test" || !configuration.revenueCatProjectId || !configuration.revenueCatAppId || !configuration.revenueCatEntitlementId || !configuration.revenueCatProductId || !configuration.revenueCatWebhookEnvironment))) return reply.code(503).send({ error: { code: "revenuecat_not_configured" } });
     if (!verifyRevenueCatAuthorization(request.headers.authorization, configuration.revenueCatWebhookSecret)) return reply.code(401).send({ error: { code: "revenuecat_webhook_unauthorized" } });
     const envelope = request.body as { event?: unknown } | null;
     const parsed = revenueCatEventSchema.safeParse(envelope?.event);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     try {
       const store = requireStores(dependencies).revenueCatWebhook;
-      const result = await store.process(parsed.data, configuration.revenueCatAppId, configuration.revenueCatWebhookEnvironment, configuration.revenueCatEntitlementId, configuration.revenueCatProductId);
+      const result = await store.process(parsed.data, configuration.revenueCatAppId ?? "", configuration.premiumMap?.environment ?? configuration.revenueCatWebhookEnvironment!, configuration.premiumMap?.entitlementId ?? configuration.revenueCatEntitlementId!, configuration.revenueCatProductId ?? "", dependencies.revenueCatEntitlementReader ?? undefined);
       const deliveryError = await dispatchPurchaseReceipt(store, result, dependencies.purchaseReceiptEmailSender);
       if (deliveryError) return reply.code(503).send({ error: { code: deliveryError } });
+      if (result.refreshPending) return reply.code(503).send({ error: { code: "revenuecat_read_unavailable" } });
       return reply.code(200).send({ outcome: result.outcome, duplicate: result.duplicate });
     } catch (error) {
       if (error instanceof Error && error.message === "event_timestamp_future") return reply.code(400).send({ error: { code: "invalid_request" } });
@@ -814,17 +836,29 @@ export function buildApplication(dependencies: ApplicationDependencies) {
   });
 
   app.post("/v1/purchase-confirmations", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
-    const parsed = z.object({ confirmationId: z.string().uuid(), termsVersion: z.string().regex(/^[A-Za-z0-9._-]{1,80}$/u), productIdentifier: z.string().trim().min(1).max(200), storefrontPrice: z.string().trim().min(1).max(80), locale: z.enum(["en", "pl"]), immediateStartRequested: z.literal(true) }).strict().safeParse(request.body);
+    const parsed = z.object({ confirmationId: z.string().uuid(), termsVersion: z.string().regex(/^[A-Za-z0-9._-]{1,80}$/u), productIdentifier: z.string().trim().min(1).max(200), store: z.enum(["APP_STORE", "PLAY_STORE"]).optional(), storefrontPrice: z.string().trim().min(1).max(80), locale: z.enum(["en", "pl"]), immediateStartRequested: z.literal(true) }).strict().safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     try {
-      const confirmation = await requireStores(dependencies).users.recordPurchaseConfirmation(request.userId!, request.expectedAuthorizationGeneration!, parsed.data);
+      // Replaying the same consent must remain possible after the purchase becomes
+      // active. The store still verifies every persisted input before returning it.
+      let existingAttempt = false;
+      try {
+        await requireStores(dependencies).purchases.status(request.userId!, request.expectedAuthorizationGeneration!, parsed.data.confirmationId);
+        existingAttempt = true;
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== "purchase_attempt_not_found") throw error;
+      }
+      if (!existingAttempt) await assertPurchaseAvailable(dependencies, request.userId!);
+      const { store, ...input } = parsed.data;
+      const confirmation = await requireStores(dependencies).users.recordPurchaseConfirmation(request.userId!, request.expectedAuthorizationGeneration!, { ...input, ...(store === undefined ? {} : { store }) });
       return reply.code(201).send({ confirmation });
     } catch (error) {
       if (error instanceof Error && error.message === "authorization_generation_conflict") return reply.code(409).send({ error: { code: error.message } });
       if (error instanceof Error && (error.message === "account_deleted" || error.message === "authorization_generation_required" || error.message === "authorization_generation_invalid")) return reply.code(401).send({ error: { code: error.message } });
       if (error instanceof Error && error.message === "revenuecat_not_configured") return reply.code(503).send({ error: { code: error.message } });
       if (error instanceof Error && error.message === "legal_acceptance_required") return reply.code(409).send({ error: { code: "legal_acceptance_required" } });
-      if (error instanceof Error && ["purchase_attempt_active", "purchase_confirmation_conflict", "identity_reconciliation_required", "purchase_product_invalid"].includes(error.message)) return reply.code(409).send({ error: { code: error.message } });
+      if (error instanceof Error && error.message === "revenuecat_read_unavailable") return reply.code(503).send({ error: { code: error.message } });
+      if (error instanceof Error && ["purchase_attempt_active", "purchase_confirmation_conflict", "identity_reconciliation_required", "purchase_product_invalid", "purchase_subscription_exists"].includes(error.message)) return reply.code(409).send({ error: { code: error.message } });
       throw error;
     }
   });
@@ -833,6 +867,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     if (error instanceof Error && error.message.startsWith("purchase_")) return reply.code(error.message.endsWith("not_found") ? 404 : 409).send({ error: { code: error.message } });
     if (error instanceof Error && error.message === "identity_reconciliation_required") return reply.code(409).send({ error: { code: error.message } });
     if (error instanceof Error && error.message === "revenuecat_not_configured") return reply.code(503).send({ error: { code: error.message } });
+    if (error instanceof Error && error.message === "revenuecat_read_unavailable") return reply.code(503).send({ error: { code: error.message } });
     if (error instanceof Error && error.message.startsWith("authorization_generation_")) return reply.code(409).send({ error: { code: error.message } });
     if (error instanceof Error && error.message === "account_deleted") return reply.code(401).send({ error: { code: error.message } });
     throw error;
@@ -853,6 +888,10 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     if (!id.success || !input.success) return reply.code(400).send({ error: { code: "invalid_request" } });
     try {
       const stores = requireStores(dependencies);
+      if (input.data.action === "claim") {
+        const prior = await stores.purchases.status(request.userId!, request.expectedAuthorizationGeneration!, id.data);
+        if (prior.initiatedAt === null) await assertPurchaseAvailable(dependencies, request.userId!);
+      }
       const attempt = await stores.purchases.command(request.userId!, request.expectedAuthorizationGeneration!, id.data, input.data.action, input.data.action === "candidate" ? input.data.transactionId : undefined);
       const delivery = attempt.transactionKey ? await stores.revenueCatWebhook.claimBoundReceipt(request.userId!, attempt.transactionKey) : {};
       const error = await dispatchPurchaseReceipt(stores.revenueCatWebhook, delivery, dependencies.purchaseReceiptEmailSender);
@@ -888,6 +927,10 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     try {
       if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
       const result = await dependencies.revenueCatEntitlementReader.read(request.userId!);
+      if (result.reason === "identity_conflict") {
+        await requireStores(dependencies).revenueCatWebhook.markIdentityConflict(request.userId!);
+        return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
+      }
       if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
       if (result.state === "unavailable") return reply.code(503).send({ error: { code: "revenuecat_read_unavailable" } });
       return { serverObservedAt: new Date().toISOString(), entitlements: [{ accountId: request.userId!, ...result, source: "revenuecat" }] };
@@ -1404,6 +1447,10 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     try {
       if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
       entitlement = await dependencies.revenueCatEntitlementReader.read(request.userId!);
+      if (entitlement.reason === "identity_conflict") {
+        await requireStores(dependencies).revenueCatWebhook.markIdentityConflict(request.userId!);
+        return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
+      }
       if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
     }
     catch { return reply.code(503).send({ error: { code: "entitlement_unavailable" } }); }

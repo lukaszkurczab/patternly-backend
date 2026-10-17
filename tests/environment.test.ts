@@ -20,15 +20,18 @@ const production = {
   SMTP_FROM_EMAIL: "sender@example.test",
   SMTP_FROM_NAME: "Patternly",
   REVENUECAT_WEBHOOK_SECRET: "test-only-revenuecat-secret",
-  REVENUECAT_PROJECT_ID: "projtest",
-  REVENUECAT_APP_ID: "patternly-test-app",
+  REVENUECAT_PROJECT_ID: "proj8ae78267",
+  REVENUECAT_APP_ID: "app7b06e9a4c1",
   REVENUECAT_ENTITLEMENT_ID: "premium",
-  REVENUECAT_PRODUCT_ID: "premium-monthly",
+  REVENUECAT_PRODUCT_ID: "prod8d07384c8c",
   REVENUECAT_WEBHOOK_ENVIRONMENT: "PRODUCTION",
 } as const;
 
 test("production rejects either Firebase emulator host before runtime configuration is returned", () => {
-  assert.doesNotThrow(() => loadEnvironment(production));
+  const configured = loadEnvironment(production);
+  assert.equal(configured.premiumMap?.version, "premium-map-v1");
+  assert.deepEqual(configured.premiumMap?.bindings.map((binding) => binding.platform), ["ios"]);
+  assert.throws(() => loadEnvironment({ ...production, REVENUECAT_PROJECT_ID: "projforeign" }), { message: "production_premium_map_required" });
   for (const value of ["127.0.0.1:19099", "remote.example.test:19099", ""]) {
     assert.throws(
       () => loadEnvironment({ ...production, FIREBASE_AUTH_EMULATOR_HOST: value }),

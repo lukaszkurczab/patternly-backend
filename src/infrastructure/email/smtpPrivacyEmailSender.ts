@@ -127,10 +127,11 @@ export function createSmtpPurchaseReceiptEmailSender(
   return Object.freeze({
     async send(input: PurchaseReceiptDelivery) {
       const polish = input.locale === "pl";
+      const storeName = input.store === "PLAY_STORE" ? "Google Play" : "App Store";
       const subject = polish ? "Patternly — potwierdzenie zakupu" : "Patternly — purchase confirmation";
       const text = polish
-        ? `Potwierdzenie zakupu usługi Patternly Premium\n\nCena wyświetlona w App Store: ${input.storefrontPrice}\nOkres rozliczeniowy: miesiąc\nOdnowienie: automatyczne do chwili anulowania w ustawieniach App Store\nIdentyfikator produktu: ${input.productIdentifier}\nIdentyfikator transakcji: ${input.transactionId}\nWersja zaakceptowanego Regulaminu: ${input.termsVersion}\n\nNa Twoje wyraźne żądanie dostęp do usługi cyfrowej rozpoczął się natychmiast po zakupie.`
-        : `Patternly Premium purchase confirmation\n\nPrice shown in the App Store: ${input.storefrontPrice}\nBilling period: monthly\nRenewal: automatic until cancelled in App Store settings\nProduct identifier: ${input.productIdentifier}\nTransaction identifier: ${input.transactionId}\nAccepted Terms version: ${input.termsVersion}\n\nAt your express request, access to the digital service started immediately after purchase.`;
+        ? `Potwierdzenie zakupu usługi Patternly Premium\n\nCena wyświetlona w ${storeName}: ${input.storefrontPrice}\nOkres rozliczeniowy: miesiąc\nOdnowienie: automatyczne do chwili anulowania w ustawieniach ${storeName}\nIdentyfikator produktu: ${input.productIdentifier}\nIdentyfikator transakcji: ${input.transactionId}\nWersja zaakceptowanego Regulaminu: ${input.termsVersion}\n\nNa Twoje wyraźne żądanie dostęp do usługi cyfrowej rozpoczął się natychmiast po zakupie.`
+        : `Patternly Premium purchase confirmation\n\nPrice shown in the ${storeName}: ${input.storefrontPrice}\nBilling period: monthly\nRenewal: automatic until cancelled in ${storeName} settings\nProduct identifier: ${input.productIdentifier}\nTransaction identifier: ${input.transactionId}\nAccepted Terms version: ${input.termsVersion}\n\nAt your express request, access to the digital service started immediately after purchase.`;
       const messageIdDomain = configuration.fromEmail.split("@")[1] ?? "patternly.invalid";
       let result;
       try {

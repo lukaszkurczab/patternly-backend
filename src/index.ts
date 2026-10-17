@@ -33,8 +33,8 @@ async function main(): Promise<void> {
       appCheckVerifier: createFirebaseAppCheckVerifier(environment),
       operatorTokenVerifier: createOperatorTokenVerifier(environment),
       stores: createFirestoreStores(firestore, environment),
-      revenueCatEntitlementReader: environment.revenueCatReadApiKey && environment.revenueCatEntitlementId && environment.revenueCatProductId && environment.revenueCatWebhookEnvironment
-        ? createRevenueCatEntitlementReader({ baseUrl: environment.revenueCatApiBaseUrl, apiKey: environment.revenueCatReadApiKey, entitlementId: environment.revenueCatEntitlementId, productId: environment.revenueCatProductId, environment: environment.revenueCatWebhookEnvironment, firebaseProjectId: environment.firebaseProjectId, revenueCatProjectId: environment.revenueCatProjectId, revenueCatAppId: environment.revenueCatAppId, sandboxPromotionalAccess: environment.sandboxPromotionalAccess })
+      revenueCatEntitlementReader: environment.revenueCatReadApiKey && (environment.revenueCatV2ReadApiKey || environment.sandboxPromotionalAccess) && environment.revenueCatEntitlementId && environment.revenueCatProductId && environment.premiumMap
+        ? createRevenueCatEntitlementReader({ baseUrl: environment.revenueCatApiBaseUrl, apiKey: environment.revenueCatReadApiKey, v2ApiKey: environment.revenueCatV2ReadApiKey, entitlementId: environment.revenueCatEntitlementId, productId: environment.revenueCatProductId, environment: environment.premiumMap.environment, firebaseProjectId: environment.firebaseProjectId, revenueCatProjectId: environment.revenueCatProjectId, revenueCatAppId: environment.revenueCatAppId, sandboxPromotionalAccess: environment.sandboxPromotionalAccess, premiumMap: environment.premiumMap, allowTestFixtures: environment.nodeEnv === "test" })
         : null,
       contentPackages: environment.contentPackageBucket
         ? new ContentPackageService(new FirestoreContentPackagePointerStore(firestore.db), new GcsContentPackageStorage(getStorage(firestore.app).bucket(environment.contentPackageBucket)))

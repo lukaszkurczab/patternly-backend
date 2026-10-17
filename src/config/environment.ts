@@ -1,6 +1,7 @@
 import { parseSandboxPromotionalAccessPolicy, isSandboxPromotionalAccessAllowed, type SandboxPromotionalAccessPolicy } from "./sandboxPromotionalAccess.js";
 import { z } from "zod";
 import { parseOperatorAllowlist, type OperatorAllowlistEntry } from "../modules/operator-access/contracts.js";
+import { defaultPremiumMap, parsePremiumMap, type PremiumMap } from "./premiumMap.js";
 
 export const ADMIN_CONTENT_RELEASE_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 
@@ -41,11 +42,13 @@ const environmentSchema = z.object({
   REVENUECAT_SANDBOX_PROMOTIONAL_ACCESS_JSON: z.string().min(1).optional(),
   REVENUECAT_API_BASE_URL: z.string().url().default("https://api.revenuecat.com"),
   REVENUECAT_READ_API_KEY: z.string().min(1).optional(),
+  REVENUECAT_V2_READ_API_KEY: z.string().min(1).optional(),
   REVENUECAT_WEBHOOK_SECRET: z.string().min(1).optional(),
   REVENUECAT_PROJECT_ID: z.string().regex(/^proj[A-Za-z0-9]+$/u).optional(),
   REVENUECAT_APP_ID: z.string().min(1).optional(),
   REVENUECAT_ENTITLEMENT_ID: z.string().min(1).optional(),
   REVENUECAT_PRODUCT_ID: z.string().min(1).optional(),
+  REVENUECAT_PREMIUM_MAP_JSON: z.string().min(1).optional(),
   REVENUECAT_WEBHOOK_ENVIRONMENT: z.enum(["PRODUCTION", "SANDBOX"]).optional(),
   CONTENT_CATALOG_ORIGIN: z.string().url().optional(),
   ADMIN_CONTENT_ROOT: z.string().min(1).optional(),
@@ -86,12 +89,14 @@ export type Environment = Readonly<{
   sandboxPromotionalAccess: SandboxPromotionalAccessPolicy | null;
   revenueCatApiBaseUrl: string;
   revenueCatReadApiKey: string | undefined;
+  revenueCatV2ReadApiKey: string | undefined;
   revenueCatWebhookSecret: string | undefined;
   revenueCatProjectId: string | undefined;
   revenueCatAppId: string | undefined;
   revenueCatEntitlementId: string | undefined;
   revenueCatProductId: string | undefined;
   revenueCatWebhookEnvironment: "PRODUCTION" | "SANDBOX" | undefined;
+  premiumMap: PremiumMap | null;
   contentCatalogOrigin: string | undefined;
   adminContentRoot: string | undefined;
   adminContentReleaseId: string | undefined;
@@ -115,6 +120,14 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
   if (Boolean(value.CONTENT_PACKAGE_READINESS_TRACK_ID) !== Boolean(value.CONTENT_PACKAGE_READINESS_NODE_ID)
     || (value.CONTENT_PACKAGE_READINESS_TRACK_ID && !value.CONTENT_PACKAGE_BUCKET)) throw new Error("invalid_content_package_readiness_config");
   const sandboxPromotionalAccess = parseSandboxPromotionalAccessPolicy(value.REVENUECAT_SANDBOX_PROMOTIONAL_ACCESS_JSON);
+  let premiumMap = defaultPremiumMap(value.REVENUECAT_PROJECT_ID, value.REVENUECAT_WEBHOOK_ENVIRONMENT);
+  if (value.REVENUECAT_PREMIUM_MAP_JSON !== undefined) {
+    let parsedMap: unknown;
+    try { parsedMap = JSON.parse(value.REVENUECAT_PREMIUM_MAP_JSON); } catch { throw new Error("premium_map_invalid"); }
+    premiumMap = parsePremiumMap(parsedMap, { allowTestFixtures: value.NODE_ENV === "test" });
+    if (value.REVENUECAT_PROJECT_ID !== undefined && premiumMap.projectId !== value.REVENUECAT_PROJECT_ID) throw new Error("premium_map_project_mismatch");
+    if (value.REVENUECAT_WEBHOOK_ENVIRONMENT !== undefined && premiumMap.environment !== value.REVENUECAT_WEBHOOK_ENVIRONMENT) throw new Error("premium_map_environment_mismatch");
+  }
   if (sandboxPromotionalAccess && !isSandboxPromotionalAccessAllowed(sandboxPromotionalAccess, {
     firebaseProjectId: value.FIREBASE_PROJECT_ID, revenueCatProjectId: value.REVENUECAT_PROJECT_ID,
     revenueCatAppId: value.REVENUECAT_APP_ID, revenueCatEnvironment: value.REVENUECAT_WEBHOOK_ENVIRONMENT,
@@ -122,6 +135,7 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     // An expired policy must start safely and deny requests, rather than crash the service.
     nowMs: Date.parse(sandboxPromotionalAccess.expiresAt) - 1,
   })) throw new Error("invalid_sandbox_promotional_access_runtime");
+  if (value.NODE_ENV === "production" && !premiumMap) throw new Error("production_premium_map_required");
   const adminWebOrigin = parseAdminWebOrigin(value);
   const operatorAccess = parseOperatorAccess(value);
   return Object.freeze({
@@ -150,12 +164,14 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     sandboxPromotionalAccess,
     revenueCatApiBaseUrl: value.REVENUECAT_API_BASE_URL,
     revenueCatReadApiKey: value.REVENUECAT_READ_API_KEY,
+    revenueCatV2ReadApiKey: value.REVENUECAT_V2_READ_API_KEY,
     revenueCatWebhookSecret: value.REVENUECAT_WEBHOOK_SECRET,
     revenueCatProjectId: value.REVENUECAT_PROJECT_ID,
     revenueCatAppId: value.REVENUECAT_APP_ID,
     revenueCatEntitlementId: value.REVENUECAT_ENTITLEMENT_ID,
     revenueCatProductId: value.REVENUECAT_PRODUCT_ID,
     revenueCatWebhookEnvironment: value.REVENUECAT_WEBHOOK_ENVIRONMENT,
+    premiumMap,
     contentCatalogOrigin: value.CONTENT_CATALOG_ORIGIN,
     adminContentRoot: value.ADMIN_CONTENT_ROOT,
     adminContentReleaseId: value.ADMIN_CONTENT_RELEASE_ID,

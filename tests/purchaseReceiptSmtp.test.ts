@@ -8,6 +8,22 @@ import type { PurchaseReceiptDelivery } from "../src/modules/billing/revenuecatW
 const configuration = { host: "unused.invalid", port: 465 as const, username: "fixture", password: "private-fixture", fromEmail: "sender@example.com", fromName: "Patternly", replyTo: undefined };
 const input: PurchaseReceiptDelivery = { userId: "user", receiptId: "receipt", deliveryClaimId: "claim", recipient: "recipient@example.com", transactionId: "transaction", confirmationId: "confirmation", productIdentifier: "monthly", storefrontPrice: "29.99 PLN", locale: "en", termsVersion: "v1", immediateStartRequested: true };
 
+for (const store of [undefined, "APP_STORE", "PLAY_STORE"] as const) {
+  for (const locale of ["en", "pl"] as const) {
+    test(`receipt copy names its actual store: ${store ?? "legacy Apple"}/${locale}`, async () => {
+      let body = "";
+      const sender = createSmtpPurchaseReceiptEmailSender(configuration, { sendMail: async (message) => {
+        body = String(message.text);
+        return { accepted: [input.recipient], envelope: { from: configuration.fromEmail, to: [input.recipient] }, messageId: "fixture-message" };
+      } });
+      await sender.send({ ...input, locale, ...(store === undefined ? {} : { store }) });
+      assert.ok(body.includes(store === "PLAY_STORE" ? "Google Play" : "App Store"));
+      assert.ok(!body.includes(store === "PLAY_STORE" ? "App Store" : "Google Play"));
+      assert.ok(body.includes(input.productIdentifier));
+    });
+  }
+}
+
 // A real local SMTP boundary exercises the installed Nodemailer contract. No relay, TLS, auth or external traffic.
 for (const result of ["accepted", "rcpt_refused", "data_refused", "disconnect_after_data"] as const) {
   test(`real loopback SMTP ${result}: classify acceptance, refusal and ambiguity`, async () => {

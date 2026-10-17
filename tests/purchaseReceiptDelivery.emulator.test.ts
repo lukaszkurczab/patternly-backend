@@ -6,9 +6,12 @@ import { PurchaseReceiptEmailRejectedError } from "../src/infrastructure/email/s
 import { revenueCatEventSchema } from "../src/modules/billing/revenuecatWebhook.js";
 import { FirestoreRevenueCatWebhookStore, type PurchaseReceiptDelivery } from "../src/modules/billing/revenuecatWebhookStore.js";
 import { clearFirestore, createEmulatorContext, type EmulatorContext } from "./support.js";
+import { premiumSnapshotScope } from "./fixtures/premiumSnapshot.js";
 
 // Contexts share the default Admin SDK client; close each app, terminate that client once in after().
-const context = createEmulatorContext();
+const testReader = { read: async () => ({ ...premiumSnapshotScope, projectId: "projtest", mapVersion: "test-map-v1", entitlement: "premium", productId: "monthly", state: "expired" as const, providerExpiresAt: new Date(Date.now() - 1000).toISOString(), providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() }) };
+const createTestContext = (options: Parameters<typeof createEmulatorContext>[0] = {}) => createEmulatorContext({ ...options, revenueCatEntitlementReader: testReader });
+const context = createTestContext();
 const userId = "00000000-0000-4000-8000-000000000070";
 const baseTime = Date.now() - 2000;
 const payload = { event: revenueCatEventSchema.parse({ id: "receipt-fault", type: "INITIAL_PURCHASE", app_user_id: userId, original_app_user_id: userId, store: "APP_STORE", event_timestamp_ms: baseTime + 1000, expiration_at_ms: 60000, purchased_at_ms: baseTime + 1000, transaction_id: "receipt-fault-tx", app_id: "app-1", entitlement_ids: ["premium"], product_id: "monthly", environment: "SANDBOX" }) };
@@ -28,7 +31,7 @@ for (const fault of ["before_sent_commit", "after_sent_commit", "sent_and_unknow
   test(`accepted SMTP, ${fault}: webhook retries never send again`, async () => {
     let sends = 0;
     let sentPayload: PurchaseReceiptDelivery | undefined;
-    const ctx = createEmulatorContext({ purchaseReceiptEmailSender: { send: async (input) => {
+    const ctx = createTestContext({ purchaseReceiptEmailSender: { send: async (input) => {
       sends++; sentPayload = input;
       const attempt = await (await receiptRef()).collection("deliveryAttempts").doc(input.deliveryClaimId).get();
       assert.equal(attempt.get("status"), "pending");
@@ -72,7 +75,7 @@ for (const fault of ["before_sent_commit", "after_sent_commit", "sent_and_unknow
 
 test("confirmed refusal retries with a new durable attempt and preserves the rejected attempt", async () => {
   let sends = 0;
-  const ctx = createEmulatorContext({ purchaseReceiptEmailSender: { send: async () => { if (++sends === 1) throw new PurchaseReceiptEmailRejectedError(); } } });
+  const ctx = createTestContext({ purchaseReceiptEmailSender: { send: async () => { if (++sends === 1) throw new PurchaseReceiptEmailRejectedError(); } } });
   try {
     assert.equal((await webhook(ctx)).json().error.code, "purchase_receipt_delivery_failed");
     assert.equal((await webhook(ctx)).statusCode, 200);
@@ -86,7 +89,7 @@ test("confirmed refusal retries with a new durable attempt and preserves the rej
 
 test("an ambiguous sender error, including a string resembling refusal, requires reconciliation", async () => {
   let sends = 0;
-  const ctx = createEmulatorContext({ purchaseReceiptEmailSender: { send: async () => { sends++; throw new Error("purchase_receipt_email_rejected"); } } });
+  const ctx = createTestContext({ purchaseReceiptEmailSender: { send: async () => { sends++; throw new Error("purchase_receipt_email_rejected"); } } });
   try {
     assert.equal((await webhook(ctx)).statusCode, 503);
     assert.equal((await (await receiptRef()).get()).get("deliveryStatus"), "unknown");
@@ -96,7 +99,7 @@ test("an ambiguous sender error, including a string resembling refusal, requires
 });
 
 test("missing sender is a definite no-effect failure and remains retryable", async () => {
-  const ctx = createEmulatorContext({ purchaseReceiptEmailSender: null });
+  const ctx = createTestContext({ purchaseReceiptEmailSender: null });
   try {
     assert.equal((await webhook(ctx)).json().error.code, "purchase_receipt_delivery_unavailable");
     assert.equal((await (await receiptRef()).get()).get("deliveryStatus"), "failed");
@@ -105,7 +108,7 @@ test("missing sender is a definite no-effect failure and remains retryable", asy
 });
 
 test("expired claim cannot finalize or be reclaimed; reconciliation preserves the payload and identity", async () => {
-  const store = new FirestoreRevenueCatWebhookStore(context.db, "projtest");
+  const store = new FirestoreRevenueCatWebhookStore(context.db, "projtest", testReader);
   const first = (await store.process(...args)).receipt!;
   const ref = await receiptRef();
   await ref.update({ deliveryLeaseUntil: Timestamp.fromMillis(0) });
@@ -121,7 +124,7 @@ test("expired claim cannot finalize or be reclaimed; reconciliation preserves th
 });
 
 test("stale finalization returns explicit failure from the production webhook", async () => {
-  const ctx = createEmulatorContext({ purchaseReceiptEmailSender: { send: async () => {
+  const ctx = createTestContext({ purchaseReceiptEmailSender: { send: async () => {
     await (await receiptRef()).update({ deliveryLeaseUntil: Timestamp.fromMillis(0) });
   } } });
   try {
@@ -137,7 +140,7 @@ test("concurrent webhook requests run only one sender while the durable claim is
   const ready = new Promise<void>(resolve => { started = resolve; });
   const held = new Promise<void>(resolve => { release = resolve; });
   let sends = 0;
-  const ctx = createEmulatorContext({ purchaseReceiptEmailSender: { send: async () => { sends++; started(); await held; } } });
+  const ctx = createTestContext({ purchaseReceiptEmailSender: { send: async () => { sends++; started(); await held; } } });
   try {
     const first = webhook(ctx);
     await ready;
@@ -152,7 +155,7 @@ test("concurrent webhook requests run only one sender while the durable claim is
 
 test("lost response after initial commit sends nothing and retry reconciles the committed attempt", async () => {
   let sends = 0;
-  const ctx = createEmulatorContext({ purchaseReceiptEmailSender: { send: async () => { sends++; } } });
+  const ctx = createTestContext({ purchaseReceiptEmailSender: { send: async () => { sends++; } } });
   try {
     const store = ctx.stores.revenueCatWebhook;
     const process = store.process.bind(store);
@@ -170,7 +173,7 @@ test("lost response after initial commit sends nothing and retry reconciles the 
 
 test("initial store failure before commit cannot invoke the sender", async () => {
   let sends = 0;
-  const ctx = createEmulatorContext({ purchaseReceiptEmailSender: { send: async () => { sends++; } } });
+  const ctx = createTestContext({ purchaseReceiptEmailSender: { send: async () => { sends++; } } });
   try {
     ctx.stores.revenueCatWebhook.process = async () => { throw new Error("injected_precommit_failure"); };
     assert.equal((await webhook(ctx)).statusCode, 500);
@@ -180,7 +183,7 @@ test("initial store failure before commit cannot invoke the sender", async () =>
 });
 
 test("concurrent initial and refused-attempt claims each grant exactly one sender identity", async () => {
-  const store = new FirestoreRevenueCatWebhookStore(context.db, "projtest");
+  const store = new FirestoreRevenueCatWebhookStore(context.db, "projtest", testReader);
   const initial = await Promise.all(Array.from({ length: 5 }, () => store.process(...args)));
   const first = initial.flatMap(result => result.receipt ? [result.receipt] : []);
   assert.equal(first.length, 1);

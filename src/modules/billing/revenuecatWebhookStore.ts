@@ -2,39 +2,87 @@ import type { Firestore } from "firebase-admin/firestore";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { randomUUID } from "node:crypto";
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
-import { revenueCatEventSchema, reduceRevenueCatEvent, type RevenueCatEvent } from "./revenuecatWebhook.js";
-import { activeAccount, digest, FirestorePurchaseCorrelation, isAccountId, transactionKey, PURCHASE_PAYLOAD_MS } from "./purchaseCorrelation.js";
+import { revenueCatEventSchema, type RevenueCatEvent } from "./revenuecatWebhook.js";
+import { activeAccount, digest, FirestorePurchaseCorrelation, isAccountId, transactionKey, PURCHASE_PAYLOAD_MS, type PurchaseScopeInput, type PurchaseStore } from "./purchaseCorrelation.js";
+import { productIdentifier, type PremiumMap, type StoreBinding } from "../../config/premiumMap.js";
+import type { RevenueCatEntitlementReader, RevenueCatEntitlementResult } from "../../infrastructure/revenuecat/client.js";
 
-export type PurchaseReceiptDelivery = Readonly<{ userId: string; receiptId: string; deliveryClaimId: string; recipient: string; transactionId: string; confirmationId: string; productIdentifier: string; storefrontPrice: string; locale: "en" | "pl"; termsVersion: string; immediateStartRequested: true }>;
-export type RevenueCatWebhookResult = Readonly<{ outcome: "processed" | "ignored"; duplicate: boolean; receipt?: PurchaseReceiptDelivery; receiptDeliveryState?: "pending" | "unknown" | "contact_required" }>;
+export type PurchaseReceiptDelivery = Readonly<{ userId: string; receiptId: string; deliveryClaimId: string; recipient: string; transactionId: string; confirmationId: string; productIdentifier: string; storefrontPrice: string; locale: "en" | "pl"; termsVersion: string; immediateStartRequested: true; store?: PurchaseStore }>;
+export type RevenueCatWebhookResult = Readonly<{ outcome: "processed" | "ignored"; duplicate: boolean; refreshPending?: boolean; receipt?: PurchaseReceiptDelivery; receiptDeliveryState?: "pending" | "unknown" | "contact_required" }>;
+export type RevenueCatRefreshReader = RevenueCatEntitlementReader;
 export interface RevenueCatWebhookStore {
-  process(event: RevenueCatEvent, appId: string, expectedEnvironment: "PRODUCTION" | "SANDBOX", entitlementId: string, productId: string): Promise<RevenueCatWebhookResult>;
+  process(event: RevenueCatEvent, appId: string, expectedEnvironment: "PRODUCTION" | "SANDBOX", entitlementId: string, productId: string, refreshReader?: RevenueCatRefreshReader): Promise<RevenueCatWebhookResult>;
   claimBoundReceipt(userId: string, key: string): Promise<Pick<RevenueCatWebhookResult, "receipt" | "receiptDeliveryState">>;
   claimReceipt(userId: string, receiptId: string): Promise<Pick<RevenueCatWebhookResult, "receipt" | "receiptDeliveryState">>;
   identityAvailable(userId: string): Promise<boolean>;
+  markIdentityConflict(userId: string): Promise<void>;
   markReceiptDelivery(userId: string, receiptId: string, deliveryClaimId: string, status: "sent" | "failed" | "unknown"): Promise<boolean>;
 }
 function hasActiveAuthorization(snapshot: { exists: boolean; data(): Record<string, unknown> | undefined }): boolean { return snapshot.exists && activeAccount(snapshot.data()); }
-function strictlyNewer(timestamp: number, eventId: string, snapshot: { exists: boolean; get(field: string): unknown }): boolean {
-  if (!snapshot.exists) return true;
-  const currentTimestamp = snapshot.get("eventTimestampMs"), currentId = snapshot.get("eventId");
-  return typeof currentTimestamp !== "number" || timestamp > currentTimestamp || (timestamp === currentTimestamp && typeof currentId === "string" && eventId > currentId);
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
+  return JSON.stringify(value) ?? "null";
 }
 export class FirestoreRevenueCatWebhookStore implements RevenueCatWebhookStore {
-  constructor(private readonly db: Firestore, private readonly projectId?: string) {}
+  private readonly projectId: string | undefined;
+  private readonly map: PremiumMap | undefined;
+  private readonly refreshReader: RevenueCatRefreshReader | undefined;
+  constructor(private readonly db: Firestore, scope: string | PremiumMap | PurchaseScopeInput | undefined, mapOrReader?: PremiumMap | RevenueCatRefreshReader, refreshReader?: RevenueCatRefreshReader) {
+    if (typeof scope === "string") {
+      this.projectId = scope;
+      if (mapOrReader && "bindings" in mapOrReader) this.map = mapOrReader;
+      else this.refreshReader = mapOrReader;
+    } else if (scope && "bindings" in scope) { this.map = scope; this.projectId = scope.projectId; }
+    else this.projectId = scope?.projectId;
+    if (refreshReader) this.refreshReader = refreshReader;
+  }
   async identityAvailable(userId: string): Promise<boolean> {
     const user = await this.db.collection("users").doc(userId).get();
     return activeAccount(user.data()) && user.get("billingIdentityConflict") !== true;
   }
-  async process(event: RevenueCatEvent, appId: string, expectedEnvironment: "PRODUCTION" | "SANDBOX", entitlementId: string, productId: string): Promise<RevenueCatWebhookResult> {
+  async markIdentityConflict(userId: string): Promise<void> {
+    const userRef = this.db.collection("users").doc(userId);
+    await this.db.runTransaction(async tx => {
+      const user = await tx.get(userRef);
+      if (hasActiveAuthorization(user)) tx.update(userRef, { billingIdentityConflict: true });
+    });
+  }
+  private eventBinding(event: RevenueCatEvent, appId: string, environment: "PRODUCTION" | "SANDBOX", legacyProductId: string): StoreBinding | undefined {
+    if (this.map) return this.map.bindings.find(binding => binding.appId === event.app_id && binding.store === event.store && productIdentifier(binding) === event.product_id);
+    if (event.app_id !== appId || event.environment !== environment || event.store !== "APP_STORE" || event.product_id !== legacyProductId) return undefined;
+    return { platform: "ios", store: "APP_STORE", appId, rcProductId: legacyProductId, storeProductId: legacyProductId, basePlanId: null };
+  }
+  private async completeRefresh(userId: string, fence: number, result: RevenueCatEntitlementResult): Promise<boolean> {
+    const ref = this.db.collection("users").doc(userId).collection("entitlements").doc("premium");
+    return this.db.runTransaction(async tx => {
+      const current = await tx.get(ref);
+      if (!current.exists || current.get("refreshFence") !== fence || current.get("refreshPending") !== true) return false;
+      tx.set(ref, { entitlement: result.entitlement, status: result.state, source: "revenuecat", expiresAt: result.providerExpiresAt === null ? null : Timestamp.fromDate(new Date(result.providerExpiresAt)), updatedAt: Timestamp.fromDate(new Date(result.providerObservedAt)), readerSnapshot: result, mapVersion: result.mapVersion, environment: result.environment, refreshPending: false, refreshedFence: fence, refreshedAt: FieldValue.serverTimestamp() }, { merge: true });
+      return true;
+    });
+  }
+  private async completeIdentityConflict(userId: string, fence: number, result: RevenueCatEntitlementResult): Promise<void> {
+    const ref = this.db.collection("users").doc(userId).collection("entitlements").doc("premium");
+    await this.db.runTransaction(async tx => {
+      const current = await tx.get(ref);
+      if (!current.exists || current.get("refreshFence") !== fence || current.get("refreshPending") !== true) return;
+      tx.set(ref, { entitlement: "premium", status: "unavailable", source: "revenuecat", readerSnapshot: result, mapVersion: result.mapVersion, environment: result.environment, identityConflict: true, refreshPending: false, refreshedFence: fence, refreshedAt: FieldValue.serverTimestamp() }, { merge: true });
+    });
+  }
+  async process(event: RevenueCatEvent, appId: string, expectedEnvironment: "PRODUCTION" | "SANDBOX", entitlementId: string, productId: string, refreshReader = this.refreshReader): Promise<RevenueCatWebhookResult> {
     if (!this.projectId) throw new Error("revenuecat_not_configured");
-    const parsed = revenueCatEventSchema.parse(event), projection = reduceRevenueCatEvent(parsed);
-    const scope = { projectId: this.projectId, appId, environment: expectedEnvironment, productId };
-    const eventKey = digest(JSON.stringify([this.projectId, appId, expectedEnvironment, parsed.id]));
-    const fingerprint = digest(JSON.stringify([parsed.type, parsed.app_user_id, parsed.original_app_user_id, parsed.app_id, parsed.store, parsed.environment, parsed.product_id, parsed.transaction_id, parsed.purchased_at_ms, parsed.event_timestamp_ms, parsed.expiration_at_ms, [...(parsed.transferred_from ?? [])].sort(), [...(parsed.transferred_to ?? [])].sort()]));
+    const parsed = revenueCatEventSchema.parse(event);
+    const binding = this.eventBinding(parsed, appId, expectedEnvironment, productId);
+    const store = binding?.store ?? (parsed.store === "PLAY_STORE" ? "PLAY_STORE" : "APP_STORE");
+    const storeProductId = binding ? productIdentifier(binding) : productId;
+    const rcProductId = binding?.rcProductId ?? productId;
+    const scope = { projectId: this.projectId, appId: binding?.appId ?? appId, environment: expectedEnvironment, productId: rcProductId, store };
+    const eventKey = digest(JSON.stringify([this.projectId, parsed.app_id, parsed.environment, parsed.id]));
+    const fingerprint = digest(canonicalJson(parsed));
     const eventRef = this.db.collection("revenueCatEvents").doc(eventKey);
-    const baseTrusted = parsed.app_id === appId && parsed.environment === expectedEnvironment;
-    const trusted = baseTrusted && parsed.store === "APP_STORE" && parsed.product_id === productId && parsed.entitlement_ids?.includes(entitlementId) === true;
+    const baseTrusted = this.map ? parsed.environment === this.map.environment && this.map.bindings.some(row => row.appId === parsed.app_id) : parsed.app_id === appId && parsed.environment === expectedEnvironment;
+    const trusted = baseTrusted && !!binding && parsed.app_id === binding.appId && parsed.store === binding.store && parsed.product_id === storeProductId && parsed.entitlement_ids?.includes(entitlementId) === true;
     const owner = isAccountId(parsed.app_user_id) ? parsed.app_user_id : null;
     const identityValid = owner !== null && parsed.original_app_user_id === owner;
     const key = trusted && parsed.transaction_id ? transactionKey(scope, parsed.transaction_id) : null;
@@ -42,79 +90,99 @@ export class FirestoreRevenueCatWebhookStore implements RevenueCatWebhookStore {
     const result = await this.db.runTransaction(async tx => {
       const prior = await tx.get(eventRef);
       if (prior.exists && prior.get("fingerprint") !== fingerprint) throw new Error("revenuecat_event_conflict");
-      const userRef = owner ? this.db.collection("users").doc(owner) : null;
-      const user = userRef ? await tx.get(userRef) : null;
-      const entitlementRef = userRef?.collection("entitlements").doc(entitlementId);
-      const current = entitlementRef ? await tx.get(entitlementRef) : null;
-      const fact = factRef ? await tx.get(factRef) : null;
-      const affectedIds = parsed.type === "TRANSFER" ? [...new Set([...(parsed.transferred_from ?? []), ...(parsed.transferred_to ?? [])])].filter(isAccountId) : !identityValid && trusted ? [...new Set([parsed.app_user_id, parsed.original_app_user_id])].filter(isAccountId) : [];
-      const affectedRefs = affectedIds.map(id => this.db.collection("users").doc(id));
-      const affectedUsers = affectedRefs.length ? await tx.getAll(...affectedRefs) : [];
       if (!baseTrusted || (parsed.type !== "TRANSFER" && !trusted)) {
         if (!prior.exists) tx.create(eventRef, { fingerprint, eventId: parsed.id, outcome: "ignored", processedAt: FieldValue.serverTimestamp() });
-        return { outcome: "ignored" as const, duplicate: prior.exists };
+        return { outcome: "ignored" as const, duplicate: prior.exists, owner: null as string | null, refreshFence: null as number | null };
       }
-      if (parsed.type === "TRANSFER" || !identityValid) {
+      if (parsed.type === "TRANSFER") {
+        const affectedIds = [...new Set([...(parsed.transferred_from ?? []), ...(parsed.transferred_to ?? [])])].filter(isAccountId);
+        const refs = affectedIds.map(id => this.db.collection("users").doc(id));
+        const affected = refs.length ? await tx.getAll(...refs) : [];
         if (!prior.exists) {
-          const activeOwnerIndex = affectedUsers.findIndex(hasActiveAuthorization);
-          if (trusted && factRef && activeOwnerIndex >= 0) {
-            if (!fact?.exists) tx.create(factRef, { ...scope, store: "APP_STORE", ownerAccountId: affectedIds[activeOwnerIndex], productId: parsed.product_id, transactionId: parsed.transaction_id, purchasedAtMs: parsed.purchased_at_ms ?? null, boundConfirmationId: null, identityConflict: true, status: "reconciliation_required", resolutionReason: "identity_conflict", revision: 0, createdAt: Timestamp.now(), payloadUntil: Timestamp.fromMillis(Date.now() + PURCHASE_PAYLOAD_MS) });
-            else tx.update(factRef, { identityConflict: true, resolutionReason: "identity_conflict", revision: Number(fact.get("revision") ?? 0) + 1 });
-          }
+          affected.forEach((target, index) => { if (hasActiveAuthorization(target)) tx.update(refs[index]!, { billingIdentityConflict: true }); });
           tx.create(eventRef, { fingerprint, eventId: parsed.id, outcome: "ignored", resolutionReason: "identity_reconciliation_required", createdAt: Timestamp.now(), payloadUntil: Timestamp.fromMillis(Date.now() + PURCHASE_PAYLOAD_MS) });
-          affectedUsers.forEach((target, index) => {
-            if (!hasActiveAuthorization(target)) return;
-            tx.update(affectedRefs[index]!, { billingIdentityConflict: true });
-            tx.create(this.db.collection("revenueCatTransactions").doc(`event-${digest(JSON.stringify([eventKey, affectedIds[index]]))}`), { ownerAccountId: affectedIds[index], status: "reconciliation_required", resolutionReason: "identity_reconciliation_required", revision: 0, identityConflict: true, createdAt: Timestamp.now(), payloadUntil: Timestamp.fromMillis(Date.now() + PURCHASE_PAYLOAD_MS) });
-          });
+          affectedIds.forEach((id, index) => { if (hasActiveAuthorization(affected[index]!)) tx.create(this.db.collection("revenueCatTransactions").doc(`event-${digest(JSON.stringify([eventKey, id]))}`), { ownerAccountId: id, status: "reconciliation_required", resolutionReason: "identity_reconciliation_required", revision: 0, identityConflict: true, createdAt: Timestamp.now(), payloadUntil: Timestamp.fromMillis(Date.now() + PURCHASE_PAYLOAD_MS) }); });
         }
-        return { outcome: "ignored" as const, duplicate: prior.exists };
+        return { outcome: "ignored" as const, duplicate: prior.exists, owner: null as string | null, refreshFence: null as number | null };
       }
-      if (!user || !hasActiveAuthorization(user)) {
+      if (!owner || !identityValid) {
+        const affectedIds = [...new Set([parsed.app_user_id, parsed.original_app_user_id])].filter(isAccountId);
+        const refs = affectedIds.map(id => this.db.collection("users").doc(id));
+        const users = refs.length ? await tx.getAll(...refs) : [];
+        if (!prior.exists) {
+          users.forEach((target, index) => { if (hasActiveAuthorization(target)) tx.update(refs[index]!, { billingIdentityConflict: true }); });
+          tx.create(eventRef, { fingerprint, eventId: parsed.id, outcome: "ignored", resolutionReason: "identity_reconciliation_required", createdAt: Timestamp.now(), payloadUntil: Timestamp.fromMillis(Date.now() + PURCHASE_PAYLOAD_MS) });
+        }
+        return { outcome: "ignored" as const, duplicate: prior.exists, owner: null as string | null, refreshFence: null as number | null };
+      }
+      const userRef = this.db.collection("users").doc(owner), user = await tx.get(userRef);
+      if (!hasActiveAuthorization(user)) {
         if (!prior.exists) tx.create(eventRef, { fingerprint, eventId: parsed.id, outcome: "ignored", processedAt: FieldValue.serverTimestamp() });
-        return { outcome: "ignored" as const, duplicate: prior.exists };
+        return { outcome: "ignored" as const, duplicate: prior.exists, owner: null as string | null, refreshFence: null as number | null };
       }
-      let conflict = fact?.exists && (fact.get("ownerAccountId") !== owner || fact.get("productId") !== parsed.product_id || (typeof parsed.purchased_at_ms === "number" && fact.get("purchasedAtMs") !== parsed.purchased_at_ms));
-      const oldOwnerRef = conflict && isAccountId(fact!.get("ownerAccountId")) ? this.db.collection("users").doc(String(fact!.get("ownerAccountId"))) : null;
+      const fact = factRef ? await tx.get(factRef) : null;
+      const priorStore = fact?.get("store") ?? "APP_STORE";
+      const priorStoreProduct = fact?.get("storeProductId") ?? fact?.get("productIdentifier") ?? fact?.get("productId");
+      const conflict = fact?.exists === true && (fact.get("ownerAccountId") !== owner || priorStore !== store || priorStoreProduct !== storeProductId || fact.get("appId") !== scope.appId || fact.get("environment") !== expectedEnvironment || (typeof parsed.purchased_at_ms === "number" && fact.get("purchasedAtMs") !== parsed.purchased_at_ms));
+      const oldOwnerId = conflict && fact?.exists && isAccountId(fact.get("ownerAccountId")) ? String(fact.get("ownerAccountId")) : null;
+      const oldOwnerRef = oldOwnerId && oldOwnerId !== owner ? this.db.collection("users").doc(oldOwnerId) : null;
       const oldOwner = oldOwnerRef ? await tx.get(oldOwnerRef) : null;
+      const refreshRef = userRef.collection("entitlements").doc("premium"), refresh = await tx.get(refreshRef);
+      const refreshFence = prior.exists && refresh.get("refreshPending") !== true ? null : Number(refresh.get("refreshFence") ?? 0) + 1;
       if (conflict && factRef) {
         tx.update(factRef, { identityConflict: true, status: "reconciliation_required", resolutionReason: "identity_conflict", revision: Number(fact!.get("revision") ?? 0) + (prior.exists ? 0 : 1) });
+        tx.update(userRef, { billingIdentityConflict: true });
+        if (oldOwnerRef && oldOwner && hasActiveAuthorization(oldOwner)) tx.update(oldOwnerRef, { billingIdentityConflict: true });
         if (!prior.exists) {
-          for (const accountId of [...new Set([owner, oldOwnerRef?.id])]) {
-            if (typeof accountId !== "string") continue;
-            const targetActive = accountId === owner ? hasActiveAuthorization(user) : oldOwner !== null && hasActiveAuthorization(oldOwner);
-            if (targetActive) tx.create(this.db.collection("revenueCatTransactions").doc(`event-${digest(JSON.stringify([eventKey, accountId]))}`), { ownerAccountId: accountId, status: "reconciliation_required", resolutionReason: "identity_reconciliation_required", revision: 0, identityConflict: true, createdAt: Timestamp.now(), payloadUntil: Timestamp.fromMillis(Date.now() + PURCHASE_PAYLOAD_MS) });
+          for (const [accountId, target] of [[owner, user], ...(oldOwnerRef && oldOwner ? [[oldOwnerRef.id, oldOwner] as const] : [])] as const) {
+            if (hasActiveAuthorization(target)) tx.create(this.db.collection("revenueCatTransactions").doc(`event-${digest(JSON.stringify([eventKey, accountId]))}`), { ownerAccountId: accountId, status: "reconciliation_required", resolutionReason: "identity_reconciliation_required", revision: 0, identityConflict: true, createdAt: Timestamp.now(), payloadUntil: Timestamp.fromMillis(Date.now() + PURCHASE_PAYLOAD_MS) });
           }
         }
-        tx.update(userRef!, { billingIdentityConflict: true });
-        if (oldOwner && oldOwnerRef && hasActiveAuthorization(oldOwner)) tx.update(oldOwnerRef, { billingIdentityConflict: true });
       }
-      conflict = conflict || fact?.get("identityConflict") === true || user.get("billingIdentityConflict") === true;
-      // Paid observations persist independently from the event's projection order.
       if (parsed.type === "INITIAL_PURCHASE" && !conflict) {
-        if (factRef && !fact?.exists) tx.create(factRef, { ...scope, store: "APP_STORE", ownerAccountId: owner, productId: parsed.product_id, transactionId: parsed.transaction_id, purchasedAtMs: parsed.purchased_at_ms ?? null, boundConfirmationId: null, status: "reconciliation_required", resolutionReason: "missing_exact_binding", revision: 0, createdAt: Timestamp.now(), payloadUntil: Timestamp.fromMillis(Date.now() + PURCHASE_PAYLOAD_MS) });
-        if (!factRef) {
-          // Malformed paid events still have a durable, owner-visible case.
-          const malformedRef = this.db.collection("revenueCatTransactions").doc(`event-${eventKey}`);
-          if (!prior.exists) tx.create(malformedRef, { ownerAccountId: owner, status: "reconciliation_required", resolutionReason: "missing_transaction_id", revision: 0, createdAt: Timestamp.now(), payloadUntil: Timestamp.fromMillis(Date.now() + PURCHASE_PAYLOAD_MS) });
-        }
+        if (factRef && !fact?.exists) tx.create(factRef, { ...scope, store, storeProductId, productIdentifier: storeProductId, rcProductId, basePlanId: binding?.basePlanId ?? null, mapVersion: this.map?.version ?? null, ownerAccountId: owner, productId: storeProductId, transactionId: parsed.transaction_id, purchasedAtMs: parsed.purchased_at_ms ?? null, boundConfirmationId: null, status: "reconciliation_required", resolutionReason: "missing_exact_binding", revision: 0, createdAt: Timestamp.now(), payloadUntil: Timestamp.fromMillis(Date.now() + PURCHASE_PAYLOAD_MS) });
+        if (!factRef && !prior.exists) tx.create(this.db.collection("revenueCatTransactions").doc(`event-${eventKey}`), { ownerAccountId: owner, status: "reconciliation_required", resolutionReason: "missing_transaction_id", revision: 0, createdAt: Timestamp.now(), payloadUntil: Timestamp.fromMillis(Date.now() + PURCHASE_PAYLOAD_MS) });
       }
-      const willProject = !conflict && projection && current && strictlyNewer(parsed.event_timestamp_ms, parsed.id, current);
-      const outcome = willProject ? "processed" as const : "ignored" as const;
-      if (!prior.exists) tx.create(eventRef, { fingerprint, eventId: parsed.id, outcome, processedAt: FieldValue.serverTimestamp() });
-      if (willProject && entitlementRef && projection) tx.set(entitlementRef, { entitlement: entitlementId, status: projection.status, source: "revenuecat", expiresAt: projection.expiresAtMs === null ? null : Timestamp.fromMillis(projection.expiresAtMs), updatedAt: Timestamp.fromMillis(projection.eventTimestampMs), eventTimestampMs: projection.eventTimestampMs, eventId: projection.eventId, willRenew: projection.willRenew ?? true }, { merge: true });
-      return { outcome: prior.exists && prior.get("outcome") === "processed" ? "processed" as const : outcome, duplicate: prior.exists };
+      if (refreshFence !== null) tx.set(refreshRef, { entitlement: "premium", refreshFence, refreshPending: true, refreshRequestedAt: FieldValue.serverTimestamp(), refreshEventId: parsed.id }, { merge: true });
+      if (!prior.exists) tx.create(eventRef, { fingerprint, eventId: parsed.id, outcome: "processed", createdAt: Timestamp.now(), payloadUntil: Timestamp.fromMillis(Date.now() + PURCHASE_PAYLOAD_MS) });
+      return { outcome: "processed" as const, duplicate: prior.exists, owner, refreshFence };
     });
-    // Always retry the resolver after event dedupe; a later candidate must not be lost.
-    if (key && trusted && identityValid) await new FirestorePurchaseCorrelation(this.db, scope).resolve(key);
-    const fact = factRef ? await factRef.get() : null;
-    const receiptId = fact?.get("receiptId");
-    const delivery = typeof receiptId === "string" && owner && fact?.get("ownerAccountId") === owner && fact?.get("identityConflict") !== true ? await this.claimReceipt(owner, receiptId) : {};
-    return { ...result, ...delivery };
+    let refreshPending = result.refreshFence !== null && !!result.owner;
+    if (result.refreshFence !== null && result.owner && refreshReader) {
+      try {
+        const snapshot = await refreshReader.read(result.owner);
+        if (snapshot.reason === "identity_conflict") {
+          await this.markIdentityConflict(result.owner);
+          await this.completeIdentityConflict(result.owner, result.refreshFence, snapshot);
+          refreshPending = false;
+        } else if (snapshot.state !== "unavailable") refreshPending = !(await this.completeRefresh(result.owner, result.refreshFence, snapshot));
+      } catch { /* Durable refreshPending remains true for a later duplicate/read retry. */ }
+    }
+    if (key && trusted && identityValid && parsed.type === "INITIAL_PURCHASE") await new FirestorePurchaseCorrelation(this.db, this.map ?? { projectId: this.projectId, appId: scope.appId, environment: expectedEnvironment, productId: scope.productId }).resolve(key);
+    const delivery = factRef && owner && trusted ? await this.claimBoundReceipt(owner, String(key)) : {};
+    return { outcome: result.outcome, duplicate: result.duplicate, ...(result.refreshFence !== null ? { refreshPending } : {}), ...delivery };
   }
   async claimBoundReceipt(userId: string, key: string): Promise<Pick<RevenueCatWebhookResult, "receipt" | "receiptDeliveryState">> {
     const fact = await this.db.collection("revenueCatTransactions").doc(key).get();
     if (fact.get("ownerAccountId") !== userId || fact.get("identityConflict") === true || typeof fact.get("receiptId") !== "string") return {};
+    const receiptId = String(fact.get("receiptId")), receipt = await this.db.collection("users").doc(userId).collection("purchaseReceipts").doc(receiptId).get();
+    const factStore = fact.get("store") ?? "APP_STORE";
+    const scopeMismatch = !receipt.exists || receipt.get("userId") !== userId || receipt.get("transactionKey") !== key
+      || receipt.get("confirmationId") !== fact.get("boundConfirmationId") || receipt.get("transactionId") !== fact.get("transactionId")
+      || (receipt.get("store") ?? "APP_STORE") !== factStore || receipt.get("productIdentifier") !== (fact.get("productIdentifier") ?? fact.get("storeProductId") ?? fact.get("productId"))
+      || (receipt.get("projectId") !== undefined && receipt.get("projectId") !== fact.get("projectId"))
+      || (receipt.get("appId") !== undefined && receipt.get("appId") !== fact.get("appId"))
+      || (receipt.get("environment") !== undefined && receipt.get("environment") !== fact.get("environment"))
+      || (receipt.get("basePlanId") !== undefined && receipt.get("basePlanId") !== fact.get("basePlanId"));
+    if (scopeMismatch) {
+      await this.db.runTransaction(async tx => {
+        const current = await tx.get(this.db.collection("revenueCatTransactions").doc(key));
+        if (current.get("ownerAccountId") === userId && current.get("receiptId") === receiptId) {
+          tx.update(current.ref, { status: "reconciliation_required", resolutionReason: "receipt_scope_conflict", revision: Number(current.get("revision") ?? 0) + 1, receiptScopeConflict: true });
+        }
+      });
+      return { receiptDeliveryState: "unknown" };
+    }
     return this.claimReceipt(userId, String(fact.get("receiptId")));
   }
   async claimReceipt(userId: string, receiptId: string): Promise<Pick<RevenueCatWebhookResult, "receipt" | "receiptDeliveryState">> {
@@ -162,7 +230,7 @@ export class FirestoreRevenueCatWebhookStore implements RevenueCatWebhookStore {
   }
 
   private receiptDelivery(receiptId: string, data: Record<string, unknown>): PurchaseReceiptDelivery {
-    return Object.freeze({ userId: String(data.userId), receiptId, deliveryClaimId: String(data.deliveryClaimId), recipient: String(data.recipient), transactionId: String(data.transactionId), confirmationId: String(data.confirmationId), productIdentifier: String(data.productIdentifier), storefrontPrice: String(data.storefrontPrice), locale: data.locale === "pl" ? "pl" : "en", termsVersion: String(data.termsVersion), immediateStartRequested: true });
+    return Object.freeze({ userId: String(data.userId), receiptId, deliveryClaimId: String(data.deliveryClaimId), recipient: String(data.recipient), transactionId: String(data.transactionId), confirmationId: String(data.confirmationId), productIdentifier: String(data.productIdentifier), storefrontPrice: String(data.storefrontPrice), locale: data.locale === "pl" ? "pl" : "en", termsVersion: String(data.termsVersion), immediateStartRequested: true, store: data.store === "PLAY_STORE" ? "PLAY_STORE" : "APP_STORE" });
   }
 }
 

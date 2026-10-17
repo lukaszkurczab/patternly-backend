@@ -1,4 +1,4 @@
-import { FirestorePurchaseCorrelation, type PurchaseScope } from "../billing/purchaseCorrelation.js";
+import { FirestorePurchaseCorrelation, type PurchaseScopeInput, type PurchaseStore } from "../billing/purchaseCorrelation.js";
 import { randomUUID } from "node:crypto";
 import { Timestamp, type Firestore } from "firebase-admin/firestore";
 import { COLLECTIONS, identityDocumentId } from "../../infrastructure/firestore/paths.js";
@@ -38,7 +38,7 @@ export interface UserStore {
   registerUser(identity: AuthenticatedIdentity, input: AccountRegistrationInput): Promise<AccountRegistrationResult>;
   readProfile(userId: string): Promise<UserProfile | null>;
   recordLegalAcceptance(userId: string, expectedAuthorizationGeneration: number, termsVersion: string): Promise<Readonly<{ termsVersion: string; acceptedAt: string }>>;
-  recordPurchaseConfirmation(userId: string, expectedAuthorizationGeneration: number, input: Readonly<{ confirmationId: string; termsVersion: string; productIdentifier: string; storefrontPrice: string; locale: "en" | "pl" }>): Promise<Readonly<{ confirmationId: string; acceptedAt: string; attemptExpiresAt: string }>>;
+  recordPurchaseConfirmation(userId: string, expectedAuthorizationGeneration: number, input: Readonly<{ confirmationId: string; termsVersion: string; productIdentifier: string; storefrontPrice: string; locale: "en" | "pl"; store?: PurchaseStore }>): Promise<Readonly<{ confirmationId: string; acceptedAt: string; attemptExpiresAt: string }>>;
 }
 
 function isExpiredTombstone(value: unknown): boolean {
@@ -85,7 +85,7 @@ function profileFromStored(userId: string, storedUser: unknown, storedIdentity: 
 }
 
 export class FirestoreUserStore implements UserStore {
-  public constructor(private readonly db: Firestore, private readonly pseudonymKeyRing: PseudonymKeyRing, private readonly purchaseScope: PurchaseScope | null = null) {}
+  public constructor(private readonly db: Firestore, private readonly pseudonymKeyRing: PseudonymKeyRing, private readonly purchaseScope: PurchaseScopeInput = null) {}
 
   public async resolveExistingUser(identity: AuthenticatedIdentity): Promise<Readonly<{ userId: string; authorizationGeneration: number }>> {
     const identityId = identityDocumentId(identity.provider, identity.subject);
@@ -237,7 +237,7 @@ export class FirestoreUserStore implements UserStore {
     return Object.freeze({ termsVersion: String(stored.termsVersion), acceptedAt: asIsoString(stored.acceptedAt, "legal_acceptance_at") });
   }
 
-  public async recordPurchaseConfirmation(userId: string, expectedAuthorizationGeneration: number, input: Readonly<{ confirmationId: string; termsVersion: string; productIdentifier: string; storefrontPrice: string; locale: "en" | "pl" }>): Promise<Readonly<{ confirmationId: string; acceptedAt: string; attemptExpiresAt: string }>> {
+  public async recordPurchaseConfirmation(userId: string, expectedAuthorizationGeneration: number, input: Readonly<{ confirmationId: string; termsVersion: string; productIdentifier: string; storefrontPrice: string; locale: "en" | "pl"; store?: PurchaseStore }>): Promise<Readonly<{ confirmationId: string; acceptedAt: string; attemptExpiresAt: string }>> {
     return new FirestorePurchaseCorrelation(this.db, this.purchaseScope).record(userId, expectedAuthorizationGeneration, input);
   }
 

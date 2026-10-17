@@ -1,3 +1,4 @@
+import { premiumSnapshotScope } from "./fixtures/premiumSnapshot.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
@@ -18,7 +19,7 @@ test("emulator package route enforces App Check and fresh entitlement and issues
     revenueCatEntitlementReader: { read: async (userId) => {
       requestedUsers.push(userId);
       if (result === "throw") throw new Error("provider offline");
-      return { entitlement: "premium", productId: "monthly", state: result, providerExpiresAt, providerGraceExpiresAt, providerObservedAt: new Date().toISOString() };
+      return { ...premiumSnapshotScope, entitlement: "premium", productId: "monthly", state: result, providerExpiresAt, providerGraceExpiresAt, providerObservedAt: new Date().toISOString() };
     } },
     createContentPackages: (db) => {
       const service = new ContentPackageService(new FirestoreContentPackagePointerStore(db), gcs.storage);

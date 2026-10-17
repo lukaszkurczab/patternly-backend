@@ -1,9 +1,11 @@
+import { premiumSnapshotScope } from "./fixtures/premiumSnapshot.js";
 import assert from "node:assert/strict";
 import test, { after, beforeEach } from "node:test";
 import type { RevenueCatEntitlementReader } from "../src/infrastructure/revenuecat/client.js";
 import { TEST_APP_CHECK_TOKEN, clearFirestore, createEmulatorContext, createVerifiedAuthUser, registerAuthUser } from "./support.js";
 
 const confirmed = {
+  ...premiumSnapshotScope,
   entitlement: "premium",
   productId: "monthly",
   state: "grace" as const,
