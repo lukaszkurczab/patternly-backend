@@ -11,3 +11,6 @@ firebase-debug.log
 
 # Local QA reports and captures
 docs/qa/
+
+# Local alias to the canonical vault runbook; never publish its filesystem symlink.
+/docs/cloud-run-manual-deploy.md
