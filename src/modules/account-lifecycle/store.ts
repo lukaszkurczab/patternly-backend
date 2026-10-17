@@ -14,7 +14,7 @@ import type {
   RecoveryOperationRuntime,
 } from "./contracts.js";
 import type { PseudonymKeyRing } from "../../infrastructure/security/pseudonymKeyRing.js";
-import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
+import { assertExpectedAuthorizationGeneration, storedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
 import { RETENTION_POLICY } from "../retention/policy.js";
 import { addUtcCalendarMonths } from "../../infrastructure/time/utcCalendar.js";
 import { RecoveryOperationCipher } from "./recoveryOperationCipher.js";
@@ -402,16 +402,22 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
           || slot.expectedAuthorizationGeneration !== expectedAuthorizationGeneration
           || (slot.kind === "account_recovery" && priorData.kind !== "recovery")
           || (slot.kind === "recovery_reissue" && priorData.kind !== "reissue")) throw new Error("security_operation_conflict");
-        if (priorData.status !== "in_progress" && priorData.status !== "provider_retryable" && priorData.status !== "result_available") throw new Error("security_operation_conflict");
-        const priorDeadline = Math.min(
-          timestampMillis(priorData.resultExpiresAt),
-          timestampMillis(slot.leaseUntil),
-          priorData.kind === "reissue" ? timestampMillis(priorData.retryDeadline) : Number.POSITIVE_INFINITY,
-          priorResult?.exists ? timestampMillis(asRecord(priorResult.data(), "recovery_operation_result").expiresAt) : Number.POSITIVE_INFINITY,
-        );
-        if (priorDeadline > nowMs) throw new Error("operation_in_progress");
-        transaction.set(priorOperationRef, this.recoveryTerminalFields("superseded"), { merge: true });
-        if (priorResult.exists) transaction.delete(priorResultRef);
+        // A failed legacy issue may have terminalized its result but retained
+        // this exact slot. Only a fresh reauthenticated issue may replace it.
+        const staleSupersededIssue = priorData.kind === "reissue" && priorData.status === "superseded"
+          && priorData.operationId === slot.operationId && !priorResult.exists;
+        if (!staleSupersededIssue) {
+          if (priorData.status !== "in_progress" && priorData.status !== "provider_retryable" && priorData.status !== "result_available") throw new Error("security_operation_conflict");
+          const priorDeadline = Math.min(
+            timestampMillis(priorData.resultExpiresAt),
+            timestampMillis(slot.leaseUntil),
+            priorData.kind === "reissue" ? timestampMillis(priorData.retryDeadline) : Number.POSITIVE_INFINITY,
+            priorResult?.exists ? timestampMillis(asRecord(priorResult.data(), "recovery_operation_result").expiresAt) : Number.POSITIVE_INFINITY,
+          );
+          if (priorDeadline > nowMs) throw new Error("operation_in_progress");
+          transaction.set(priorOperationRef, this.recoveryTerminalFields("superseded"), { merge: true });
+          if (priorResult.exists) transaction.delete(priorResultRef);
+        }
       }
 
       if (orphanReissueRef && orphanReissueRef.id !== (typeof currentSlotValue === "object" && currentSlotValue !== null && !Array.isArray(currentSlotValue)
@@ -500,7 +506,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
         && (slot as Record<string, unknown>).kind === "recovery_reissue"
         && (slot as Record<string, unknown>).operationId === operationId
         && (slot as Record<string, unknown>).fence === data.fence
-        && userData.authorizationGeneration === expectedAuthorizationGeneration;
+        && storedAuthorizationGeneration(userData) === expectedAuthorizationGeneration;
       if (!ownsSlot) {
         transaction.set(operationRef, this.recoveryTerminalFields("superseded"), { merge: true });
         if (result?.exists) transaction.delete(resultRef);

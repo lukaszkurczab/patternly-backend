@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import test, { after, before, describe } from "node:test";
 import { deleteApp as deleteAdminApp, initializeApp as initializeAdminApp } from "firebase-admin/app";
 import { getAuth as getAdminAuth } from "firebase-admin/auth";
-import { getFirestore } from "firebase-admin/firestore";
+import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import { COLLECTIONS } from "../src/infrastructure/firestore/paths.js";
 import { createFirebaseAdminAuth } from "../src/infrastructure/firebase/adminAuth.js";
 import { RecoveryOperationCipher } from "../src/modules/account-lifecycle/recoveryOperationCipher.js";
@@ -461,6 +461,86 @@ TEST_GROUP(ENABLED
     const hashes = await db.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", fixture.userId).get();
     assert.equal(hashes.size, 10);
   });
+
+  test("legacy generation-one accounts retain issued codes through status replay and ACK", async () => {
+    const fixture = await makeAccount();
+    const userRef = db.collection(COLLECTIONS.users).doc(fixture.userId);
+    await userRef.update({ authorizationGeneration: FieldValue.delete(), authorizationState: FieldValue.delete() });
+    const store = new FirestoreAccountLifecycleStore(db, accountAuth, fixture.ring, { cipher: fixture.cipher });
+    const operationId = randomUUID();
+    createdOperationIds.push(operationId);
+    const issued = await store.issueRecoveryCodes(fixture.userId, 1, operationId, Math.floor(Date.now() / 1_000));
+    assert.equal(issued.status, "result_available");
+    if (issued.status !== "result_available") throw new Error("legacy_reissue_result_missing");
+    assert.equal(issued.codes.length, 10);
+    assert.deepEqual(await store.readRecoveryCodeIssueStatus(operationId, fixture.userId, 1), issued);
+    assert.equal((await db.collection(COLLECTIONS.accountRecoveryOperationResults).doc(operationId).get()).exists, true);
+    assert.equal((await userRef.get()).get("authorizationGeneration"), undefined);
+    await assert.rejects(store.readRecoveryCodeIssueStatus(operationId, fixture.userId, 2), { message: "authorization_generation_conflict" });
+    assert.deepEqual(await store.readRecoveryCodeIssueStatus(operationId, fixture.userId, 1), issued);
+    assert.equal((await store.acknowledgeRecoveryCodeIssue(operationId, fixture.userId, 1)).status, "acknowledged");
+    assert.equal((await db.collection(COLLECTIONS.accountRecoveryOperationResults).doc(operationId).get()).exists, false);
+    assert.equal((await userRef.get()).get("securityOperation"), undefined);
+    assert.equal((await db.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", fixture.userId).get()).size, 10);
+  });
+
+  test("a fresh legacy issue replaces only its exact superseded slot without a result", async () => {
+    const fixture = await makeAccount();
+    const userRef = db.collection(COLLECTIONS.users).doc(fixture.userId);
+    await userRef.update({ authorizationGeneration: FieldValue.delete(), authorizationState: FieldValue.delete() });
+    const store = new FirestoreAccountLifecycleStore(db, accountAuth, fixture.ring, { cipher: fixture.cipher });
+    const previousId = randomUUID();
+    const nextId = randomUUID();
+    createdOperationIds.push(previousId, nextId);
+    const reauthenticatedAt = Math.floor(Date.now() / 1_000);
+    const previous = await store.issueRecoveryCodes(fixture.userId, 1, previousId, reauthenticatedAt);
+    assert.equal(previous.status, "result_available");
+    const previousRef = db.collection(COLLECTIONS.accountRecoveryOperations).doc(previousId);
+    await previousRef.update({ status: "superseded" });
+    await db.collection(COLLECTIONS.accountRecoveryOperationResults).doc(previousId).delete();
+    const previousSnapshot = (await previousRef.get()).data();
+    const next = await store.issueRecoveryCodes(fixture.userId, 1, nextId, reauthenticatedAt);
+    assert.equal(next.status, "result_available");
+    if (next.status !== "result_available") throw new Error("replacement_result_missing");
+    assert.equal(next.codes.length, 10);
+    assert.deepEqual(await store.issueRecoveryCodes(fixture.userId, 1, nextId, reauthenticatedAt), next);
+    assert.deepEqual((await previousRef.get()).data(), previousSnapshot);
+    assert.equal((await userRef.get()).get("securityOperation.operationId"), nextId);
+    const indices = await db.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", fixture.userId).get();
+    assert.equal(indices.size, 10);
+    assert.ok(indices.docs.every((document) => document.get("generationId") === next.generationId));
+    assert.equal((await store.acknowledgeRecoveryCodeIssue(nextId, fixture.userId, 1)).status, "acknowledged");
+  });
+
+  for (const invalidSlot of ["fence", "generation", "operation_id", "user", "kind", "result_present"] as const) {
+    test(`superseded-slot replacement rejects ${invalidSlot} without changing the prior generation`, async () => {
+      const fixture = await makeAccount();
+      const userRef = db.collection(COLLECTIONS.users).doc(fixture.userId);
+      const store = new FirestoreAccountLifecycleStore(db, accountAuth, fixture.ring, { cipher: fixture.cipher });
+      const previousId = randomUUID();
+      const nextId = randomUUID();
+      createdOperationIds.push(previousId, nextId);
+      const reauthenticatedAt = Math.floor(Date.now() / 1_000);
+      const previous = await store.issueRecoveryCodes(fixture.userId, 1, previousId, reauthenticatedAt);
+      assert.equal(previous.status, "result_available");
+      if (previous.status !== "result_available") throw new Error("previous_result_missing");
+      const previousRef = db.collection(COLLECTIONS.accountRecoveryOperations).doc(previousId);
+      await previousRef.update({ status: "superseded" });
+      if (invalidSlot !== "result_present") await db.collection(COLLECTIONS.accountRecoveryOperationResults).doc(previousId).delete();
+      if (invalidSlot === "fence") await userRef.update({ "securityOperation.fence": randomUUID() });
+      if (invalidSlot === "generation") await userRef.update({ "securityOperation.expectedAuthorizationGeneration": 2 });
+      if (invalidSlot === "operation_id") await previousRef.update({ operationId: randomUUID() });
+      if (invalidSlot === "user") await previousRef.update({ userId: randomUUID() });
+      if (invalidSlot === "kind") await previousRef.update({ kind: "recovery", resultingAuthorizationGeneration: 1 });
+      const slotBefore = (await userRef.get()).get("securityOperation");
+      await assert.rejects(store.issueRecoveryCodes(fixture.userId, 1, nextId, reauthenticatedAt), { message: "security_operation_conflict" });
+      assert.equal((await db.collection(COLLECTIONS.accountRecoveryOperations).doc(nextId).get()).exists, false);
+      assert.deepEqual((await userRef.get()).get("securityOperation"), slotBefore);
+      const indices = await db.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", fixture.userId).get();
+      assert.equal(indices.size, 10);
+      assert.ok(indices.docs.every((document) => document.get("generationId") === previous.generationId));
+    });
+  }
 
   test("live recovery ownership blocks reissue until the current generation is ACKed", async () => {
     const fixture = await makeAccount();
