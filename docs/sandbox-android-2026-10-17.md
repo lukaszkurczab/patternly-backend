@@ -1,7 +1,8 @@
 # Sandbox i APK Android — próba 17.10.2026
 
-Status: **PARTIAL**. Commit/push i APK zakończone. Nowy backend nie został
-promowany; testy fizyczne nie rozpoczęły się z powodu odmowy instalacji telefonu.
+Status: **PARTIAL**. Commit/push i APK zakończone. Nowy backend działa jako kandydat bez ruchu, lecz nie został
+promowany: readiness 503 i pełne CI FAIL. Po odmowie instalacji właściciel
+wybrał pozostawienie APK do ręcznej instalacji; testy fizyczne NOT RUN.
 Jedyny bieżący stan i następny krok: workspace `.agent/WORKING_STATE.md`.
 
 ## Źródła i publikacja kodu
@@ -79,8 +80,9 @@ brak `sessionRevocationOperations/expiresAt`. Pełny read-only group scan znalaz
 zaakceptował warunkowy plan minimalnego TTL (ocena 0,82), lecz **automatyczna kontrola
 uprawnień odrzuciła mutację** z powodu przyszłego usuwania rekordów innych
 użytkowników sandbox. Nie zastosowano polityki, nie obchodzono odmowy.
-W czacie oczekuje decyzja właściciela: testowy wyjątek od runbooka bez TTL albo
-zgoda na TTL całej kolekcji. Ta decyzja nie usuwa pozostałych technicznych FAIL.
+**Decyzja właściciela 17.10.2026: „Wdróż testowo bez zmiany TTL — wyjątek
+od runbooka”.** TTL pozostaje 34/35; nie ponawiać mutacji ani pytania.
+Wyjątek dotyczy TTL; nie usuwa pozostałych technicznych FAIL.
 
 ## APK i telefon
 
@@ -96,15 +98,94 @@ zgoda na TTL całej kolekcji. Ta decyzja nie usuwa pozostałych technicznych FAI
 - Fizyczny Redmi Note11, model 2201117TY, Android13, ADB9d112858 — autoryzowany dostęp.
 - Pierwsza instalacja: **FAIL** `INSTALL_FAILED_USER_RESTRICTED: Install canceled by user`.
   APK nie jest zainstalowany. Nie ponawiano bez zmiany warunków ani nie zmieniano
-  zabezpieczeń telefonu. W czacie oczekuje pytanie o zgodę w telefonie/ręczną instalację.
+  zabezpieczeń telefonu. **Właściciel wybrał: „Pozostaw APK do ręcznej instalacji”.**
+  Nie ponawiać instalacji ani automatycznych testów telefonu bez nowego polecenia.
 - Uruchomienie, rejestracja/logowanie, onboarding, nauka/wynik, restart/postęp,
   ustawienia i wylogowanie: **NOT RUN**. Nie utworzono użytkowników testowych;
   brak kont lub danych testowych do sprzątania. Innych aplikacji/danych nie zmieniano.
 
+## Wznowienie po decyzjach właściciela — 17.10.2026
+
+Uzupełniono tylko udokumentowane `REVENUECAT_PROJECT_ID=proj8ae78267` i ponownie
+użyto dokładnie tego samego obrazu, bez nowego buildu. Nowa rewizja
+`patternly-backend-sandbox-qa2-1017-66e960a` **startuje, 0% ruchu**.
+[Endpoint kandydata](https://qa-1017---patternly-backend-sandbox-ix2onccfaq-lm.a.run.app/health).
+Readback potwierdził tę samą tożsamość runtime, obraz i wszystkie referencje
+sekretów; jedyna zmieniona zmienna to identyfikator projektu RevenueCat.
+Warunki Cloud Run są True, co potwierdza start kontenera, a nie gotowość aplikacji.
+
+| Sprawdzenie kandydata | Rzeczywisty wynik |
+| --- | --- |
+| `/health` | 200 |
+| `/openapi.json` | 200, 81 operacji |
+| `/v1/entitlements` bez App Check | 401, `app_check_required` |
+| `/ready` | **503**, database/authentication/providerReader=true, contentPackages=false |
+| Główny sandbox | Poprzednia rewizja `domain-mail39-1016`, 100% ruchu; `/ready` nadal 200 |
+
+Nie promowano kandydata. Nie obniżano kontraktu readiness ani nie włączano
+dormant stores. Nie powtarzano pełnego CI; jego wynik nadal **413 PASS / 2 FAIL /
+12 SKIP**, opisany powyżej. Wcześniejsza nieudana rewizja pozostaje historycznym
+dowodem pierwszej próby, nie aktualnym wynikiem startu.
+
+Dowody prywatne: `/private/tmp/patternly-sandbox-service-resume-staged.json`,
+`/private/tmp/patternly-sandbox-stage-resume-probes.json`. Surowy snapshot usługi
+może zawierać prywatną konfigurację; nie należy go dodawać do Gita.
+
+### Konkretna propozycja dalszych usług — niezastosowana
+
+Bieżący [plan](../../docs/PATTERNLY-WORKING-PLAN.md) / PREMIUM-SERVICES i
+[przekazanie20](../../patternly/docs/reports/premium-rc20-2026-10-15.md)
+odkładają infrastrukturę pakietów po testach wewnętrznych. Wyjątek TTL nie
+rozstrzyga tej kolejności. W czacie oczekuje decyzja: rozpocząć te usługi teraz
+w sandbox czy zachować dotychczasowy sandbox do testów ręcznych.
+
+Przy decyzji „teraz” zakres do zaprojektowania i odebrania obejmuje:
+
+- Proponowany prywatny bucket `patternly-app-sandbox-content`, projekt
+  `patternly-app-sandbox`, region `europe-central2`, uniform bucket access
+  i public access prevention. Nazwa jest propozycją, nie utworzonym zasobem.
+- Wyłącznie istniejący przyjęty pakiet AWS / `identity_federation_and_root_access`,
+  gzip **71517 B**, SHA256
+  `10935a7d50a4ef4f3fda59f53c0c9ce98b1e5207bc093a1424179a817b07aa1a`.
+  Aktualny validator backendu potwierdził manifest i bajty lokalne; immutable
+  upload z warunkiem generation=0 i readback, bez ponownego admission.
+- Manifest `contentNodePackages/be66728010dce709607ffb1b4153b0127af2268d03bed38cf2a54e96cf3af730`
+  i pointer `contentNodePackagePointers/aws-certified-solutions-architect-associate:identity_federation_and_root_access`.
+  Dokładne read-only GET obu dokumentów zwróciły **404**; niczego nie zapisano.
+  Przed zapisem ponownie sprawdzić stan i uniknąć nadpisania cudzej aktywacji.
+- Odbiór rzeczywistego odczytu obiektu i podpisu V4 ≤60 s oraz trzy
+  `CONTENT_PACKAGE_*` vars. Nie dodawać ról szerszych niż potrzebne.
+  **Istniejący** runtime SA ma już projektowe `roles/editor` i self
+  `roles/iam.serviceAccountTokenCreator`; nie nadano ich w tym zadaniu.
+  Nie twierdzimy, że obecna tożsamość nie ma write/list. Dobór najmniejszych
+  uprawnień wymaga uwzględnienia tej zastanej konfiguracji; rekomendowany
+  dalszy projekt to osobna tożsamość runtime z odczytem obiektu i samym
+  podpisywaniem oraz wymaganym dostępem aplikacji, bez odbierania ról
+  dotychczasowemu SA używanemu przez stary sandbox. Taki projekt wymaga
+  osobnego sprawdzenia przed zastosowaniem. Rola
+  `roles/storage.legacyObjectReader` ma tylko `storage.objects.get`,
+  ale dodatkowy grant nie ogranicza istniejącego Editor.
+
+Mały probe Firebase Admin odrzucił custom credential przed odczytem
+(`firestore/invalid-credential`); skorzystano z oficjalnego REST API przez
+uwierzytelniony curl, bez wyłączenia TLS, nowych ADC ani wypisywania tokenu.
+Dowód dokumentów: `/private/tmp/patternly-sandbox-package-proposal-readback.json`.
+
+Plan ograniczonego stagingu: dopasowanie/prostota/ryzyko/utrzymywalność
+0,95/0,95/0,90/0,95; minimum0,90. Niezależny design review Luna High0,90
+zaakceptował ograniczony krok i wskazał konieczną decyzję przed uruchomieniem
+wcześniej odłożonych usług. Propozycja infrastruktury bez tej decyzji miała0,72
+i nie została wdrożona. Po odczycie istniejącego Editor reviewer ocenił
+nieuzgodnione uruchomienie pakietu na obecnym SA na0,68; nie stosować tego
+wariantu. Końcowy niezależny odbiór ograniczonego stagingu: PASS w swoim
+zakresie, ocena0,94. To nie PASS gotowości/promocji. Nie zamieniano
+historycznych FAIL w PASS.
+
 ## Kontynuacja
 
-Nie ponawiać istniejących buildów, push, odrzuconego TTL ani instalacji w tych
-samych warunkach. Po decyzjach właściciela rozstrzygnąć CI/config/readiness,
-przygotować sprawdzoną nową rewizję i dopiero promować; następnie instalacja
-z pozwoleniem telefonu, realne testy i cleanup tylko własnych kont.
-Automatyzacja pozostaje aktywna z checkpointem i ma milczeć bez istotnej zmiany.
+Zachować wysłane commity i gotowy APK. TTL ma zatwierdzony wyjątek, instalację
+pozostawiono właścicielowi; nie ponawiać dawnych pytań ani tych działań.
+Po decyzji dotyczącej usług rozstrzygnąć readiness i dwa FAIL CI przed promocją.
+Nie utworzono kont testowych, nie ma danych tego zadania do sprzątania.
+Automatyzacja pozostaje aktywna z aktualnym checkpointem i milczy bez istotnej
+zmiany lub nowej odpowiedzi. Fizycznych testów nie przedstawiać jako wykonanych.
