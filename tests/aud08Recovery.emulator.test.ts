@@ -208,6 +208,45 @@ TEST_GROUP(ENABLED
     assert.equal((await db.collection(COLLECTIONS.users).doc(fixture.userId).get()).get("authorizationGeneration"), 1);
   });
 
+  test("recovery rejects an expired legacy tombstone whose payload does not match its candidate ID without writes or token minting", async () => {
+    const fixture = await makeAccount();
+    const candidate = fixture.ring.active("firebase", fixture.firebaseUid);
+    const deletedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1_000);
+    const mismatchedTombstone = {
+      provider: "firebase",
+      keyVersion: candidate.keyVersion,
+      subjectHmac: "f".repeat(64),
+      deletedAt,
+      expiresAt: new Date(deletedAt.getTime() + 45 * 24 * 60 * 60 * 1_000),
+    };
+    const tombstoneRef = db.collection(COLLECTIONS.deletedIdentities).doc(candidate.documentId);
+    await tombstoneRef.set(mismatchedTombstone);
+    let tokenMints = 0;
+    const noMintAuth = {
+      ...accountAuth,
+      createCustomToken: async (userId: string, claims?: Readonly<Record<string, unknown>>) => {
+        tokenMints += 1;
+        return accountAuth.createCustomToken(userId, claims);
+      },
+    };
+    const store = new FirestoreAccountLifecycleStore(db, noMintAuth, fixture.ring, { cipher: fixture.cipher });
+
+    const result = await store.consumeRecoveryCode(fixture.operationId, fixture.code);
+
+    assert.equal(result.status, "expired_or_invalid");
+    assert.equal(tokenMints, 0);
+    assert.equal((await db.collection(COLLECTIONS.accountRecoveryOperations).doc(fixture.operationId).get()).exists, false);
+    assert.equal((await db.collection(COLLECTIONS.accountRecoveryOperationResults).doc(fixture.operationId).get()).exists, false);
+    assert.equal((await db.collection(COLLECTIONS.recoveryCodeIndex).doc(sha256(fixture.code)).get()).get("usedAt"), null);
+    assert.equal((await db.collection(COLLECTIONS.users).doc(fixture.userId).get()).get("authorizationGeneration"), 1);
+    const storedTombstone = (await tombstoneRef.get()).data()!;
+    assert.equal(storedTombstone.provider, mismatchedTombstone.provider);
+    assert.equal(storedTombstone.keyVersion, mismatchedTombstone.keyVersion);
+    assert.equal(storedTombstone.subjectHmac, mismatchedTombstone.subjectHmac);
+    assert.equal((storedTombstone.deletedAt as { toMillis(): number }).toMillis(), deletedAt.getTime());
+    assert.equal((storedTombstone.expiresAt as { toMillis(): number }).toMillis(), mismatchedTombstone.expiresAt.getTime());
+  });
+
   test("recovery result is persisted, replayed identically, and accepted by the pinned Firebase SDK", async () => {
     const fixture = await makeAccount();
     const store = new FirestoreAccountLifecycleStore(db, accountAuth, fixture.ring, { cipher: fixture.cipher });

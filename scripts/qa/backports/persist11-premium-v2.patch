@@ -1,0 +1,1913 @@
+--- /dev/null
++++ b/.gcloudignore
+@@ -0,0 +1,6 @@
++.git
++node_modules
++dist
++*.log
++.env*
++.local
+--- a/openapi/patternly-v1.json
++++ b/openapi/patternly-v1.json
+@@ -1197,6 +1197,11 @@
+                           "productId",
+                           "state",
+                           "source",
++                          "projectId",
++                          "mapVersion",
++                          "environment",
++                          "reason",
++                          "sources",
+                           "providerExpiresAt",
+                           "providerGraceExpiresAt",
+                           "providerObservedAt"
+@@ -1221,11 +1226,159 @@
+                               "grace",
+                               "hold",
+                               "expired",
+-                              "refunded"
++                              "refunded",
++                              "unavailable"
+                             ]
+                           },
+                           "source": {
+                             "const": "revenuecat"
++                          },
++                          "projectId": {
++                            "type": "string",
++                            "minLength": 1
++                          },
++                          "mapVersion": {
++                            "type": "string",
++                            "minLength": 1
++                          },
++                          "environment": {
++                            "type": "string",
++                            "enum": [
++                              "SANDBOX",
++                              "PRODUCTION"
++                            ]
++                          },
++                          "reason": {
++                            "anyOf": [
++                              {
++                                "type": "string",
++                                "enum": [
++                                  "paused",
++                                  "identity_conflict",
++                                  "promotional"
++                                ]
++                              },
++                              {
++                                "type": "null"
++                              }
++                            ]
++                          },
++                          "sources": {
++                            "type": "array",
++                            "items": {
++                              "type": "object",
++                              "additionalProperties": false,
++                              "required": [
++                                "platform",
++                                "store",
++                                "appId",
++                                "rcProductId",
++                                "storeProductId",
++                                "basePlanId",
++                                "state",
++                                "reason",
++                                "managementURL",
++                                "providerExpiresAt",
++                                "providerGraceExpiresAt"
++                              ],
++                              "properties": {
++                                "platform": {
++                                  "type": "string",
++                                  "enum": [
++                                    "ios",
++                                    "android"
++                                  ]
++                                },
++                                "store": {
++                                  "type": "string",
++                                  "enum": [
++                                    "APP_STORE",
++                                    "PLAY_STORE"
++                                  ]
++                                },
++                                "appId": {
++                                  "type": "string",
++                                  "minLength": 1
++                                },
++                                "rcProductId": {
++                                  "type": "string",
++                                  "minLength": 1
++                                },
++                                "storeProductId": {
++                                  "type": "string",
++                                  "minLength": 1
++                                },
++                                "basePlanId": {
++                                  "anyOf": [
++                                    {
++                                      "type": "string",
++                                      "minLength": 1
++                                    },
++                                    {
++                                      "type": "null"
++                                    }
++                                  ]
++                                },
++                                "state": {
++                                  "type": "string",
++                                  "enum": [
++                                    "active",
++                                    "grace",
++                                    "hold",
++                                    "paused",
++                                    "expired",
++                                    "refunded"
++                                  ]
++                                },
++                                "reason": {
++                                  "anyOf": [
++                                    {
++                                      "type": "string",
++                                      "enum": [
++                                        "paused",
++                                        "account_hold"
++                                      ]
++                                    },
++                                    {
++                                      "type": "null"
++                                    }
++                                  ]
++                                },
++                                "managementURL": {
++                                  "anyOf": [
++                                    {
++                                      "type": "string",
++                                      "format": "uri"
++                                    },
++                                    {
++                                      "type": "null"
++                                    }
++                                  ]
++                                },
++                                "providerExpiresAt": {
++                                  "anyOf": [
++                                    {
++                                      "type": "string",
++                                      "format": "date-time"
++                                    },
++                                    {
++                                      "type": "null"
++                                    }
++                                  ]
++                                },
++                                "providerGraceExpiresAt": {
++                                  "anyOf": [
++                                    {
++                                      "type": "string",
++                                      "format": "date-time"
++                                    },
++                                    {
++                                      "type": "null"
++                                    }
++                                  ]
++                                }
++                              }
++                            }
+                           },
+                           "providerExpiresAt": {
+                             "anyOf": [
+--- /dev/null
++++ b/scripts/check-premium-client.mjs
+@@ -0,0 +1,99 @@
++import assert from "node:assert/strict";
++import { readFile } from "node:fs/promises";
++import { resolve } from "node:path";
++import { pathToFileURL } from "node:url";
++import { defaultPremiumMap, parsePremiumMap, productIdentifier } from "../src/config/premiumMap.ts";
++import { createRevenueCatEntitlementReader } from "../src/infrastructure/revenuecat/client.ts";
++
++const mobileRoot = resolve(process.env.PATTERNLY_FRONTEND_ROOT ?? "../patternly");
++const { premiumCacheFromFreshResponse, evaluateOfflinePremiumAccess } = await import(pathToFileURL(resolve(mobileRoot, "src/domain/entitlements/premiumEntitlement.ts")).href);
++const map = parsePremiumMap(JSON.parse(await readFile(new URL("../tests/fixtures/premiumMap.fixture.json", import.meta.url), "utf8")), { allowTestFixtures: true });
++const accountId = "00000000-0000-4000-8000-000000000001";
++const now = Date.parse("2026-10-17T12:00:00.000Z"), end = now + 86_400_000;
++const identity = { accountId, entitlement: "premium", productId: "com.lkurczab.patternly.premium.monthly", projectId: map.projectId, environment: map.environment, mapVersion: map.version };
++let checks = 0;
++for (const binding of map.bindings) {
++  for (const state of ["active", "grace", "hold", "paused", "expired"]) {
++    const status = { active: "active", grace: "in_grace_period", hold: "in_billing_retry", paused: "paused", expired: "expired" }[state];
++    const graceEnd = state === "grace" ? new Date(end).toISOString() : null;
++    const subscription = {
++      id: "fixture-subscription", customer_id: accountId, original_customer_id: accountId,
++      product_id: binding.rcProductId, store: binding.store === "APP_STORE" ? "app_store" : "play_store",
++      environment: "sandbox", status, gives_access: ["active", "grace"].includes(state), pending_payment: false,
++      ends_at: state === "grace" ? now - 1000 : end, store_subscription_identifier: "fixture-exact-transaction",
++      management_url: binding.store === "APP_STORE" ? "https://apps.apple.com/account/subscriptions" : "https://play.google.com/store/account/subscriptions",
++      entitlements: { items: [{ id: "fixture-entitlement-resource", project_id: map.projectId }], next_page: null },
++    };
++    const reader = createRevenueCatEntitlementReader({
++      baseUrl: "https://api.revenuecat.test", apiKey: "explicit-local-v1-fixture", v2ApiKey: "explicit-local-v2-fixture", entitlementId: "premium",
++      productId: identity.productId, environment: map.environment, revenueCatProjectId: map.projectId,
++      premiumMap: map, allowTestFixtures: true,
++    }, { fetch: async (url) => {
++      const path = new URL(url).pathname;
++      let payload;
++      if (path.startsWith("/v1/subscribers/")) payload = { request_date_ms: now, subscriber: {
++        original_app_user_id: accountId,
++        entitlements: { premium: { product_identifier: productIdentifier(binding), grace_period_expires_date: graceEnd } },
++        subscriptions: { [productIdentifier(binding)]: { store: subscription.store, is_sandbox: true, store_transaction_id: "fixture-exact-transaction", grace_period_expires_date: graceEnd } },
++      } };
++      else if (path.endsWith("/products")) payload = { items: map.bindings.map(row => ({
++        id: row.rcProductId, app_id: row.appId, store_identifier: productIdentifier(row), type: "subscription", state: "active",
++        app: { id: row.appId, type: row.store === "APP_STORE" ? "app_store" : "play_store", project_id: map.projectId },
++      })), next_page: null };
++      else if (path.endsWith("/entitlements")) payload = { items: [{ id: "fixture-entitlement-resource", lookup_key: "premium", project_id: map.projectId }], next_page: null };
++      else if (path.endsWith("/subscriptions")) payload = { items: [subscription], next_page: null };
++      else throw new Error("unexpected_fixture_request");
++      return new Response(JSON.stringify(payload));
++    } });
++    const result = await reader.read(accountId);
++    assert.notEqual(result.state, "unavailable", `${binding.store}/${state}`);
++    // The actual reader's wire output is consumed by the APP's exact-key parser.
++    const response = JSON.parse(JSON.stringify({ serverObservedAt: new Date(now).toISOString(), entitlements: [{ accountId, ...result, source: "revenuecat" }] }));
++    const cache = premiumCacheFromFreshResponse(response, identity, now, null);
++    assert.ok(cache, `${binding.store}/${state}: producer rejected by consumer`);
++    assert.equal(evaluateOfflinePremiumAccess(cache, identity, now).allowed, ["active", "grace"].includes(state));
++    assert.equal(evaluateOfflinePremiumAccess(cache, { ...identity, mapVersion: "foreign-map" }, now).allowed, false);
++    assert.equal(evaluateOfflinePremiumAccess(cache, { ...identity, environment: "PRODUCTION" }, now).allowed, false);
++    assert.equal(evaluateOfflinePremiumAccess(cache, identity, end).allowed, false);
++    checks++;
++  }
++}
++console.log(`Premium reader → APP cache: ${checks} store/lifecycle cases PASS; map/environment/expiry rejection PASS.`);
++
++// The existing sandbox grant has no store purchase source. Exercise its real
++// reader output against the APP parser as well as the paid-source matrix above.
++const promoNow = Date.now();
++const promoCutoff = new Date(promoNow + 60_000).toISOString();
++const promoMap = defaultPremiumMap("proj8ae78267", "SANDBOX");
++assert.ok(promoMap);
++const promoConfig = {
++  baseUrl: "https://api.revenuecat.com", apiKey: "explicit-local-v1-fixture",
++  entitlementId: "premium", productId: identity.productId, environment: "SANDBOX",
++  firebaseProjectId: "patternly-app-sandbox", revenueCatProjectId: promoMap.projectId,
++  revenueCatAppId: "app7b06e9a4c1", premiumMap: promoMap,
++  sandboxPromotionalAccess: { firebaseProjectId: "patternly-app-sandbox", revenueCatProjectId: promoMap.projectId,
++    revenueCatAppId: "app7b06e9a4c1", customerId: accountId, expiresAt: promoCutoff },
++};
++const promoPayload = {
++  request_date_ms: promoNow,
++  subscriber: { original_app_user_id: accountId,
++    entitlements: { premium: { product_identifier: "rc_promo_premium_custom", expires_date: promoCutoff, grace_period_expires_date: null } },
++    subscriptions: { rc_promo_premium_custom: { store: "promotional", is_sandbox: false, expires_date: promoCutoff,
++      grace_period_expires_date: null, refunded_at: null, billing_issues_detected_at: null } } },
++};
++const promoReader = createRevenueCatEntitlementReader(promoConfig, { fetch: async () => new Response(JSON.stringify(promoPayload)) });
++const promoResult = await promoReader.read(accountId);
++const promoIdentity = { ...identity, projectId: promoMap.projectId, mapVersion: promoMap.version };
++const promoWire = JSON.parse(JSON.stringify({ serverObservedAt: new Date(promoNow).toISOString(), entitlements: [{ accountId, ...promoResult, source: "revenuecat" }] }));
++const promoCache = premiumCacheFromFreshResponse(promoWire, promoIdentity, promoNow, null);
++assert.ok(promoCache, "sandbox promotional producer rejected by exact APP parser");
++assert.equal(promoCache.snapshot.reason, "promotional");
++assert.deepEqual(promoCache.snapshot.sources, []);
++assert.equal(evaluateOfflinePremiumAccess(promoCache, promoIdentity, promoNow).allowed, true);
++assert.equal(evaluateOfflinePremiumAccess(promoCache, promoIdentity, Date.parse(promoCutoff)).allowed, false);
++assert.equal(evaluateOfflinePremiumAccess(promoCache, { ...promoIdentity, accountId: "another-account" }, promoNow).allowed, false);
++assert.equal((await promoReader.read("another-account")).state, "unavailable");
++const oldItem = { ...promoWire.entitlements[0] };
++for (const key of ["mapVersion", "projectId", "environment", "reason", "sources"]) delete oldItem[key];
++assert.equal(premiumCacheFromFreshResponse({ ...promoWire, entitlements: [oldItem] }, promoIdentity, promoNow, null), null);
++console.log("Sandbox promotional reader → APP cache: scoped v2 accepted; old DTO, wrong account and expiry denied.");
+--- a/scripts/localSmoke.ts
++++ b/scripts/localSmoke.ts
+@@ -50,6 +50,18 @@
+       return Object.freeze({
+         entitlement: localSmokeEntitlement,
+         productId: localSmokeProductId,
++        projectId: "proj8ae78267",
++        mapVersion: "premium-map-v1",
++        environment: "SANDBOX" as const,
++        reason: null,
++        sources: state === "active" ? [{
++          platform: "ios" as const, store: "APP_STORE" as const,
++          appId: "app7b06e9a4c1", rcProductId: "prod8d07384c8c",
++          storeProductId: localSmokeProductId, basePlanId: null,
++          state: "active" as const, reason: null, managementURL: null,
++          providerExpiresAt: new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString(),
++          providerGraceExpiresAt: null,
++        }] : [],
+         state,
+         providerExpiresAt: state === "active" ? new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString() : null,
+         providerGraceExpiresAt: null,
+--- /dev/null
++++ b/scripts/run-persist11-premium-tests.mjs
+@@ -0,0 +1,2 @@
++import { runIsolatedEmulatorTests } from './isolated-emulator-test-runner.mjs';
++process.exitCode = await runIsolatedEmulatorTests({ backendRoot: process.cwd(), projectId: 'demo-patternly-p11', command: 'node --import tsx --test --test-concurrency=1 tests/revenuecatEntitlements.emulator.test.ts tests/contentPackages.emulator.test.ts' });
+--- a/src/api/app.ts
++++ b/src/api/app.ts
+@@ -837,7 +837,13 @@
+   app.get("/v1/entitlements", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
+     if (!dependencies.revenueCatEntitlementReader) return reply.code(503).send({ error: { code: "revenuecat_read_unavailable" } });
+     try {
++      if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
+       const result = await dependencies.revenueCatEntitlementReader.read(request.userId!);
++      if (result.reason === "identity_conflict") {
++        await requireStores(dependencies).revenueCatWebhook.markIdentityConflict(request.userId!);
++        return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
++      }
++      if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
+       if (result.state === "unavailable") return reply.code(503).send({ error: { code: "revenuecat_read_unavailable" } });
+       return { serverObservedAt: new Date().toISOString(), entitlements: [{ accountId: request.userId!, ...result, source: "revenuecat" }] };
+     } catch {
+--- a/src/api/openapi.ts
++++ b/src/api/openapi.ts
+@@ -570,12 +570,29 @@
+   accountId: { type: "string", minLength: 1 },
+   entitlement: { type: "string", minLength: 1 },
+   productId: { type: "string", minLength: 1 },
+-  state: { type: "string", enum: ["active", "grace", "hold", "expired", "refunded"] },
++  state: { type: "string", enum: ["active", "grace", "hold", "expired", "refunded", "unavailable"] },
+   source: { const: "revenuecat" },
++  projectId: { type: "string", minLength: 1 },
++  mapVersion: { type: "string", minLength: 1 },
++  environment: { type: "string", enum: ["SANDBOX", "PRODUCTION"] },
++  reason: { anyOf: [{ type: "string", enum: ["paused", "identity_conflict", "promotional"] }, { type: "null" }] },
++  sources: { type: "array", items: objectSchema({
++    platform: { type: "string", enum: ["ios", "android"] },
++    store: { type: "string", enum: ["APP_STORE", "PLAY_STORE"] },
++    appId: { type: "string", minLength: 1 },
++    rcProductId: { type: "string", minLength: 1 },
++    storeProductId: { type: "string", minLength: 1 },
++    basePlanId: { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }] },
++    state: { type: "string", enum: ["active", "grace", "hold", "paused", "expired", "refunded"] },
++    reason: { anyOf: [{ type: "string", enum: ["paused", "account_hold"] }, { type: "null" }] },
++    managementURL: { anyOf: [{ type: "string", format: "uri" }, { type: "null" }] },
++    providerExpiresAt: { anyOf: [{ type: "string", format: "date-time" }, { type: "null" }] },
++    providerGraceExpiresAt: { anyOf: [{ type: "string", format: "date-time" }, { type: "null" }] },
++  }, ["platform", "store", "appId", "rcProductId", "storeProductId", "basePlanId", "state", "reason", "managementURL", "providerExpiresAt", "providerGraceExpiresAt"]) },
+   providerExpiresAt: { anyOf: [{ type: "string", format: "date-time" }, { type: "null" }] },
+   providerGraceExpiresAt: { anyOf: [{ type: "string", format: "date-time" }, { type: "null" }] },
+   providerObservedAt: { type: "string", format: "date-time" },
+-}, ["accountId", "entitlement", "productId", "state", "source", "providerExpiresAt", "providerGraceExpiresAt", "providerObservedAt"]);
++}, ["accountId", "entitlement", "productId", "state", "source", "projectId", "mapVersion", "environment", "reason", "sources", "providerExpiresAt", "providerGraceExpiresAt", "providerObservedAt"]);
+ const trackAccessSchema = objectSchema({ trackId: { type: "string", minLength: 1 }, source: { type: "string", minLength: 1 }, status: { type: "string", minLength: 1 }, updatedAt: { type: "string", format: "date-time" } }, ["trackId", "source", "status", "updatedAt"]);
+ const contentVersionSchema = objectSchema({ trackId: { type: "string", minLength: 1 }, version: { type: "string", minLength: 1 }, checksumSha256: { type: "string", pattern: "^[a-f0-9]{64}$" }, packageUri: { type: "string", minLength: 1 }, publishedAt: { type: "string", format: "date-time" } }, ["trackId", "version", "checksumSha256", "packageUri", "publishedAt"]);
+ const contentReportSchema = objectSchema({
+--- a/src/config/environment.ts
++++ b/src/config/environment.ts
+@@ -1,3 +1,4 @@
++import { defaultPremiumMap, parsePremiumMap, type PremiumMap } from "./premiumMap.js";
+ import { parseSandboxPromotionalAccessPolicy, isSandboxPromotionalAccessAllowed, type SandboxPromotionalAccessPolicy } from "./sandboxPromotionalAccess.js";
+ import { z } from "zod";
+ import { parseOperatorAllowlist, type OperatorAllowlistEntry } from "../modules/operator-access/contracts.js";
+@@ -42,6 +43,8 @@
+   REVENUECAT_SANDBOX_PROMOTIONAL_ACCESS_JSON: z.string().min(1).optional(),
+   REVENUECAT_API_BASE_URL: z.string().url().default("https://api.revenuecat.com"),
+   REVENUECAT_READ_API_KEY: z.string().min(1).optional(),
++  REVENUECAT_V2_READ_API_KEY: z.string().min(1).optional(),
++  REVENUECAT_PREMIUM_MAP_JSON: z.string().min(1).optional(),
+   REVENUECAT_WEBHOOK_SECRET: z.string().min(1).optional(),
+   REVENUECAT_APP_ID: z.string().min(1).optional(),
+   REVENUECAT_ENTITLEMENT_ID: z.string().min(1).optional(),
+@@ -87,6 +90,8 @@
+   sandboxPromotionalAccess: SandboxPromotionalAccessPolicy | null;
+   revenueCatApiBaseUrl: string;
+   revenueCatReadApiKey: string | undefined;
++  revenueCatV2ReadApiKey: string | undefined;
++  premiumMap: PremiumMap | null;
+   revenueCatWebhookSecret: string | undefined;
+   revenueCatAppId: string | undefined;
+   revenueCatEntitlementId: string | undefined;
+@@ -115,6 +120,14 @@
+   if (Boolean(value.CONTENT_PACKAGE_READINESS_TRACK_ID) !== Boolean(value.CONTENT_PACKAGE_READINESS_NODE_ID)
+     || (value.CONTENT_PACKAGE_READINESS_TRACK_ID && !value.CONTENT_PACKAGE_BUCKET)) throw new Error("invalid_content_package_readiness_config");
+   const sandboxPromotionalAccess = parseSandboxPromotionalAccessPolicy(value.REVENUECAT_SANDBOX_PROMOTIONAL_ACCESS_JSON);
++  let premiumMap = defaultPremiumMap(value.REVENUECAT_PROJECT_ID, value.REVENUECAT_WEBHOOK_ENVIRONMENT);
++  if (value.REVENUECAT_PREMIUM_MAP_JSON !== undefined) {
++    let parsedMap: unknown;
++    try { parsedMap = JSON.parse(value.REVENUECAT_PREMIUM_MAP_JSON); } catch { throw new Error("premium_map_invalid"); }
++    premiumMap = parsePremiumMap(parsedMap, { allowTestFixtures: value.NODE_ENV === "test" });
++    if (value.REVENUECAT_PROJECT_ID !== undefined && premiumMap.projectId !== value.REVENUECAT_PROJECT_ID) throw new Error("premium_map_project_mismatch");
++    if (value.REVENUECAT_WEBHOOK_ENVIRONMENT !== undefined && premiumMap.environment !== value.REVENUECAT_WEBHOOK_ENVIRONMENT) throw new Error("premium_map_environment_mismatch");
++  }
+   if (sandboxPromotionalAccess && !isSandboxPromotionalAccessAllowed(sandboxPromotionalAccess, {
+     firebaseProjectId: value.FIREBASE_PROJECT_ID, revenueCatProjectId: value.REVENUECAT_PROJECT_ID,
+     revenueCatAppId: value.REVENUECAT_APP_ID, revenueCatEnvironment: value.REVENUECAT_WEBHOOK_ENVIRONMENT,
+@@ -122,6 +135,7 @@
+     // An expired policy must start safely and deny requests, rather than crash the service.
+     nowMs: Date.parse(sandboxPromotionalAccess.expiresAt) - 1,
+   })) throw new Error("invalid_sandbox_promotional_access_runtime");
++  if (value.NODE_ENV === "production" && !premiumMap) throw new Error("production_premium_map_required");
+   const adminWebOrigin = parseAdminWebOrigin(value);
+   const operatorAccess = parseOperatorAccess(value);
+   return Object.freeze({
+@@ -151,6 +165,8 @@
+     sandboxPromotionalAccess,
+     revenueCatApiBaseUrl: value.REVENUECAT_API_BASE_URL,
+     revenueCatReadApiKey: value.REVENUECAT_READ_API_KEY,
++    revenueCatV2ReadApiKey: value.REVENUECAT_V2_READ_API_KEY,
++    premiumMap,
+     revenueCatWebhookSecret: value.REVENUECAT_WEBHOOK_SECRET,
+     revenueCatAppId: value.REVENUECAT_APP_ID,
+     revenueCatEntitlementId: value.REVENUECAT_ENTITLEMENT_ID,
+--- /dev/null
++++ b/src/config/premiumMap.ts
+@@ -0,0 +1,109 @@
++export type RevenueCatEnvironment = "SANDBOX" | "PRODUCTION";
++
++export type StoreBinding = Readonly<
++  | {
++    platform: "ios";
++    store: "APP_STORE";
++    appId: string;
++    rcProductId: string;
++    storeProductId: string;
++    basePlanId: null;
++  }
++  | {
++    platform: "android";
++    store: "PLAY_STORE";
++    appId: string;
++    rcProductId: string;
++    storeProductId: string;
++    basePlanId: string;
++  }
++>;
++
++export type PremiumMap = Readonly<{
++  version: string;
++  projectId: string;
++  entitlementId: "premium";
++  environment: RevenueCatEnvironment;
++  bindings: readonly StoreBinding[];
++  fixture: boolean;
++}>;
++
++const idPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/u;
++const placeholderPattern = /(?:placeholder|example|your[-_ ]?(?:id|key)|changeme|test[-_ ]?only)/iu;
++const fixtureIdentifierPattern = /(?:^|[-_.])(?:fixture|test)(?:[-_.]|$)/iu;
++
++function isRecord(value: unknown): value is Record<string, unknown> {
++  return typeof value === "object" && value !== null && !Array.isArray(value);
++}
++
++function validId(value: unknown): value is string {
++  return typeof value === "string" && idPattern.test(value) && !placeholderPattern.test(value);
++}
++
++export function parsePremiumMap(value: unknown, options: { allowTestFixtures?: boolean } = {}): PremiumMap {
++  if (!isRecord(value) || typeof value.version !== "string" || value.version.trim() === ""
++    || !validId(value.projectId) || value.entitlementId !== "premium"
++    || (value.environment !== "SANDBOX" && value.environment !== "PRODUCTION")
++    || !Array.isArray(value.bindings) || value.bindings.length < 1 || value.bindings.length > 2) {
++    throw new Error("premium_map_invalid");
++  }
++  const fixture = value.fixture === true;
++  if (value.fixture !== undefined && typeof value.fixture !== "boolean") throw new Error("premium_map_invalid");
++  if (fixture && !options.allowTestFixtures) throw new Error("premium_map_fixture_forbidden");
++  const seenPlatforms = new Set<string>();
++  const seenIds = new Set<string>();
++  const bindings = value.bindings.map((raw): StoreBinding => {
++    if (!isRecord(raw) || !validId(raw.appId) || !validId(raw.rcProductId) || !validId(raw.storeProductId)) {
++      throw new Error("premium_map_binding_invalid");
++    }
++    if (raw.platform === "ios" && raw.store === "APP_STORE" && raw.basePlanId === null) {
++      // Apple binding has a fixed application and monthly product contract.
++      if (!fixture && (raw.appId !== "app7b06e9a4c1" || raw.rcProductId !== "prod8d07384c8c"
++        || raw.storeProductId !== "com.lkurczab.patternly.premium.monthly")) throw new Error("premium_map_binding_invalid");
++      return Object.freeze({ platform: "ios", store: "APP_STORE", appId: raw.appId, rcProductId: raw.rcProductId, storeProductId: raw.storeProductId, basePlanId: null });
++    }
++    if (raw.platform === "android" && raw.store === "PLAY_STORE" && validId(raw.basePlanId)) {
++      return Object.freeze({ platform: "android", store: "PLAY_STORE", appId: raw.appId, rcProductId: raw.rcProductId, storeProductId: raw.storeProductId, basePlanId: raw.basePlanId });
++    }
++    throw new Error("premium_map_binding_invalid");
++  });
++  for (const binding of bindings) {
++    if (seenPlatforms.has(binding.platform)) throw new Error("premium_map_duplicate_platform");
++    seenPlatforms.add(binding.platform);
++    for (const id of [binding.appId, binding.rcProductId, binding.storeProductId]) {
++      if (seenIds.has(id)) throw new Error("premium_map_duplicate_identifier");
++      seenIds.add(id);
++    }
++  }
++  if (fixture) {
++    if (value.projectId !== "fixture-project" || value.environment !== "SANDBOX" || bindings.length !== 2
++      || !bindings.some((binding) => binding.platform === "ios" && binding.appId === "fixture-ios" && binding.rcProductId === "fixture-rc-ios" && binding.storeProductId === "fixture.ios.monthly")
++      || !bindings.some((binding) => binding.platform === "android" && binding.appId === "fixture-play" && binding.rcProductId === "fixture-rc-play" && binding.storeProductId === "fixture_play_monthly" && binding.basePlanId === "monthly")) {
++      throw new Error("premium_map_fixture_invalid");
++    }
++  } else if (value.projectId !== "proj8ae78267") {
++    throw new Error("premium_map_project_invalid");
++  } else if (bindings.some((binding) => [binding.appId, binding.rcProductId, binding.storeProductId, binding.basePlanId ?? ""].some((id) => fixtureIdentifierPattern.test(id)))) {
++    throw new Error("premium_map_fixture_forbidden");
++  }
++  return Object.freeze({ version: value.version, projectId: value.projectId, entitlementId: "premium", environment: value.environment, bindings: Object.freeze(bindings), fixture });
++}
++
++export function productIdentifier(binding: StoreBinding): string {
++  return binding.platform === "android" ? `${binding.storeProductId}:${binding.basePlanId}` : binding.storeProductId;
++}
++
++export function findBinding(map: PremiumMap, scope: { appId: unknown; productId: unknown; store: unknown }): StoreBinding | undefined {
++  return map.bindings.find((binding) => binding.appId === scope.appId && binding.rcProductId === scope.productId && binding.store === scope.store);
++}
++
++export function defaultPremiumMap(projectId: string | undefined, environment: RevenueCatEnvironment | undefined): PremiumMap | null {
++  if (projectId !== "proj8ae78267" || !environment) return null;
++  return parsePremiumMap({
++    version: "premium-map-v1",
++    projectId,
++    entitlementId: "premium",
++    environment,
++    bindings: [{ platform: "ios", store: "APP_STORE", appId: "app7b06e9a4c1", rcProductId: "prod8d07384c8c", storeProductId: "com.lkurczab.patternly.premium.monthly", basePlanId: null }],
++  });
++}
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -33,8 +33,8 @@
+       appCheckVerifier: createFirebaseAppCheckVerifier(environment),
+       operatorTokenVerifier: createOperatorTokenVerifier(environment),
+       stores: createFirestoreStores(firestore, environment),
+-      revenueCatEntitlementReader: environment.revenueCatReadApiKey && environment.revenueCatEntitlementId && environment.revenueCatProductId && environment.revenueCatWebhookEnvironment
+-        ? createRevenueCatEntitlementReader({ baseUrl: environment.revenueCatApiBaseUrl, apiKey: environment.revenueCatReadApiKey, entitlementId: environment.revenueCatEntitlementId, productId: environment.revenueCatProductId, environment: environment.revenueCatWebhookEnvironment, firebaseProjectId: environment.firebaseProjectId, revenueCatProjectId: environment.revenueCatProjectId, revenueCatAppId: environment.revenueCatAppId, sandboxPromotionalAccess: environment.sandboxPromotionalAccess })
++      revenueCatEntitlementReader: environment.revenueCatReadApiKey && (environment.revenueCatV2ReadApiKey || environment.sandboxPromotionalAccess) && environment.revenueCatEntitlementId && environment.revenueCatProductId && environment.premiumMap
++        ? createRevenueCatEntitlementReader({ baseUrl: environment.revenueCatApiBaseUrl, apiKey: environment.revenueCatReadApiKey, v2ApiKey: environment.revenueCatV2ReadApiKey, entitlementId: environment.revenueCatEntitlementId, productId: environment.revenueCatProductId, environment: environment.premiumMap.environment, firebaseProjectId: environment.firebaseProjectId, revenueCatProjectId: environment.revenueCatProjectId, revenueCatAppId: environment.revenueCatAppId, sandboxPromotionalAccess: environment.sandboxPromotionalAccess, premiumMap: environment.premiumMap, allowTestFixtures: environment.nodeEnv === "test" })
+         : null,
+       contentPackages: environment.contentPackageBucket
+         ? new ContentPackageService(new FirestoreContentPackagePointerStore(firestore.db), new GcsContentPackageStorage(getStorage(firestore.app).bucket(environment.contentPackageBucket)))
+--- a/src/infrastructure/revenuecat/client.ts
++++ b/src/infrastructure/revenuecat/client.ts
+@@ -2,10 +2,19 @@
+   isSandboxPromotionalAccessAllowed,
+   type SandboxPromotionalAccessPolicy,
+ } from "../../config/sandboxPromotionalAccess.js";
++import { type PremiumMap, type StoreBinding } from "../../config/premiumMap.js";
+ 
+ export type RevenueCatEnvironment = "PRODUCTION" | "SANDBOX";
+ 
+ export type RevenueCatEntitlementState = "active" | "grace" | "hold" | "expired" | "refunded" | "unavailable";
++export type RevenueCatSourceState = "active" | "grace" | "hold" | "paused" | "expired" | "refunded";
++export type RevenueCatEntitlementSource = Readonly<StoreBinding & {
++  state: RevenueCatSourceState;
++  reason: "paused" | "account_hold" | null;
++  managementURL: string | null;
++  providerExpiresAt: string | null;
++  providerGraceExpiresAt: string | null;
++}>;
+ 
+ export type RevenueCatEntitlementResult = Readonly<{
+   entitlement: string;
+@@ -14,11 +23,18 @@
+   providerExpiresAt: string | null;
+   providerGraceExpiresAt: string | null;
+   providerObservedAt: string;
++  projectId: string;
++  mapVersion: string;
++  environment: RevenueCatEnvironment;
++  reason: "paused" | "identity_conflict" | "promotional" | null;
++  sources: readonly RevenueCatEntitlementSource[];
+ }>;
+ 
+ export type RevenueCatReaderConfig = Readonly<{
+   baseUrl: string;
+   apiKey: string;
++  /** V2 scoped secret keys are separate from the V1 subscriber credential. */
++  v2ApiKey?: string | undefined;
+   entitlementId: string;
+   productId: string;
+   environment: RevenueCatEnvironment;
+@@ -26,6 +42,8 @@
+   revenueCatProjectId?: string | undefined;
+   revenueCatAppId?: string | undefined;
+   sandboxPromotionalAccess?: SandboxPromotionalAccessPolicy | null | undefined;
++  premiumMap?: PremiumMap | null | undefined;
++  allowTestFixtures?: boolean | undefined;
+ }>;
+ 
+ /**
+@@ -121,14 +139,22 @@
+   providerObservedAt: string,
+   providerExpiresAt: string | null = null,
+   providerGraceExpiresAt: string | null = null,
++  options: { reason?: RevenueCatEntitlementResult["reason"]; sources?: readonly RevenueCatEntitlementSource[] } = {},
+ ): RevenueCatEntitlementResult {
++  const map = config.premiumMap;
++  if (!map) throw new TypeError("revenuecat_map_required");
+   return Object.freeze({
+-    entitlement: config.entitlementId,
+-    productId: config.productId,
++    entitlement: "premium",
++    productId: "com.lkurczab.patternly.premium.monthly",
+     state,
+     providerExpiresAt,
+     providerGraceExpiresAt,
+     providerObservedAt,
++    projectId: map.projectId,
++    mapVersion: map.version,
++    environment: map.environment,
++    reason: options.reason ?? null,
++    sources: Object.freeze([...(options.sources ?? [])]),
+   });
+ }
+ 
+@@ -183,8 +209,8 @@
+   const policyExpiresAtMs = Date.parse(policy.expiresAt);
+   if (requestDate.milliseconds >= policyExpiresAtMs || Date.now() >= policyExpiresAtMs) return unavailableResult;
+   const expiresAtMs = Math.min(Date.parse(entitlementExpiresAt), policyExpiresAtMs);
+-  if (expiresAtMs <= requestDate.milliseconds) return makeResult(config, "expired", requestDate.iso, new Date(expiresAtMs).toISOString());
+-  return makeResult(config, "active", requestDate.iso, new Date(expiresAtMs).toISOString());
++  if (expiresAtMs <= requestDate.milliseconds) return makeResult(config, "expired", requestDate.iso, new Date(expiresAtMs).toISOString(), null, { reason: "promotional" });
++  return makeResult(config, "active", requestDate.iso, new Date(expiresAtMs).toISOString(), null, { reason: "promotional" });
+ }
+ 
+ function resolveOptions(
+@@ -205,6 +231,7 @@
+   if (!isRecord(config) || !hasNonEmptyString(config.baseUrl) || !hasNonEmptyString(config.apiKey) || !hasNonEmptyString(config.entitlementId) || !hasNonEmptyString(config.productId) || (config.environment !== "PRODUCTION" && config.environment !== "SANDBOX")) {
+     throw new TypeError("revenuecat_config_invalid");
+   }
++  if (config.premiumMap && config.entitlementId !== config.premiumMap.entitlementId) throw new TypeError("revenuecat_entitlement_mismatch");
+ }
+ 
+ async function fetchJson(
+@@ -252,63 +279,184 @@
+   }
+ }
+ 
+-function parseResponse(
++function parseV2Timestamp(value: unknown, allowNull = false): string | null | undefined {
++  if (value === null && allowNull) return null;
++  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) return undefined;
++  try { return new Date(value).toISOString(); } catch { return undefined; }
++}
++
++function transactionId(value: unknown): string | undefined {
++  if (typeof value === "string" && value.length > 0) return value;
++  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return String(value);
++  return undefined;
++}
++
++async function fetchAllPages(
++  fetchImpl: RevenueCatFetch,
++  firstUrl: string,
++  apiKey: string,
++  timeoutMs: number,
++  requiredPrefix: string,
++): Promise<JsonRecord[]> {
++  const entries: JsonRecord[] = [];
++  const visited = new Set<string>();
++  let url: string | null = firstUrl;
++  for (let pageCount = 0; url !== null; pageCount += 1) {
++    if (pageCount >= 500 || visited.has(url)) throw new RevenueCatProviderUnavailableError("invalid_response");
++    visited.add(url);
++    const current: URL = new URL(url);
++    const first = new URL(firstUrl);
++    if (current.origin !== first.origin || !current.pathname.startsWith(requiredPrefix)) throw new RevenueCatProviderUnavailableError("invalid_response");
++    const payload = await fetchJson(fetchImpl, url, apiKey, timeoutMs);
++    if (!isRecord(payload) || !Array.isArray(payload.items)) throw new RevenueCatProviderUnavailableError("invalid_response");
++    for (const item of payload.items) {
++      if (!isRecord(item)) throw new RevenueCatProviderUnavailableError("invalid_response");
++      entries.push(item);
++    }
++    const next = payload.next_page;
++    if (next === undefined || next === null) url = null;
++    else if (typeof next === "string" && next.length > 0) url = new URL(next, current).toString();
++    else throw new RevenueCatProviderUnavailableError("invalid_response");
++  }
++  return entries;
++}
++
++function catalogBinding(map: PremiumMap, binding: StoreBinding, product: JsonRecord): boolean {
++  const app = product.app;
++  return isRecord(app) && product.id === binding.rcProductId && product.app_id === binding.appId
++    && app.id === binding.appId && app.project_id === map.projectId
++    && app.type === (binding.store === "APP_STORE" ? "app_store" : "play_store")
++    && product.type === "subscription"
++    && product.state === "active"
++    && product.store_identifier === (binding.platform === "android" ? `${binding.storeProductId}:${binding.basePlanId}` : binding.storeProductId)
++    ;
++}
++
++function parseV1Owner(payload: unknown, userId: string): { subscriber: JsonRecord; requestDate: { milliseconds: number; iso: string } } {
++  if (!isRecord(payload) || !isRecord(payload.subscriber)) throw new RevenueCatProviderUnavailableError("invalid_response");
++  const requestDate = parseRequestDate(payload.request_date_ms);
++  if (!requestDate) throw new RevenueCatProviderUnavailableError("invalid_response");
++  if (!isRecord(payload.subscriber.subscriptions) || !isRecord(payload.subscriber.entitlements)) throw new RevenueCatProviderUnavailableError("invalid_response");
++  return { subscriber: payload.subscriber, requestDate };
++}
++
++function v1GraceEnd(
++  subscriber: JsonRecord,
++  binding: StoreBinding,
++  expectedEnvironment: RevenueCatEnvironment,
++  exactTransaction: string,
++  entitlementId: string,
++): string | undefined {
++  const subscriptions = subscriber.subscriptions as JsonRecord;
++  const key = binding.platform === "android" ? `${binding.storeProductId}:${binding.basePlanId}` : binding.storeProductId;
++  const record = subscriptions[key];
++  if (!isRecord(record) || record.store !== (binding.store === "APP_STORE" ? "app_store" : "play_store")
++    || record.is_sandbox !== (expectedEnvironment === "SANDBOX") || transactionId(record.store_transaction_id) !== exactTransaction) return undefined;
++  const grace = parseProviderDate(record.grace_period_expires_date, true);
++  if (grace === undefined || grace === null) return undefined;
++  const entitlementValue = (subscriber.entitlements as JsonRecord)[entitlementId];
++  if (entitlementValue !== undefined && entitlementValue !== null) {
++    if (!isRecord(entitlementValue)) return undefined;
++    if (entitlementValue.product_identifier === key) {
++      const entitlementGrace = parseProviderDate(entitlementValue.grace_period_expires_date, true);
++      if (entitlementGrace === undefined || (entitlementGrace !== null && entitlementGrace !== grace)) return undefined;
++    }
++  }
++  return grace;
++}
++
++function managementURL(value: unknown, store: StoreBinding["store"]): string | null | undefined {
++  if (value === null) return null;
++  if (typeof value !== "string") return undefined;
++  try {
++    const url = new URL(value);
++    const expectedHost = store === "APP_STORE" ? url.hostname === "apps.apple.com" : url.hostname === "play.google.com";
++    return url.protocol === "https:" && expectedHost && !url.username && !url.password ? url.toString() : undefined;
++  } catch { return undefined; }
++}
++
++async function parseV2Result(
+   config: RevenueCatReaderConfig,
+   userId: string,
+-  payload: unknown,
+-): RevenueCatEntitlementResult {
+-  if (!isRecord(payload)) throw new RevenueCatProviderUnavailableError("invalid_response");
+-  const requestDate = parseRequestDate(payload.request_date_ms);
+-  if (!requestDate || !isRecord(payload.subscriber)) throw new RevenueCatProviderUnavailableError("invalid_response");
+-
+-  const subscriber = payload.subscriber;
+-  if (subscriber.original_app_user_id !== userId) return unavailable(config, requestDate.iso);
+-  const entitlementsValue = subscriber.entitlements;
+-  const subscriptionsValue = subscriber.subscriptions;
+-  if (!isRecord(entitlementsValue) || !isRecord(subscriptionsValue)) return unavailable(config, requestDate.iso);
+-  const entitlements = entitlementsValue;
+-  const subscriptions = subscriptionsValue;
+-  const entitlement = entitlements[config.entitlementId];
+-  const subscription = subscriptions[config.productId];
+-
+-  if (entitlement === undefined || entitlement === null) {
+-    return makeResult(config, "expired", requestDate.iso);
+-  }
+-  if (!isRecord(entitlement)) return unavailable(config, requestDate.iso);
+-
+-  if (hasNonEmptyString(entitlement.product_identifier) && entitlement.product_identifier.startsWith("rc_promo_")) {
+-    return readPromotionalEntitlement(config, userId, subscriber, entitlement, requestDate);
+-  }
+-
+-  if (subscription === undefined || subscription === null) return makeResult(config, "expired", requestDate.iso);
+-  if (!isRecord(subscription)) return unavailable(config, requestDate.iso);
+-
+-  if (entitlement.product_identifier !== config.productId) return unavailable(config, requestDate.iso);
+-  if (typeof subscription.is_sandbox !== "boolean" || subscription.is_sandbox !== (config.environment === "SANDBOX")) return unavailable(config, requestDate.iso);
+-  if (!hasNonEmptyString(subscription.store)) return unavailable(config, requestDate.iso);
+-
+-  const entitlementExpiresAt = parseProviderDate(entitlement.expires_date, false);
+-  const subscriptionExpiresAt = parseProviderDate(subscription.expires_date, false);
+-  if (entitlementExpiresAt === undefined || entitlementExpiresAt === null || subscriptionExpiresAt === undefined || subscriptionExpiresAt === null || entitlementExpiresAt !== subscriptionExpiresAt) return unavailable(config, requestDate.iso);
+-
+-  const entitlementGraceAt = parseProviderDate(entitlement.grace_period_expires_date, true);
+-  const subscriptionGraceAt = parseProviderDate(subscription.grace_period_expires_date, true);
+-  const refundedAt = parseProviderDate(subscription.refunded_at, true);
+-  const billingIssueAt = parseProviderDate(subscription.billing_issues_detected_at, true);
+-  if (entitlementGraceAt === undefined || subscriptionGraceAt === undefined || refundedAt === undefined || billingIssueAt === undefined) return unavailable(config, requestDate.iso);
+-  if (entitlementGraceAt !== null && subscriptionGraceAt !== null && entitlementGraceAt !== subscriptionGraceAt) return unavailable(config, requestDate.iso);
+-
+-  const providerGraceExpiresAt = subscriptionGraceAt ?? entitlementGraceAt;
+-  const observedAtMs = requestDate.milliseconds;
+-  const expiresAtMs = Date.parse(entitlementExpiresAt);
+-  const graceExpiresAtMs = providerGraceExpiresAt === null ? null : Date.parse(providerGraceExpiresAt);
+-  const hasFutureExpiry = expiresAtMs > observedAtMs;
+-  const hasFutureGrace = graceExpiresAtMs !== null && graceExpiresAtMs > observedAtMs;
+-
+-  if (refundedAt !== null) return makeResult(config, "refunded", requestDate.iso, entitlementExpiresAt, providerGraceExpiresAt);
+-  if (hasFutureGrace) return makeResult(config, "grace", requestDate.iso, entitlementExpiresAt, providerGraceExpiresAt);
+-  if (billingIssueAt !== null) return makeResult(config, "hold", requestDate.iso, entitlementExpiresAt, providerGraceExpiresAt);
+-  return makeResult(config, hasFutureExpiry ? "active" : "expired", requestDate.iso, entitlementExpiresAt, providerGraceExpiresAt);
++  v1Payload: unknown,
++  subscriptions: JsonRecord[],
++  products: JsonRecord[],
++  entitlementResourceId: string,
++): Promise<RevenueCatEntitlementResult> {
++  const map = config.premiumMap!;
++  const { subscriber, requestDate } = parseV1Owner(v1Payload, userId);
++  if (subscriber.original_app_user_id !== userId) return makeResult(config, "unavailable", requestDate.iso, null, null, { reason: "identity_conflict" });
++  const v2Rows: RevenueCatEntitlementSource[] = [];
++  for (const subscription of subscriptions) {
++    if (subscription.customer_id !== userId || subscription.original_customer_id !== userId) {
++      return makeResult(config, "unavailable", requestDate.iso, null, null, { reason: "identity_conflict" });
++    }
++    if (subscription.product_id === null) {
++      if (subscription.store !== "promotional") return unavailable(config, requestDate.iso);
++      continue;
++    }
++    if (!hasNonEmptyString(subscription.product_id)) return unavailable(config, requestDate.iso);
++    const matchingProducts = products.filter((product) => product.id === subscription.product_id);
++    const premiumBinding = map.bindings.find((binding) => matchingProducts.some((product) => catalogBinding(map, binding, product)));
++    const entitlementList = subscription.entitlements;
++    if (!isRecord(entitlementList) || !Array.isArray(entitlementList.items)) return unavailable(config, requestDate.iso);
++    if (entitlementList.next_page !== undefined && entitlementList.next_page !== null) return unavailable(config, requestDate.iso);
++    const premiumEntitlements = entitlementList.items.filter((item) => isRecord(item) && item.id === entitlementResourceId && item.project_id === map.projectId);
++    const claimsPremium = premiumEntitlements.length === 1;
++    if (!premiumBinding) {
++      if (subscription.gives_access === true && claimsPremium) return unavailable(config, requestDate.iso);
++      continue;
++    }
++    const store = premiumBinding.store === "APP_STORE" ? "app_store" : "play_store";
++    const environmentMatches = subscription.environment === (map.environment === "SANDBOX" ? "sandbox" : "production");
++    if (subscription.store !== store || !environmentMatches || !claimsPremium || typeof subscription.gives_access !== "boolean"
++      || typeof subscription.pending_payment !== "boolean" || typeof subscription.status !== "string") return unavailable(config, requestDate.iso);
++    const end = parseV2Timestamp(subscription.ends_at, true);
++    if (end === undefined) return unavailable(config, requestDate.iso);
++    const management = managementURL(subscription.management_url, premiumBinding.store);
++    if (management === undefined) return unavailable(config, requestDate.iso);
++    let sourceState: RevenueCatSourceState;
++    let reason: RevenueCatEntitlementSource["reason"] = null;
++    let grace: string | null = null;
++    const status = subscription.status;
++    if (!["active", "in_grace_period", "in_billing_retry", "paused", "expired", "unknown", "trialing", "incomplete"].includes(status)) return unavailable(config, requestDate.iso);
++    if (status === "unknown" || status === "trialing" || status === "incomplete" || subscription.pending_payment === true) return unavailable(config, requestDate.iso);
++    if (subscription.gives_access) {
++      if (status === "active") {
++        if (!end || Date.parse(end) <= requestDate.milliseconds) return unavailable(config, requestDate.iso);
++        sourceState = "active";
++      } else if (status === "in_grace_period") {
++        const exactTransaction = transactionId(subscription.store_subscription_identifier);
++        if (!exactTransaction) return unavailable(config, requestDate.iso);
++        grace = v1GraceEnd(subscriber, premiumBinding, map.environment, exactTransaction, config.entitlementId) ?? null;
++        if (!grace || Date.parse(grace) <= requestDate.milliseconds) return unavailable(config, requestDate.iso);
++        sourceState = "grace";
++      } else return unavailable(config, requestDate.iso);
++    } else if (status === "paused") {
++      sourceState = "paused";
++      reason = "paused";
++    } else if (status === "in_billing_retry") {
++      sourceState = "hold";
++      reason = "account_hold";
++    } else if (status === "expired") {
++      sourceState = "expired";
++    } else return unavailable(config, requestDate.iso);
++    v2Rows.push(Object.freeze({ ...premiumBinding, state: sourceState, reason, managementURL: management, providerExpiresAt: end, providerGraceExpiresAt: grace }));
++  }
++  const accessSources = v2Rows.filter((row) => row.state === "active" || row.state === "grace");
++  if (accessSources.length === 0) {
++    const paused = v2Rows.some((row) => row.state === "paused");
++    const hold = v2Rows.some((row) => row.state === "hold");
++    return makeResult(config, paused ? "hold" : hold ? "hold" : "expired", requestDate.iso, null, null, { reason: paused ? "paused" : null, sources: v2Rows });
++  }
++  const winningSource = [...accessSources].sort((left, right) => {
++    const leftEnd = left.state === "grace" ? left.providerGraceExpiresAt : left.providerExpiresAt;
++    const rightEnd = right.state === "grace" ? right.providerGraceExpiresAt : right.providerExpiresAt;
++    return Date.parse(rightEnd ?? "") - Date.parse(leftEnd ?? "");
++  })[0];
++  if (!winningSource || !winningSource.providerExpiresAt) return unavailable(config, requestDate.iso);
++  return makeResult(config, winningSource.state === "active" ? "active" : "grace", requestDate.iso,
++    winningSource.providerExpiresAt, winningSource.providerGraceExpiresAt, { sources: v2Rows });
+ }
+ 
+ export function createRevenueCatEntitlementReader(
+@@ -316,12 +464,17 @@
+   optionsOrFetch?: RevenueCatReaderOptions | RevenueCatFetch,
+ ): RevenueCatEntitlementReader {
+   validateConfig(config);
++  if (!config.premiumMap || (config.premiumMap.fixture && config.allowTestFixtures !== true)) throw new TypeError("revenuecat_map_required");
++  if (config.revenueCatProjectId !== undefined && config.revenueCatProjectId !== config.premiumMap.projectId) throw new TypeError("revenuecat_project_mismatch");
+   const normalizedConfig = Object.freeze({
+     baseUrl: config.baseUrl.replace(/\/+$/u, ""),
+     apiKey: config.apiKey,
++    v2ApiKey: config.v2ApiKey,
+     entitlementId: config.entitlementId,
+     productId: config.productId,
+     environment: config.environment,
++    premiumMap: config.premiumMap,
++    allowTestFixtures: config.allowTestFixtures,
+     ...(config.firebaseProjectId === undefined ? {} : { firebaseProjectId: config.firebaseProjectId }),
+     ...(config.revenueCatProjectId === undefined ? {} : { revenueCatProjectId: config.revenueCatProjectId }),
+     ...(config.revenueCatAppId === undefined ? {} : { revenueCatAppId: config.revenueCatAppId }),
+@@ -332,23 +485,34 @@
+   return Object.freeze({
+     async read(userId: string): Promise<RevenueCatEntitlementResult> {
+       if (typeof userId !== "string") throw new TypeError("revenuecat_user_id_invalid");
+-      const endpoint = `${normalizedConfig.baseUrl}/v1/subscribers/${encodeURIComponent(userId)}`;
+-      const payload = await fetchJson(fetchImpl, endpoint, normalizedConfig.apiKey, timeoutMs);
+-      return parseResponse(normalizedConfig, userId, payload);
++      if (!hasNonEmptyString(userId)) throw new TypeError("revenuecat_user_id_invalid");
++      const projectPath = `/v2/projects/${encodeURIComponent(normalizedConfig.premiumMap!.projectId)}`;
++      const firstProducts = `${normalizedConfig.baseUrl}${projectPath}/products?expand=items.app`;
++      const customerSubscriptions = `${normalizedConfig.baseUrl}${projectPath}/customers/${encodeURIComponent(userId)}/subscriptions`;
++      const ownerUrl = `${normalizedConfig.baseUrl}/v1/subscribers/${encodeURIComponent(userId)}`;
++      const v1Payload = await fetchJson(fetchImpl, ownerUrl, normalizedConfig.apiKey, timeoutMs);
++      const ownerData = parseV1Owner(v1Payload, userId);
++      if (ownerData.subscriber.original_app_user_id !== userId) {
++        return makeResult(normalizedConfig, "unavailable", ownerData.requestDate.iso, null, null, { reason: "identity_conflict" });
++      }
++      const entitlement = (ownerData.subscriber.entitlements as JsonRecord)[normalizedConfig.premiumMap!.entitlementId];
++      if (isRecord(entitlement) && hasNonEmptyString(entitlement.product_identifier) && entitlement.product_identifier.startsWith("rc_promo_")) {
++        return readPromotionalEntitlement(normalizedConfig, userId, ownerData.subscriber, entitlement, ownerData.requestDate);
++      }
++      if (!normalizedConfig.v2ApiKey?.trim()) throw new RevenueCatProviderUnavailableError("invalid_response");
++      const [productRows, subscriptionRows, entitlementRows] = await Promise.all([
++        fetchAllPages(fetchImpl, firstProducts, normalizedConfig.v2ApiKey, timeoutMs, `${projectPath}/products`),
++        fetchAllPages(fetchImpl, customerSubscriptions, normalizedConfig.v2ApiKey, timeoutMs, `${projectPath}/customers/${encodeURIComponent(userId)}/subscriptions`),
++        fetchAllPages(fetchImpl, `${normalizedConfig.baseUrl}${projectPath}/entitlements`, normalizedConfig.v2ApiKey, timeoutMs, `${projectPath}/entitlements`),
++      ]);
++      const matchingEntitlements = entitlementRows.filter((entry) => entry.project_id === normalizedConfig.premiumMap!.projectId && entry.lookup_key === normalizedConfig.premiumMap!.entitlementId);
++      if (matchingEntitlements.length !== 1 || !hasNonEmptyString(matchingEntitlements[0]?.id)) throw new RevenueCatProviderUnavailableError("invalid_response");
++      for (const binding of normalizedConfig.premiumMap!.bindings) {
++        if (productRows.filter((product) => catalogBinding(normalizedConfig.premiumMap!, binding, product)).length !== 1) {
++          throw new RevenueCatProviderUnavailableError("invalid_response");
++        }
++      }
++      return parseV2Result(normalizedConfig, userId, v1Payload, subscriptionRows, productRows, matchingEntitlements[0]!.id as string);
+     },
+   });
+ }
+-
+-// Kept for the existing, currently unused billing boundary. The online reader
+-// above is the canonical implementation for the ODK-119 slice.
+-export interface RevenueCatReconciler {
+-  reconcile(userId: string, externalCustomerId: string): Promise<Readonly<{ status: "active" | "expired" | "revoked"; expiresAt: string | null }>>;
+-}
+-
+-export function createUnavailableRevenueCatReconciler(): RevenueCatReconciler {
+-  return Object.freeze({
+-    async reconcile(): Promise<Readonly<{ status: "active" | "expired" | "revoked"; expiresAt: string | null }>> {
+-      throw new Error("revenuecat_not_composed");
+-    },
+-  });
+-}
+--- a/src/modules/billing/revenuecatBoundary.ts
++++ /dev/null
+@@ -1,15 +0,0 @@
+-import type { RevenueCatReconciler } from "../../infrastructure/revenuecat/client.js";
+-
+-export type BillingReconciliationRequest = Readonly<{ externalCustomerId: string }>;
+-
+-export interface BillingService {
+-  reconcile(userId: string, input: BillingReconciliationRequest): Promise<Readonly<{ status: string; expiresAt: string | null }>>;
+-}
+-
+-export class RevenueCatBillingService implements BillingService {
+-  public constructor(private readonly reconciler: RevenueCatReconciler) {}
+-
+-  public reconcile(userId: string, input: BillingReconciliationRequest) {
+-    return this.reconciler.reconcile(userId, input.externalCustomerId);
+-  }
+-}
+--- a/src/modules/billing/revenuecatWebhookStore.ts
++++ b/src/modules/billing/revenuecatWebhookStore.ts
+@@ -10,6 +10,7 @@
+ export interface RevenueCatWebhookStore {
+   process(event: RevenueCatEvent, appId: string, expectedEnvironment: "PRODUCTION" | "SANDBOX", entitlementId: string, productId: string): Promise<RevenueCatWebhookResult>;
+   identityAvailable(userId: string): Promise<boolean>;
++  markIdentityConflict(userId: string): Promise<void>;
+   markReceiptDelivery(userId: string, receiptId: string, deliveryClaimId: string, status: "sent" | "failed"): Promise<boolean>;
+ }
+ function strictlyNewer(timestamp: number, eventId: string, snapshot: { exists: boolean; get(field: string): unknown }): boolean {
+@@ -34,6 +35,13 @@
+   async identityAvailable(userId: string): Promise<boolean> {
+     const user = await this.db.collection(COLLECTIONS.users).doc(userId).get();
+     return hasActiveAuthorization(user) && user.get("billingIdentityConflict") !== true;
++  }
++  async markIdentityConflict(userId: string): Promise<void> {
++    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
++    await this.db.runTransaction(async tx => {
++      const user = await tx.get(userRef);
++      if (hasActiveAuthorization(user)) tx.update(userRef, { billingIdentityConflict: true });
++    });
+   }
+   async process(event: RevenueCatEvent, appId: string, expectedEnvironment: "PRODUCTION" | "SANDBOX", entitlementId: string, productId: string): Promise<RevenueCatWebhookResult> {
+     const parsed = revenueCatEventSchema.parse(event);
+--- a/tests/contentPackages.emulator.test.ts
++++ b/tests/contentPackages.emulator.test.ts
+@@ -1,3 +1,4 @@
++import { premiumSnapshotScope } from "./fixtures/premiumSnapshot.js";
+ import assert from "node:assert/strict";
+ import test from "node:test";
+ import { createHash } from "node:crypto";
+@@ -18,7 +19,7 @@
+     revenueCatEntitlementReader: { read: async (userId) => {
+       requestedUsers.push(userId);
+       if (result === "throw") throw new Error("provider offline");
+-      return { entitlement: "premium", productId: "monthly", state: result, providerExpiresAt, providerGraceExpiresAt, providerObservedAt: new Date().toISOString() };
++      return { ...premiumSnapshotScope, entitlement: "premium", productId: "monthly", state: result, providerExpiresAt, providerGraceExpiresAt, providerObservedAt: new Date().toISOString() };
+     } },
+     createContentPackages: (db) => {
+       const service = new ContentPackageService(new FirestoreContentPackagePointerStore(db), gcs.storage);
+--- a/tests/environment.test.ts
++++ b/tests/environment.test.ts
+@@ -20,6 +20,7 @@
+   SMTP_FROM_EMAIL: "sender@example.test",
+   SMTP_FROM_NAME: "Patternly",
+   REVENUECAT_WEBHOOK_SECRET: "test-only-revenuecat-secret",
++  REVENUECAT_PROJECT_ID: "proj8ae78267",
+   REVENUECAT_APP_ID: "patternly-test-app",
+   REVENUECAT_ENTITLEMENT_ID: "premium",
+   REVENUECAT_PRODUCT_ID: "premium-monthly",
+--- /dev/null
++++ b/tests/fixtures/premiumMap.fixture.json
+@@ -0,0 +1,25 @@
++{
++  "version": "premium-map-fixture-v1",
++  "projectId": "fixture-project",
++  "entitlementId": "premium",
++  "environment": "SANDBOX",
++  "fixture": true,
++  "bindings": [
++    {
++      "platform": "ios",
++      "store": "APP_STORE",
++      "appId": "fixture-ios",
++      "rcProductId": "fixture-rc-ios",
++      "storeProductId": "fixture.ios.monthly",
++      "basePlanId": null
++    },
++    {
++      "platform": "android",
++      "store": "PLAY_STORE",
++      "appId": "fixture-play",
++      "rcProductId": "fixture-rc-play",
++      "storeProductId": "fixture_play_monthly",
++      "basePlanId": "monthly"
++    }
++  ]
++}
+--- /dev/null
++++ b/tests/fixtures/premiumSnapshot.ts
+@@ -0,0 +1,8 @@
++// Explicit scope for injected reader doubles; never used by a service loader.
++export const premiumSnapshotScope = Object.freeze({
++  projectId: "fixture-project",
++  mapVersion: "premium-map-fixture-v1",
++  environment: "SANDBOX" as const,
++  reason: null,
++  sources: [],
++});
+--- a/tests/localSmoke.test.ts
++++ b/tests/localSmoke.test.ts
+@@ -27,6 +27,11 @@
+   assert.deepEqual(result, {
+     entitlement: "premium",
+     productId: "com.lkurczab.patternly.premium.monthly",
++    projectId: "proj8ae78267",
++    mapVersion: "premium-map-v1",
++    environment: "SANDBOX",
++    reason: null,
++    sources: [],
+     state: "expired",
+     providerExpiresAt: null,
+     providerGraceExpiresAt: null,
+@@ -51,7 +56,10 @@
+   const app = buildApplication({
+     environment: smokeEnvironment(source, keys),
+     firestore: null,
+-    stores: { users: { resolveExistingUser: async () => ({ userId: "local-smoke-user", authorizationGeneration: 1 }) } } as never,
++    stores: {
++      users: { resolveExistingUser: async () => ({ userId: "local-smoke-user", authorizationGeneration: 1 }) },
++      revenueCatWebhook: { identityAvailable: async () => true },
++    } as never,
+     verifier: { verify: async () => ({ provider: "firebase", subject: "local-smoke-subject", emailVerified: true, authTime: Math.floor(Date.now() / 1000) }) },
+     appCheckVerifier: localAppCheckVerifier(keys.appCheckToken),
+     revenueCatEntitlementReader: reader,
+--- /dev/null
++++ b/tests/premiumMap.test.ts
+@@ -0,0 +1,49 @@
++import assert from "node:assert/strict";
++import { readFile } from "node:fs/promises";
++import test from "node:test";
++import { defaultPremiumMap, findBinding, parsePremiumMap, productIdentifier } from "../src/config/premiumMap.js";
++
++const fixture = JSON.parse(await readFile(new URL("./fixtures/premiumMap.fixture.json", import.meta.url), "utf8")) as unknown;
++
++test("default map pins the verified Apple row and leaves Play unconfigured", () => {
++  const map = defaultPremiumMap("proj8ae78267", "SANDBOX");
++  assert.ok(map);
++  assert.equal(map.version, "premium-map-v1");
++  assert.equal(map.bindings.length, 1);
++  assert.deepEqual(map.bindings[0], {
++    platform: "ios", store: "APP_STORE", appId: "app7b06e9a4c1", rcProductId: "prod8d07384c8c",
++    storeProductId: "com.lkurczab.patternly.premium.monthly", basePlanId: null,
++  });
++  assert.equal(defaultPremiumMap("projtest", "SANDBOX"), null);
++  assert.equal(defaultPremiumMap("proj8ae78267", undefined), null);
++});
++
++test("fixture bindings require explicit test mode and preserve the three product identifiers", () => {
++  assert.throws(() => parsePremiumMap(fixture), /premium_map_fixture_forbidden/u);
++  const map = parsePremiumMap(fixture, { allowTestFixtures: true });
++  const play = findBinding(map, { appId: "fixture-play", productId: "fixture-rc-play", store: "PLAY_STORE" });
++  assert.ok(play);
++  assert.equal(play.storeProductId, "fixture_play_monthly");
++  assert.equal(productIdentifier(play), "fixture_play_monthly:monthly");
++  const apple = findBinding(map, { appId: "fixture-ios", productId: "fixture-rc-ios", store: "APP_STORE" });
++  assert.ok(apple);
++  assert.equal(productIdentifier(apple), "fixture.ios.monthly");
++  assert.equal(findBinding(map, { appId: "fixture-play", productId: "fixture_play_monthly", store: "PLAY_STORE" }), undefined);
++});
++
++test("map validation rejects unsupported stores, duplicate rows, placeholders and foreign projects", () => {
++  const base = (fixture as { [key: string]: unknown });
++  assert.throws(() => parsePremiumMap({ ...base, fixture: false, projectId: "proj8ae78267", bindings: [
++    { platform: "ios", store: "PLAY_STORE", appId: "app7b06e9a4c1", rcProductId: "prod8d07384c8c", storeProductId: "com.lkurczab.patternly.premium.monthly", basePlanId: null },
++  ] }), /premium_map_binding_invalid/u);
++  assert.throws(() => parsePremiumMap({ ...base, fixture: false, projectId: "proj8ae78267", bindings: [
++    { platform: "ios", store: "APP_STORE", appId: "app7b06e9a4c1", rcProductId: "prod8d07384c8c", storeProductId: "com.lkurczab.patternly.premium.monthly", basePlanId: null },
++    { platform: "ios", store: "APP_STORE", appId: "app7b06e9a4c1", rcProductId: "prod8d07384c8c", storeProductId: "com.lkurczab.patternly.premium.monthly", basePlanId: null },
++  ] }), /premium_map_binding_invalid|premium_map_duplicate_platform/u);
++  assert.throws(() => parsePremiumMap({ ...base, fixture: false, projectId: "projforeign", bindings: [
++    { platform: "ios", store: "APP_STORE", appId: "app7b06e9a4c1", rcProductId: "prod8d07384c8c", storeProductId: "com.lkurczab.patternly.premium.monthly", basePlanId: null },
++  ] }), /premium_map_project_invalid/u);
++  assert.throws(() => parsePremiumMap({ ...base, fixture: false, projectId: "proj8ae78267", bindings: [
++    { platform: "ios", store: "APP_STORE", appId: "your-app-id", rcProductId: "prod8d07384c8c", storeProductId: "com.lkurczab.patternly.premium.monthly", basePlanId: null },
++  ] }), /premium_map_binding_invalid/u);
++});
+--- a/tests/revenuecatClient.test.ts
++++ b/tests/revenuecatClient.test.ts
+@@ -1,5 +1,7 @@
+ import assert from "node:assert/strict";
++import { readFile } from "node:fs/promises";
+ import test from "node:test";
++import { parsePremiumMap } from "../src/config/premiumMap.js";
+ import {
+   createRevenueCatEntitlementReader,
+   RevenueCatProviderUnavailableError,
+@@ -12,184 +14,68 @@
+   SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
+ } from "../src/config/sandboxPromotionalAccess.js";
+ 
+-const observedAt = "2026-09-22T12:00:00.000Z";
+-const observedAtMs = Date.parse(observedAt);
+-const expiry = "2026-09-23T12:00:00.000Z";
+-const graceExpiry = "2026-09-22T18:00:00.000Z";
++const projectId = "fixture-project";
++const entitlementId = "premium";
++const entitlementResourceId = "fixture-entitlement";
++const userId = "account-1";
++const observedAt = Date.parse("2026-10-17T12:00:00.000Z");
++const expiry = Date.parse("2026-10-18T12:00:00.000Z");
++const graceExpiry = Date.parse("2026-10-17T18:00:00.000Z");
++const mapFixture = JSON.parse(await readFile(new URL("./fixtures/premiumMap.fixture.json", import.meta.url), "utf8")) as unknown;
++const map = parsePremiumMap(mapFixture, { allowTestFixtures: true });
++const appleBinding = map.bindings.find((binding) => binding.platform === "ios")!;
++const playBinding = map.bindings.find((binding) => binding.platform === "android")!;
+ 
+ const config: RevenueCatReaderConfig = {
+-  baseUrl: "https://api.revenuecat.test/",
++  baseUrl: "https://api.revenuecat.test",
+   apiKey: "server-secret",
+-  entitlementId: "premium",
+-  productId: "monthly",
+-  environment: "PRODUCTION",
++  v2ApiKey: "server-v2-secret",
++  entitlementId,
++  productId: "legacy-product-ignored-by-paid-reader",
++  environment: "SANDBOX",
++  revenueCatProjectId: projectId,
++  premiumMap: map,
++  allowTestFixtures: true,
+ };
+ 
+-function payload(overrides: {
+-  entitlement?: Record<string, unknown> | null;
+-  subscription?: Record<string, unknown> | null;
+-  requestDateMs?: number;
+-  originalAppUserId?: string;
++type SubscriptionOverrides = Partial<Record<string, unknown>>;
++function v2Subscription(binding: typeof appleBinding | typeof playBinding, overrides: SubscriptionOverrides = {}): Record<string, unknown> {
++  return {
++    id: `sub-${binding.platform}`,
++    customer_id: userId,
++    original_customer_id: userId,
++    product_id: binding.rcProductId,
++    store: binding.store === "APP_STORE" ? "app_store" : "play_store",
++    environment: "sandbox",
++    status: "active",
++    gives_access: true,
++    pending_payment: false,
++    ends_at: expiry,
++    store_subscription_identifier: binding.platform === "ios" ? "100000000000001" : "GPA.1234-5678-9012-34567..0",
++    management_url: binding.store === "APP_STORE" ? "https://apps.apple.com/account/subscriptions" : "https://play.google.com/store/account/subscriptions",
++    entitlements: { object: "list", items: [{ id: entitlementResourceId, project_id: projectId, state: "active" }], next_page: null },
++    ...overrides,
++  };
++}
++
++function v1Payload(overrides: {
++  owner?: string;
++  subscriptionKey?: string;
++  subscription?: Record<string, unknown>;
++  entitlement?: Record<string, unknown>;
+ } = {}): Record<string, unknown> {
+-  const entitlement = {
+-    product_identifier: "monthly",
+-    expires_date: expiry,
+-    grace_period_expires_date: null,
+-    ...overrides.entitlement,
+-  };
+-  const subscription = {
+-    expires_date: expiry,
+-    grace_period_expires_date: null,
+-    refunded_at: null,
+-    is_sandbox: false,
+-    store: "app_store",
+-    billing_issues_detected_at: null,
+-    ...overrides.subscription,
+-  };
++  const key = overrides.subscriptionKey ?? appleBinding.storeProductId;
+   return {
+-    request_date_ms: overrides.requestDateMs ?? observedAtMs,
++    request_date_ms: observedAt,
+     subscriber: {
+-      original_app_user_id: overrides.originalAppUserId ?? "user-1",
+-      entitlements: { premium: overrides.entitlement === null ? undefined : entitlement },
+-      subscriptions: { monthly: overrides.subscription === null ? undefined : subscription },
+-    },
+-  };
+-}
+-
+-function jsonResponse(body: unknown, status = 200): Response {
+-  return {
+-    ok: status >= 200 && status < 300,
+-    status,
+-    json: async () => body,
+-  } as Response;
+-}
+-
+-function readerFor(body: unknown, options: { timeoutMs?: number; onRequest?: RevenueCatFetch } = {}) {
+-  const fetchImpl: RevenueCatFetch = options.onRequest ?? (async () => jsonResponse(body));
+-  return createRevenueCatEntitlementReader(config, {
+-    fetch: fetchImpl,
+-    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+-  });
+-}
+-
+-test("RevenueCat reader returns active and sends the encoded subscriber request", async () => {
+-  let requestUrl = "";
+-  let requestInit: RequestInit | undefined;
+-  const reader = readerFor(payload(), {
+-    onRequest: async (url, init) => {
+-      requestUrl = url;
+-      requestInit = init;
+-      return jsonResponse(payload({ originalAppUserId: "user/with space" }));
+-    },
+-  });
+-
+-  assert.deepEqual(await reader.read("user/with space"), {
+-    entitlement: "premium",
+-    productId: "monthly",
+-    state: "active",
+-    providerExpiresAt: expiry,
+-    providerGraceExpiresAt: null,
+-    providerObservedAt: observedAt,
+-  });
+-  assert.equal(requestUrl, "https://api.revenuecat.test/v1/subscribers/user%2Fwith%20space");
+-  assert.equal(requestInit?.method, "GET");
+-  assert.deepEqual(requestInit?.headers, { accept: "application/json", authorization: "Bearer server-secret" });
+-  assert.ok(requestInit?.signal instanceof AbortSignal);
+-});
+-
+-test("RevenueCat cancellation keeps access active through the provider expiry", async () => {
+-  const result = await readerFor(payload({ subscription: { unsubscribe_detected_at: observedAt } })).read("user-1");
+-  assert.equal(result.state, "active");
+-  assert.equal(result.providerExpiresAt, expiry);
+-});
+-
+-test("RevenueCat billing issue with a future provider grace date returns grace", async () => {
+-  const result = await readerFor(payload({
+-    entitlement: { grace_period_expires_date: graceExpiry },
+-    subscription: { grace_period_expires_date: graceExpiry, billing_issues_detected_at: observedAt },
+-  })).read("user-1");
+-  assert.equal(result.state, "grace");
+-  assert.equal(result.providerGraceExpiresAt, graceExpiry);
+-});
+-
+-test("provider grace date confirms grace even when billing issue timestamp is absent", async () => {
+-  const result = await readerFor(payload({
+-    entitlement: { expires_date: "2026-09-21T12:00:00.000Z", grace_period_expires_date: graceExpiry },
+-    subscription: { expires_date: "2026-09-21T12:00:00.000Z", grace_period_expires_date: graceExpiry },
+-  })).read("user-1");
+-  assert.equal(result.state, "grace");
+-});
+-
+-test("RevenueCat billing issue without a future grace date returns hold", async () => {
+-  const result = await readerFor(payload({ subscription: { billing_issues_detected_at: observedAt } })).read("user-1");
+-  assert.equal(result.state, "hold");
+-  assert.equal(result.providerGraceExpiresAt, null);
+-});
+-
+-test("RevenueCat expiry is evaluated against request_date_ms and never extended locally", async () => {
+-  const result = await readerFor(payload({
+-    requestDateMs: Date.parse("2026-09-24T12:00:00.000Z"),
+-  })).read("user-1");
+-  assert.equal(result.state, "expired");
+-  assert.equal(result.providerExpiresAt, expiry);
+-});
+-
+-test("RevenueCat refund takes precedence over the expiry state", async () => {
+-  const result = await readerFor(payload({ subscription: { refunded_at: observedAt } })).read("user-1");
+-  assert.equal(result.state, "refunded");
+-});
+-
+-test("RevenueCat absent entitlement or subscription is expired", async () => {
+-  const absentEntitlement = await readerFor(payload({ entitlement: null })).read("user-1");
+-  const absentSubscription = await readerFor(payload({ subscription: null })).read("user-1");
+-  assert.equal(absentEntitlement.state, "expired");
+-  assert.equal(absentSubscription.state, "expired");
+-  assert.equal(absentEntitlement.providerExpiresAt, null);
+-  assert.equal(absentSubscription.providerExpiresAt, null);
+-});
+-
+-test("RevenueCat product or environment mismatch is unavailable", async () => {
+-  const mismatchedProduct = await readerFor(payload({ entitlement: { product_identifier: "annual" } })).read("user-1");
+-  const mismatchedEnvironment = await readerFor(payload({ subscription: { is_sandbox: true } })).read("user-1");
+-  assert.equal(mismatchedProduct.state, "unavailable");
+-  assert.equal(mismatchedEnvironment.state, "unavailable");
+-});
+-
+-test("RevenueCat alias or transferred customer cannot confirm another Patternly account", async () => {
+-  const result = await readerFor(payload({ originalAppUserId: "other-user" })).read("user-1");
+-  assert.equal(result.state, "unavailable");
+-});
+-
+-const promoCustomerId = "11111111-1111-4111-8111-111111111111";
+-const promoProductId = "rc_promo_premium_custom";
+-
+-function promoPayload(overrides: {
+-  requestDateMs?: number;
+-  originalAppUserId?: string;
+-  entitlement?: Record<string, unknown>;
+-  subscription?: Record<string, unknown>;
+-} = {}): Record<string, unknown> {
+-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
+-  return {
+-    request_date_ms: overrides.requestDateMs ?? Date.now() - 1_000,
+-    subscriber: {
+-      original_app_user_id: overrides.originalAppUserId ?? promoCustomerId,
+-      entitlements: {
+-        premium: {
+-          product_identifier: promoProductId,
+-          expires_date: expiresAt,
++      original_app_user_id: overrides.owner ?? userId,
++      entitlements: { [entitlementId]: { product_identifier: key, grace_period_expires_date: null, ...overrides.entitlement } },
++      subscriptions: {
++        [key]: {
++          store: key === appleBinding.storeProductId ? "app_store" : "play_store",
++          is_sandbox: true,
++          store_transaction_id: key === appleBinding.storeProductId ? 100000000000001 : "GPA.1234-5678-9012-34567..0",
+           grace_period_expires_date: null,
+-          ...overrides.entitlement,
+-        },
+-      },
+-      subscriptions: {
+-        [promoProductId]: {
+-          expires_date: expiresAt,
+-          grace_period_expires_date: null,
+-          refunded_at: null,
+-          is_sandbox: false,
+-          store: "promotional",
+-          billing_issues_detected_at: null,
+           ...overrides.subscription,
+         },
+       },
+@@ -197,102 +83,197 @@
+   };
+ }
+ 
+-function promoReader(body: unknown, policyExpiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1_000).toISOString()) {
+-  return createRevenueCatEntitlementReader({
+-    ...config,
+-    baseUrl: "https://api.revenuecat.com",
++function productsPage(overrides: { next?: unknown; products?: Record<string, unknown>[] } = {}): Record<string, unknown> {
++  const products = overrides.products ?? map.bindings.map((binding) => ({
++    state: "active",
++    id: binding.rcProductId,
++    app_id: binding.appId,
++    app: { id: binding.appId, project_id: projectId, type: binding.store === "APP_STORE" ? "app_store" : "play_store" },
++    project_id: projectId,
++    type: "subscription",
++    store_identifier: binding.platform === "android" ? `${binding.storeProductId}:${binding.basePlanId}` : binding.storeProductId,
++  }));
++  return { object: "list", items: products, next_page: overrides.next ?? null };
++}
++
++function defaultProductRows(): Record<string, unknown>[] {
++  return productsPage().items as Record<string, unknown>[];
++}
++
++function entitlementsPage(): Record<string, unknown> {
++  return { object: "list", items: [{ id: entitlementResourceId, project_id: projectId, lookup_key: "premium" }], next_page: null };
++}
++
++function subscriptionsPage(subscriptions: Record<string, unknown>[], next: unknown = null): Record<string, unknown> {
++  return { object: "list", items: subscriptions, next_page: next };
++}
++
++function jsonResponse(body: unknown, status = 200): Response {
++  return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
++}
++
++function readerFor(options: {
++  v1?: unknown;
++  products?: unknown;
++  subscriptions?: unknown;
++  fetch?: RevenueCatFetch;
++  extraPages?: Map<string, unknown>;
++} = {}) {
++  const fetchImpl: RevenueCatFetch = options.fetch ?? (async (url) => {
++    if (url.includes("/v1/subscribers/")) return jsonResponse(options.v1 ?? v1Payload());
++    if (url.includes("/products")) return jsonResponse(options.extraPages?.get(url) ?? options.products ?? productsPage());
++    if (url.includes("/entitlements")) return jsonResponse(entitlementsPage());
++    return jsonResponse(options.extraPages?.get(url) ?? options.subscriptions ?? subscriptionsPage([v2Subscription(appleBinding)]));
++  });
++  return createRevenueCatEntitlementReader(config, { fetch: fetchImpl });
++}
++
++test("reader validates v1 owner and returns one scoped v2 source for active access", async () => {
++  const seen: string[] = [];
++  const result = await readerFor({ fetch: async (url, init) => {
++    seen.push(url);
++    assert.equal((init?.headers as Record<string, string>).authorization, url.includes("/v1/") ? "Bearer server-secret" : "Bearer server-v2-secret");
++    return jsonResponse(url.includes("/v1/subscribers/") ? v1Payload() : url.includes("/products") ? productsPage() : url.includes("/entitlements") ? entitlementsPage() : subscriptionsPage([v2Subscription(appleBinding)]));
++  } }).read(userId);
++  assert.equal(seen.length, 4);
++  assert.deepEqual(result, {
++    entitlement: "premium",
++    productId: "com.lkurczab.patternly.premium.monthly",
++    state: "active",
++    providerExpiresAt: new Date(expiry).toISOString(),
++    providerGraceExpiresAt: null,
++    providerObservedAt: new Date(observedAt).toISOString(),
++    projectId,
++    mapVersion: "premium-map-fixture-v1",
+     environment: "SANDBOX",
+-    firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
+-    revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
+-    revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
+-    sandboxPromotionalAccess: {
+-      firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
+-      revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
+-      revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
+-      customerId: promoCustomerId,
+-      expiresAt: policyExpiresAt,
++    reason: null,
++    sources: [{ ...appleBinding, state: "active", reason: null, managementURL: "https://apps.apple.com/account/subscriptions", providerExpiresAt: new Date(expiry).toISOString(), providerGraceExpiresAt: null }],
++  });
++});
++
++test("reader fully follows product catalog and subscription next_page URLs", async () => {
++  const secondProducts = "https://api.revenuecat.test/v2/projects/fixture-project/products?starting_after=page1";
++  const secondSubscriptions = "https://api.revenuecat.test/v2/projects/fixture-project/customers/account-1/subscriptions?starting_after=sub1";
++  const requested: string[] = [];
++  const result = await readerFor({ fetch: async (url) => {
++    requested.push(url);
++    if (url.includes("/v1/subscribers/")) return jsonResponse(v1Payload());
++    if (url === secondProducts) return jsonResponse(productsPage({ products: [defaultProductRows()[1]!] }));
++    if (url.includes("/products?")) return jsonResponse(productsPage({ products: [defaultProductRows()[0]!], next: secondProducts }));
++    if (url.includes("/subscriptions?") || url.endsWith("/subscriptions")) {
++      return url.endsWith("/subscriptions") ? jsonResponse(subscriptionsPage([], secondSubscriptions)) : jsonResponse(subscriptionsPage([v2Subscription(playBinding)]));
++    }
++    if (url.includes("/entitlements")) return jsonResponse(entitlementsPage());
++    throw new Error("unexpected_request");
++  } }).read(userId);
++  assert.ok(requested.includes(secondProducts));
++  assert.ok(requested.includes(secondSubscriptions));
++  assert.equal(result.sources[0]?.platform, "android");
++  assert.equal(result.sources[0]?.storeProductId, "fixture_play_monthly");
++});
++
++test("v2 scope, owner, environment, catalog and incomplete paging failures never grant access", async () => {
++  const cases: Array<{ label: string; input: Parameters<typeof readerFor>[0] }> = [
++    { label: "wrong original owner", input: { subscriptions: subscriptionsPage([v2Subscription(appleBinding, { original_customer_id: "alias" })]) } },
++    { label: "wrong product catalog app", input: { products: productsPage({ products: [{ ...defaultProductRows()[0]!, app_id: "foreign-app", app: { id: "foreign-app", project_id: projectId, type: "app_store" } }] }) } },
++    { label: "wrong environment", input: { subscriptions: subscriptionsPage([v2Subscription(appleBinding, { environment: "production" })]) } },
++    { label: "unknown status", input: { subscriptions: subscriptionsPage([v2Subscription(appleBinding, { status: "future_status" })]) } },
++    { label: "incomplete page", input: { subscriptions: subscriptionsPage([], "https://foreign.example/next") } },
++  ];
++  for (const item of cases) {
++    const read = readerFor(item.input).read(userId);
++    if (item.label === "wrong original owner") {
++      const result = await read;
++      assert.equal(result.state, "unavailable", item.label);
++      assert.equal(result.reason, "identity_conflict", item.label);
++    } else if (item.label === "wrong environment" || item.label === "unknown status") {
++      assert.equal((await read).state, "unavailable", item.label);
++    } else {
++      await assert.rejects(read, (error: unknown) => error instanceof RevenueCatProviderUnavailableError, item.label);
++    }
++  }
++});
++
++test("active and grace access use positive v2 gives_access and exact v1 transaction matching", async () => {
++  const active = await readerFor({ subscriptions: subscriptionsPage([v2Subscription(appleBinding, { status: "in_billing_retry", gives_access: false })]) }).read(userId);
++  assert.equal(active.state, "hold");
++  assert.equal(active.sources[0]?.reason, "account_hold");
++
++  const grace = await readerFor({
++    v1: v1Payload({ subscription: { store_transaction_id: "100000000000001", grace_period_expires_date: new Date(graceExpiry).toISOString() }, entitlement: { grace_period_expires_date: new Date(graceExpiry).toISOString() } }),
++    subscriptions: subscriptionsPage([v2Subscription(appleBinding, { status: "in_grace_period", ends_at: expiry })]),
++  }).read(userId);
++  assert.equal(grace.state, "grace");
++  assert.equal(grace.providerGraceExpiresAt, new Date(graceExpiry).toISOString());
++
++  const unsafe = await readerFor({
++    v1: v1Payload({ subscription: { store_transaction_id: 9007199254740992, grace_period_expires_date: new Date(graceExpiry).toISOString() } }),
++    subscriptions: subscriptionsPage([v2Subscription(appleBinding, { status: "in_grace_period" })]),
++  }).read(userId);
++  assert.equal(unsafe.state, "unavailable");
++});
++
++test("two active store sources grant one premium and preserve both management URLs", async () => {
++  const result = await readerFor({
++    subscriptions: subscriptionsPage([v2Subscription(appleBinding), v2Subscription(playBinding)]),
++  }).read(userId);
++  assert.equal(result.state, "active");
++  assert.deepEqual(result.sources.map((source) => source.platform), ["ios", "android"]);
++});
++
++test("OR aggregation selects timestamps from the source with the latest effective access end", async () => {
++  const playKey = "fixture_play_monthly:monthly";
++  const withPlayGrace = (graceEnd: number) => ({
++    request_date_ms: observedAt,
++    subscriber: {
++      original_app_user_id: userId,
++      entitlements: { premium: { product_identifier: playKey, grace_period_expires_date: new Date(graceEnd).toISOString() } },
++      subscriptions: { [playKey]: { store: "play_store", is_sandbox: true, store_transaction_id: "GPA.1234-5678-9012-34567..0", grace_period_expires_date: new Date(graceEnd).toISOString() } },
+     },
+-  }, { fetch: async () => jsonResponse(body) });
+-}
+-
+-test("sandbox promotional entitlement maps to the configured Patternly Premium namespace and caps expiry at policy cutoff", async () => {
+-  const policyExpiry = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+-  const result = await promoReader(promoPayload(), policyExpiry).read(promoCustomerId);
+-  assert.equal(result.entitlement, "premium");
+-  assert.equal(result.productId, "monthly");
++  });
++  const playGrace = v2Subscription(playBinding, { status: "in_grace_period", ends_at: observedAt - 1 });
++
++  const activeWins = await readerFor({ v1: withPlayGrace(observedAt + 6 * 60 * 60 * 1_000), subscriptions: subscriptionsPage([
++    v2Subscription(appleBinding), playGrace,
++  ]) }).read(userId);
++  assert.equal(activeWins.state, "active");
++  assert.equal(activeWins.providerExpiresAt, new Date(expiry).toISOString());
++  assert.equal(activeWins.providerGraceExpiresAt, null);
++
++  const graceWins = await readerFor({ v1: withPlayGrace(observedAt + 36 * 60 * 60 * 1_000), subscriptions: subscriptionsPage([
++    v2Subscription(appleBinding), playGrace,
++  ]) }).read(userId);
++  assert.equal(graceWins.state, "grace");
++  assert.equal(graceWins.providerExpiresAt, new Date(observedAt - 1).toISOString());
++  assert.equal(graceWins.providerGraceExpiresAt, new Date(observedAt + 36 * 60 * 60 * 1_000).toISOString());
++});
++
++test("promotional access remains constrained to the configured test customer and cutoff", async () => {
++  const promoCustomerId = "sandbox-test-account";
++  const promoExpiresAt = "2026-10-20T12:00:00.000Z";
++  const promoMap = parsePremiumMap({
++    version: "premium-map-v1", projectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID, entitlementId: "premium", environment: "SANDBOX",
++    bindings: [{ platform: "ios", store: "APP_STORE", appId: "app7b06e9a4c1", rcProductId: "prod8d07384c8c", storeProductId: "com.lkurczab.patternly.premium.monthly", basePlanId: null }],
++  });
++  const promoConfig = { ...config, baseUrl: "https://api.revenuecat.com", premiumMap: promoMap, revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID, revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID, firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++    sandboxPromotionalAccess: { customerId: promoCustomerId, expiresAt: promoExpiresAt,
++      firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID, revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++      revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID } };
++  const subscriber = {
++    original_app_user_id: promoCustomerId,
++    entitlements: { [entitlementId]: { product_identifier: "rc_promo_premium_custom", expires_date: new Date(expiry).toISOString(), grace_period_expires_date: null } },
++    subscriptions: { rc_promo_premium_custom: { store: "promotional", is_sandbox: false, expires_date: new Date(expiry).toISOString(), grace_period_expires_date: null, refunded_at: null, billing_issues_detected_at: null } },
++  };
++  const result = await createRevenueCatEntitlementReader(promoConfig, { fetch: async () => jsonResponse({ request_date_ms: observedAt, subscriber }) }).read(promoCustomerId);
+   assert.equal(result.state, "active");
+-  assert.equal(result.providerExpiresAt, policyExpiry);
+-  assert.equal(result.providerGraceExpiresAt, null);
+-});
+-
+-test("sandbox promotional entitlement requires exact account, project, app, sandbox and promotional product contract", async () => {
+-  for (const body of [
+-    promoPayload({ originalAppUserId: "firebase-uid" }),
+-    promoPayload({ entitlement: { product_identifier: "rc_promo_unknown" } }),
+-    promoPayload({ entitlement: { expires_date: new Date(Date.now() + 48 * 60 * 60 * 1_000).toISOString() } }),
+-    promoPayload({ subscription: { store: "app_store" } }),
+-    promoPayload({ subscription: { is_sandbox: true } }),
+-    promoPayload({ subscription: { refunded_at: observedAt } }),
+-    promoPayload({ subscription: { grace_period_expires_date: graceExpiry } }),
+-    promoPayload({ subscription: { billing_issues_detected_at: observedAt } }),
+-  ]) assert.equal((await promoReader(body).read(promoCustomerId)).state, "unavailable");
+-
+-  assert.equal((await promoReader(promoPayload()).read("another-account")).state, "unavailable");
+-  assert.equal((await createRevenueCatEntitlementReader({ ...config, environment: "PRODUCTION" }, { fetch: async () => jsonResponse(promoPayload()) }).read(promoCustomerId)).state, "unavailable");
+-});
+-
+-test("sandbox promotional entitlement respects both provider and local policy cutoffs", async () => {
+-  const providerAfterCutoff = Date.now() + 2_000;
+-  const policyCutoff = new Date(providerAfterCutoff - 1_000).toISOString();
+-  assert.equal((await promoReader(promoPayload({ requestDateMs: providerAfterCutoff }), policyCutoff).read(promoCustomerId)).state, "unavailable");
+-
+-  const localExpiredCutoff = new Date(Date.now() - 1_000).toISOString();
+-  assert.equal((await promoReader(promoPayload(), localExpiredCutoff).read(promoCustomerId)).state, "unavailable");
+-});
+-
+-test("missing entitlement or subscription map is unavailable rather than an authoritative expiry", async () => {
+-  const noEntitlementMap = payload();
+-  const noSubscriptionMap = payload();
+-  delete (noEntitlementMap.subscriber as Record<string, unknown>).entitlements;
+-  delete (noSubscriptionMap.subscriber as Record<string, unknown>).subscriptions;
+-  assert.equal((await readerFor(noEntitlementMap).read("user-1")).state, "unavailable");
+-  assert.equal((await readerFor(noSubscriptionMap).read("user-1")).state, "unavailable");
+-});
+-
+-test("RevenueCat missing required expiry is unavailable", async () => {
+-  const result = await readerFor(payload({
+-    entitlement: { expires_date: null },
+-    subscription: { expires_date: null },
+-  })).read("user-1");
+-  assert.equal(result.state, "unavailable");
+-});
+-
+-test("RevenueCat network, HTTP, non-JSON and timeout failures are typed and secret-free", async () => {
+-  const networkReader = readerFor(null, { onRequest: async () => { throw new Error("server-secret network failure"); } });
+-  await assert.rejects(networkReader.read("user-1"), (error: unknown) => {
+-    assert.ok(error instanceof RevenueCatProviderUnavailableError);
+-    assert.equal((error as RevenueCatProviderUnavailableError).kind, "network");
+-    assert.doesNotMatch((error as Error).message, /server-secret/u);
+-    return true;
+-  });
+-
+-  const httpReader = readerFor(null, { onRequest: async () => jsonResponse({ error: "server-secret" }, 500) });
+-  await assert.rejects(httpReader.read("user-1"), (error: unknown) => error instanceof RevenueCatProviderUnavailableError && error.kind === "http");
+-
+-  const nonJsonReader = readerFor(null, { onRequest: async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("invalid JSON"); } }) as unknown as Response });
+-  await assert.rejects(nonJsonReader.read("user-1"), (error: unknown) => error instanceof RevenueCatProviderUnavailableError && error.kind === "non_json");
+-
+-  const timeoutReader = readerFor(null, { timeoutMs: 10, onRequest: async (_url, init) => await new Promise<Response>((_resolve, reject) => {
+-    init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+-  }) });
+-  await assert.rejects(timeoutReader.read("user-1"), (error: unknown) => error instanceof RevenueCatProviderUnavailableError && error.kind === "timeout");
+-
+-  const bodyTimeoutReader = readerFor(null, { timeoutMs: 10, onRequest: async (_url, init) => ({
+-    ok: true,
+-    status: 200,
+-    json: async () => await new Promise<unknown>((_resolve, reject) => {
+-      init?.signal?.addEventListener("abort", () => reject(new Error("body aborted")), { once: true });
+-    }),
+-  }) as unknown as Response });
+-  await assert.rejects(bodyTimeoutReader.read("user-1"), (error: unknown) => error instanceof RevenueCatProviderUnavailableError && error.kind === "timeout");
+-});
++  assert.equal(result.reason, "promotional");
++  assert.deepEqual(result.sources, []);
++});
++
++test("paid reader never substitutes its v1 credential for a missing v2 credential", async () => {
++  let calls = 0;
++  await assert.rejects(createRevenueCatEntitlementReader({ ...config, v2ApiKey: undefined }, { fetch: async () => {
++    calls++; return jsonResponse(v1Payload());
++  } }).read(userId), RevenueCatProviderUnavailableError);
++  assert.equal(calls, 1);
++});
+--- a/tests/revenuecatEntitlements.emulator.test.ts
++++ b/tests/revenuecatEntitlements.emulator.test.ts
+@@ -1,9 +1,11 @@
++import { premiumSnapshotScope } from "./fixtures/premiumSnapshot.js";
+ import assert from "node:assert/strict";
+ import test, { after, beforeEach } from "node:test";
+ import type { RevenueCatEntitlementReader } from "../src/infrastructure/revenuecat/client.js";
+ import { TEST_APP_CHECK_TOKEN, clearFirestore, createEmulatorContext, createVerifiedAuthUser, registerAuthUser } from "./support.js";
+ 
+ const confirmed = {
++  ...premiumSnapshotScope,
+   entitlement: "premium",
+   productId: "monthly",
+   state: "grace" as const,
+@@ -12,15 +14,17 @@
+   providerObservedAt: "2026-09-21T12:00:00.000Z",
+ };
+ let fail = false;
++let duringRead: (() => Promise<void>) | null = null;
+ let state: Awaited<ReturnType<RevenueCatEntitlementReader["read"]>> = confirmed;
+ const reads: string[] = [];
+ const context = createEmulatorContext({ revenueCatEntitlementReader: { read: async (userId) => {
+   reads.push(userId);
+   if (fail) throw new Error("provider_timeout");
++  if (duringRead) await duringRead();
+   return state;
+ } } });
+ after(async () => context.close());
+-beforeEach(async () => { await clearFirestore(); fail = false; state = confirmed; reads.length = 0; });
++beforeEach(async () => { await clearFirestore(); fail = false; duringRead = null; state = confirmed; reads.length = 0; });
+ 
+ test("entitlement refresh requires App Check and returns only a fresh provider result for the bound account", async () => {
+   const auth = await createVerifiedAuthUser();
+@@ -61,6 +65,39 @@
+   assert.deepEqual(response.json().entitlements[0], { accountId: registered.userId, ...state, source: "revenuecat" });
+ });
+ 
++
++
++test("identity conflict blocks before provider read and is persistently fenced after a conflicting owner result", async () => {
++  const auth = await createVerifiedAuthUser();
++  const registered = await registerAuthUser(context, auth);
++  const headers = { authorization: `Bearer ${registered.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
++  const user = context.db.collection("users").doc(registered.userId);
++  await user.update({ billingIdentityConflict: true });
++  const blocked = await context.app.inject({ method: "GET", url: "/v1/entitlements", headers });
++  assert.equal(blocked.statusCode, 503);
++  assert.deepEqual(blocked.json(), { error: { code: "identity_reconciliation_required" } });
++  assert.deepEqual(reads, []);
++  await user.update({ billingIdentityConflict: false });
++  state = { ...confirmed, state: "unavailable", reason: "identity_conflict" };
++  const conflict = await context.app.inject({ method: "GET", url: "/v1/entitlements", headers });
++  assert.equal(conflict.statusCode, 503);
++  assert.deepEqual(conflict.json(), blocked.json());
++  assert.equal((await user.get()).get("billingIdentityConflict"), true);
++  assert.deepEqual(reads, [registered.userId]);
++});
++
++test("identity conflict appearing during a fresh provider read denies the response", async () => {
++  const auth = await createVerifiedAuthUser();
++  const registered = await registerAuthUser(context, auth);
++  const user = context.db.collection("users").doc(registered.userId);
++  duringRead = async () => { await user.update({ billingIdentityConflict: true }); };
++  const response = await context.app.inject({ method: "GET", url: "/v1/entitlements", headers: {
++    authorization: `Bearer ${registered.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN,
++  } });
++  assert.equal(response.statusCode, 503);
++  assert.deepEqual(response.json(), { error: { code: "identity_reconciliation_required" } });
++});
++
+ test("missing provider composition fails closed with 503", async () => {
+   const auth = await createVerifiedAuthUser();
+   const registered = await registerAuthUser(context, auth);
+--- /dev/null
++++ b/tests/revenuecatSafetyRegression.test.ts
+@@ -0,0 +1,128 @@
++import assert from "node:assert/strict";
++import test from "node:test";
++import { createRevenueCatEntitlementReader, RevenueCatProviderUnavailableError, type RevenueCatFetch } from "../src/infrastructure/revenuecat/client.js";
++import { defaultPremiumMap } from "../src/config/premiumMap.js";
++import { SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID, SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID, SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID } from "../src/config/sandboxPromotionalAccess.js";
++const observedAt = "2026-09-22T12:00:00.000Z", graceExpiry = "2026-09-22T18:00:00.000Z";
++const config = { baseUrl: "https://api.revenuecat.test", apiKey: "server-secret", entitlementId: "premium", productId: "com.lkurczab.patternly.premium.monthly", environment: "SANDBOX" as const, premiumMap: defaultPremiumMap(SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID, "SANDBOX") };
++function jsonResponse(body: unknown, status = 200): Response { return new Response(JSON.stringify(body), { status }); }
++function readerFor(body: unknown, options: { timeoutMs?: number; onRequest?: RevenueCatFetch } = {}) { return createRevenueCatEntitlementReader(config, { fetch: options.onRequest ?? (async () => jsonResponse(body)), ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }) }); }
++const promoCustomerId = "11111111-1111-4111-8111-111111111111";
++const promoProductId = "rc_promo_premium_custom";
++
++function promoPayload(overrides: {
++  requestDateMs?: number;
++  originalAppUserId?: string;
++  entitlement?: Record<string, unknown>;
++  subscription?: Record<string, unknown>;
++} = {}): Record<string, unknown> {
++  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
++  return {
++    request_date_ms: overrides.requestDateMs ?? Date.now() - 1_000,
++    subscriber: {
++      original_app_user_id: overrides.originalAppUserId ?? promoCustomerId,
++      entitlements: {
++        premium: {
++          product_identifier: promoProductId,
++          expires_date: expiresAt,
++          grace_period_expires_date: null,
++          ...overrides.entitlement,
++        },
++      },
++      subscriptions: {
++        [promoProductId]: {
++          expires_date: expiresAt,
++          grace_period_expires_date: null,
++          refunded_at: null,
++          is_sandbox: false,
++          store: "promotional",
++          billing_issues_detected_at: null,
++          ...overrides.subscription,
++        },
++      },
++    },
++  };
++}
++
++function promoReader(body: unknown, policyExpiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1_000).toISOString()) {
++  return createRevenueCatEntitlementReader({
++    ...config,
++    baseUrl: "https://api.revenuecat.com",
++    environment: "SANDBOX",
++    firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++    revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++    revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
++    sandboxPromotionalAccess: {
++      firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
++      revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,
++      revenueCatAppId: SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID,
++      customerId: promoCustomerId,
++      expiresAt: policyExpiresAt,
++    },
++  }, { fetch: async () => jsonResponse(body) });
++}
++
++test("sandbox promotional entitlement maps to the configured Patternly Premium namespace and caps expiry at policy cutoff", async () => {
++  const policyExpiry = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
++  const result = await promoReader(promoPayload(), policyExpiry).read(promoCustomerId);
++  assert.equal(result.entitlement, "premium");
++  assert.equal(result.productId, "com.lkurczab.patternly.premium.monthly");
++  assert.equal(result.state, "active");
++  assert.equal(result.providerExpiresAt, policyExpiry);
++  assert.equal(result.providerGraceExpiresAt, null);
++});
++
++test("sandbox promotional entitlement requires exact account, project, app, sandbox and promotional product contract", async () => {
++  for (const body of [
++    promoPayload({ originalAppUserId: "firebase-uid" }),
++    promoPayload({ entitlement: { product_identifier: "rc_promo_unknown" } }),
++    promoPayload({ entitlement: { expires_date: new Date(Date.now() + 48 * 60 * 60 * 1_000).toISOString() } }),
++    promoPayload({ subscription: { store: "app_store" } }),
++    promoPayload({ subscription: { is_sandbox: true } }),
++    promoPayload({ subscription: { refunded_at: observedAt } }),
++    promoPayload({ subscription: { grace_period_expires_date: graceExpiry } }),
++    promoPayload({ subscription: { billing_issues_detected_at: observedAt } }),
++  ]) assert.equal((await promoReader(body).read(promoCustomerId)).state, "unavailable");
++
++  assert.equal((await promoReader(promoPayload()).read("another-account")).state, "unavailable");
++  assert.equal((await createRevenueCatEntitlementReader({ ...config, environment: "PRODUCTION" }, { fetch: async () => jsonResponse(promoPayload()) }).read(promoCustomerId)).state, "unavailable");
++});
++
++test("sandbox promotional entitlement respects both provider and local policy cutoffs", async () => {
++  const providerAfterCutoff = Date.now() + 2_000;
++  const policyCutoff = new Date(providerAfterCutoff - 1_000).toISOString();
++  assert.equal((await promoReader(promoPayload({ requestDateMs: providerAfterCutoff }), policyCutoff).read(promoCustomerId)).state, "unavailable");
++
++  const localExpiredCutoff = new Date(Date.now() - 1_000).toISOString();
++  assert.equal((await promoReader(promoPayload(), localExpiredCutoff).read(promoCustomerId)).state, "unavailable");
++});
++
++test("RevenueCat network, HTTP, non-JSON and timeout failures are typed and secret-free", async () => {
++  const networkReader = readerFor(null, { onRequest: async () => { throw new Error("server-secret network failure"); } });
++  await assert.rejects(networkReader.read("user-1"), (error: unknown) => {
++    assert.ok(error instanceof RevenueCatProviderUnavailableError);
++    assert.equal((error as RevenueCatProviderUnavailableError).kind, "network");
++    assert.doesNotMatch((error as Error).message, /server-secret/u);
++    return true;
++  });
++
++  const httpReader = readerFor(null, { onRequest: async () => jsonResponse({ error: "server-secret" }, 500) });
++  await assert.rejects(httpReader.read("user-1"), (error: unknown) => error instanceof RevenueCatProviderUnavailableError && error.kind === "http");
++
++  const nonJsonReader = readerFor(null, { onRequest: async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("invalid JSON"); } }) as unknown as Response });
++  await assert.rejects(nonJsonReader.read("user-1"), (error: unknown) => error instanceof RevenueCatProviderUnavailableError && error.kind === "non_json");
++
++  const timeoutReader = readerFor(null, { timeoutMs: 10, onRequest: async (_url, init) => await new Promise<Response>((_resolve, reject) => {
++    init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
++  }) });
++  await assert.rejects(timeoutReader.read("user-1"), (error: unknown) => error instanceof RevenueCatProviderUnavailableError && error.kind === "timeout");
++
++  const bodyTimeoutReader = readerFor(null, { timeoutMs: 10, onRequest: async (_url, init) => ({
++    ok: true,
++    status: 200,
++    json: async () => await new Promise<unknown>((_resolve, reject) => {
++      init?.signal?.addEventListener("abort", () => reject(new Error("body aborted")), { once: true });
++    }),
++  }) as unknown as Response });
++  await assert.rejects(bodyTimeoutReader.read("user-1"), (error: unknown) => error instanceof RevenueCatProviderUnavailableError && error.kind === "timeout");
++});
+--- a/tests/sandboxPromotionalPackages.emulator.test.ts
++++ b/tests/sandboxPromotionalPackages.emulator.test.ts
+@@ -1,3 +1,4 @@
++import { premiumSnapshotScope } from "./fixtures/premiumSnapshot.js";
+ import assert from "node:assert/strict";
+ import test from "node:test";
+ import { createHash } from "node:crypto";
+@@ -44,7 +45,7 @@
+     environment,
+     revenueCatEntitlementReader: { read: async (userId) => {
+       requestedUsers.push(userId);
+-      return { entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() };
++      return { ...premiumSnapshotScope, entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() };
+     } },
+     createContentPackages: (db) => {
+       service = new ContentPackageService(new FirestoreContentPackagePointerStore(db), gcs.storage);
+@@ -79,7 +80,7 @@
+       stores: context.stores,
+       revenueCatEntitlementReader: { read: async (userId: string) => {
+         requestedUsers.push(userId);
+-        return { entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() };
++        return { ...premiumSnapshotScope, entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() };
+       } },
+       contentPackages: service!,
+     });
+@@ -148,7 +149,7 @@
+       verifier: createFirebaseTokenVerifier(expiredEnvironment),
+       appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
+       stores: context.stores,
+-      revenueCatEntitlementReader: { read: async (userId: string) => { requestedUsers.push(userId); return { entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() }; } },
++      revenueCatEntitlementReader: { read: async (userId: string) => { requestedUsers.push(userId); return { ...premiumSnapshotScope, entitlement: "premium", productId: "monthly", state: "active", providerExpiresAt, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() }; } },
+       contentPackages: service,
+     });
+     const signsBeforeExpiredRequest = gcs.calls.filter((call) => call.operation === "sign").length;

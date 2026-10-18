@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type { Firestore, DocumentReference, Query } from "firebase-admin/firestore";
-import { FieldPath, FieldValue, Timestamp } from "firebase-admin/firestore";
+import type { Firestore, DocumentReference } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { COLLECTIONS } from "../../infrastructure/firestore/paths.js";
 import type { FirebaseAdminAuth } from "../../infrastructure/firebase/adminAuth.js";
 import { asRecord, asTimestamp, now } from "../../infrastructure/firestore/values.js";
@@ -14,6 +14,7 @@ import type {
   RecoveryOperationRuntime,
 } from "./contracts.js";
 import type { PseudonymKeyRing } from "../../infrastructure/security/pseudonymKeyRing.js";
+import { ACCOUNT_DELETION_TOMBSTONE_RETENTION_MS, LEGACY_ACCOUNT_DELETION_TOMBSTONE_RETENTION_MS, assertFirestoreAccountErasureComplete, deletedIdentityLogicalExpiryMs, eraseFirestoreAccountData } from "./firestoreAccountErasure.js";
 import { assertExpectedAuthorizationGeneration, storedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
 import { RETENTION_POLICY } from "../retention/policy.js";
 import { addUtcCalendarMonths } from "../../infrastructure/time/utcCalendar.js";
@@ -21,7 +22,6 @@ import { RecoveryOperationCipher } from "./recoveryOperationCipher.js";
 import type { RecoveryOperationCipherContext, RecoveryOperationCipherEnvelope } from "./recoveryOperationCipher.js";
 
 const RECOVERY_CODE_COUNT = 10;
-const TOMBSTONE_RETENTION_MS = 45 * 24 * 60 * 60 * 1000;
 const SECURITY_OPERATION_LEASE_MS = 2 * 60 * 1000;
 const RECOVERY_RESULT_TTL_MS = 55 * 60 * 1000;
 const RECOVERY_OPERATION_TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -48,6 +48,7 @@ type StoredDeletionOperation = Readonly<{
   expectedAuthorizationGeneration: number;
   fence: string;
   leaseUntil: Timestamp | Date;
+  firestoreErasureCheckpoint: Readonly<{ deletedAt: Timestamp | Date; expiresAt: Timestamp | Date }> | null;
 }>;
 
 const DELETION_PHASES: readonly DeletionPhase[] = Object.freeze(["prepared", "sessions_revoking", "auth_deleting", "firestore_deleting", "remote_deleted", "complete"]);
@@ -72,10 +73,12 @@ function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-function isExpiredIdentityTombstone(value: unknown): boolean {
-  const expiresAt = asRecord(value, "deleted_identity").expiresAt;
-  const expiresAtMs = expiresAt instanceof Timestamp ? expiresAt.toMillis() : expiresAt instanceof Date ? expiresAt.getTime() : Number.POSITIVE_INFINITY;
-  return expiresAtMs <= Date.now();
+function isExpiredIdentityTombstone(value: unknown, expected: Readonly<{ documentId: string; keyVersion: string; subjectHmac: string }>): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const data = value as Record<string, unknown>;
+  if (data.provider !== "firebase" || data.keyVersion !== expected.keyVersion || data.subjectHmac !== expected.subjectHmac
+    || `${data.keyVersion}_${data.subjectHmac}` !== expected.documentId) return false;
+  return (deletedIdentityLogicalExpiryMs(data) ?? Number.POSITIVE_INFINITY) <= Date.now();
 }
 
 function deletionLogicalExpiry(data: Record<string, unknown>, expiryField: string): number {
@@ -195,6 +198,24 @@ function deletionIdentityReferences(value: unknown): readonly StoredDeletionIden
     references.push(Object.freeze({ identityId: data.identityId, provider: data.provider, keyVersion: data.keyVersion, subjectHmac: data.subjectHmac }));
   }
   return Object.freeze(references);
+}
+
+function deletionErasureCheckpoint(data: Record<string, unknown>): StoredDeletionOperation["firestoreErasureCheckpoint"] {
+  const hasDeletedAt = Object.hasOwn(data, "firestoreErasureDeletedAt");
+  const hasExpiresAt = Object.hasOwn(data, "firestoreErasureExpiresAt");
+  if (!hasDeletedAt && !hasExpiresAt) return null;
+  const deletedAt = data.firestoreErasureDeletedAt;
+  const expiresAt = data.firestoreErasureExpiresAt;
+  if (!(deletedAt instanceof Timestamp || deletedAt instanceof Date) || !(expiresAt instanceof Timestamp || expiresAt instanceof Date)) throw new Error("remote_deletion_pending");
+  const logicalExpiry = deletedIdentityLogicalExpiryMs({
+    provider: "firebase",
+    keyVersion: "checkpoint",
+    subjectHmac: "0".repeat(64),
+    deletedAt,
+    expiresAt,
+  });
+  if (logicalExpiry === null) throw new Error("remote_deletion_pending");
+  return Object.freeze({ deletedAt, expiresAt });
 }
 
 function isAuthUserNotFound(error: unknown): boolean {
@@ -640,9 +661,10 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
         .map((identity) => identity.subject as string))];
       if (subjects.length !== 1 || !subjects[0]) return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "expired_or_invalid") });
       const firebaseUid = subjects[0];
-      const tombstoneRefs = this.pseudonymKeyRing.candidates("firebase", firebaseUid).map(({ documentId }) => this.db.collection(COLLECTIONS.deletedIdentities).doc(documentId));
+      const tombstoneCandidates = this.pseudonymKeyRing.candidates("firebase", firebaseUid);
+      const tombstoneRefs = tombstoneCandidates.map(({ documentId }) => this.db.collection(COLLECTIONS.deletedIdentities).doc(documentId));
       const tombstones = await transaction.getAll(...tombstoneRefs);
-      if (tombstones.some((tombstone) => tombstone.exists && !isExpiredIdentityTombstone(tombstone.data()))) return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "expired_or_invalid") });
+      if (tombstones.some((tombstone, index) => tombstone.exists && !isExpiredIdentityTombstone(tombstone.data(), tombstoneCandidates[index]!))) return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "expired_or_invalid") });
       const resultGeneration = generation + 1;
       const fence = randomUUID();
       const authTimeBarrier = Math.ceil(nowMs / 1_000);
@@ -1056,7 +1078,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
     }
     if (!operation.userId) throw new Error("remote_deletion_pending");
     try {
-      await this.assertFirestoreDeletionComplete(operation.userId, operation.identityRefs);
+      await this.assertFirestoreDeletionComplete(operation.userId, operation.identityRefs, operation.firestoreErasureCheckpoint ?? undefined);
     } catch {
       throw new Error("remote_deletion_pending");
     }
@@ -1072,7 +1094,11 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       const currentIdentityRefs = deletionIdentityReferences(currentData.identityRefs);
       if (!sameIdentityReferences(operation.identityRefs, currentIdentityRefs)) throw new Error("remote_deletion_pending");
       const tombstoneSnapshots = await transaction.getAll(...operation.identityRefs.map((identity) => this.db.collection(COLLECTIONS.deletedIdentities).doc(identity.identityId)));
-      this.assertTombstoneSnapshots(operation.identityRefs, tombstoneSnapshots);
+      const checkpoint = deletionErasureCheckpoint(currentData);
+      if (checkpoint && operation.firestoreErasureCheckpoint
+        && (asTimestamp(checkpoint.deletedAt, "deletion_checkpoint").toMillis() !== asTimestamp(operation.firestoreErasureCheckpoint.deletedAt, "deletion_checkpoint").toMillis()
+          || asTimestamp(checkpoint.expiresAt, "deletion_checkpoint").toMillis() !== asTimestamp(operation.firestoreErasureCheckpoint.expiresAt, "deletion_checkpoint").toMillis())) throw new Error("remote_deletion_pending");
+      this.assertTombstoneSnapshots(operation.identityRefs, tombstoneSnapshots, checkpoint ?? undefined);
       const expiresAt = Timestamp.fromDate(addUtcCalendarMonths(completedAt.toDate(), RETENTION_POLICY.accountDeletionProofMonths));
       transaction.set(ref, { status: "complete", phase: "complete", completedAt, updatedAt: completedAt, expiresAt, userId: FieldValue.delete(), identityRefs: FieldValue.delete(), authSubjects: FieldValue.delete(), subjectHashes: FieldValue.delete(), failureCode: FieldValue.delete() }, { merge: true });
       transaction.set(this.db.collection(COLLECTIONS.deletionProofs).doc(proofId), { status: "deleted", operationId, proofId, completedAt, expiresAt }, { merge: true });
@@ -1352,6 +1378,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       expectedAuthorizationGeneration,
       fence,
       leaseUntil,
+      firestoreErasureCheckpoint: deletionErasureCheckpoint(data),
     });
   }
 
@@ -1382,6 +1409,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       expectedAuthorizationGeneration,
       fence,
       leaseUntil,
+      firestoreErasureCheckpoint: deletionErasureCheckpoint(data),
     });
   }
 
@@ -1473,63 +1501,58 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
   }
 
   private async deleteFirestoreOwnedData(userId: string, identityRefs: readonly StoredDeletionIdentity[], operation: StoredDeletionOperation, fence: string): Promise<void> {
-    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
-    const operationDocument = operationRef(this.db, operation.operationId);
-    await this.db.runTransaction(async (transaction) => {
-      const storedOperation = await transaction.get(operationDocument);
-      const user = await transaction.get(userRef);
-      const mappings = await transaction.get(this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId));
-      const operationData = storedOperation.exists ? asRecord(storedOperation.data(), "account_deletion_operation") : null;
-      const leaseUntil = operationData?.leaseUntil;
-      const leaseMs = leaseUntil instanceof Timestamp ? leaseUntil.toMillis() : leaseUntil instanceof Date ? leaseUntil.getTime() : 0;
-      if (!storedOperation.exists || operationData?.phase !== "firestore_deleting" || operationData.fence !== fence || operationData.userId !== userId || leaseMs <= Date.now()) throw new Error("account_deletion_conflict");
-      if (mappings.docs.some((mapping) => {
-        const identity = asRecord(mapping.data(), "identity_mapping");
-        if (typeof identity.provider !== "string" || typeof identity.subject !== "string") return true;
-        const provider = identity.provider;
-        const subject = identity.subject;
-        return !identityRefs.some((expected) => expected.provider === provider && this.pseudonymKeyRing.verify(provider, subject, expected));
-      })) throw new Error("remote_deletion_pending");
-      const tombstoneRefs = identityRefs.map((identity) => this.db.collection(COLLECTIONS.deletedIdentities).doc(identity.identityId));
-      const tombstones = await transaction.getAll(...tombstoneRefs);
-      if (!user.exists) {
-        if (mappings.docs.length > 0) throw new Error("remote_deletion_pending");
-        this.assertTombstoneSnapshots(identityRefs, tombstones);
-        return;
-      }
-      if (!this.userOwnsDeletion(asRecord(user.data(), "user"), operation, fence)) throw new Error("account_deletion_conflict");
-      const deletedAt = now();
-      for (let index = 0; index < identityRefs.length; index += 1) {
-        const identity = identityRefs[index];
-        const tombstone = tombstones[index];
-        if (!identity || !tombstone) throw new Error("remote_deletion_pending");
-        transaction.set(tombstone.ref, this.tombstoneWrite(identity, tombstone, deletedAt));
-      }
-      for (const mapping of mappings.docs) transaction.delete(mapping.ref);
-      if (mappings.docs.some((mapping) => {
-        const data = asRecord(mapping.data(), "identity_mapping");
-        return typeof data.provider !== "string" || typeof data.subject !== "string" || data.subject.length === 0;
-      })) throw new Error("remote_deletion_pending");
-      if (user.exists) transaction.set(userRef, { deletedAt, updatedAt: deletedAt }, { merge: true });
+    let committedCheckpoint = operation.firestoreErasureCheckpoint;
+    await eraseFirestoreAccountData({
+      db: this.db,
+      userId,
+      identityRefs,
+      assertWriteAllowed: (transaction) => this.assertDeletionOwnerInTransaction(transaction, operation, fence, "firestore_deleting"),
+      verifyMapping: (provider, subject, expected) => provider === expected.provider && this.pseudonymKeyRing.verify(provider, subject, expected),
+      assertUserDeletionOwner: (data) => { if (!this.userOwnsDeletion(data, operation, fence)) throw new Error("account_deletion_conflict"); },
+      tombstoneWrite: (identity, snapshot, deletedAt) => ({ provider: identity.provider, keyVersion: identity.keyVersion, subjectHmac: identity.subjectHmac, deletedAt, expiresAt: Timestamp.fromMillis(deletedAt.toMillis() + ACCOUNT_DELETION_TOMBSTONE_RETENTION_MS) }),
+      prepareTombstones: async (transaction, identities, existing, userExists, proposedDeletedAt) => {
+        const ref = operationRef(this.db, operation.operationId);
+        const operationSnapshot = await transaction.get(ref);
+        if (!operationSnapshot.exists) throw new Error("account_deletion_conflict");
+        const operationData = asRecord(operationSnapshot.data(), "account_deletion_operation");
+        const checkpoint = deletionErasureCheckpoint(operationData);
+        const markerDetails = existing.map((snapshot, index) => {
+          const identity = identities[index];
+          if (!identity || !snapshot || !snapshot.exists) return null;
+          const data = asRecord(snapshot.data(), "deleted_identity");
+          if (snapshot.id !== identity.identityId || data.provider !== identity.provider || data.keyVersion !== identity.keyVersion || data.subjectHmac !== identity.subjectHmac) throw new Error("remote_deletion_pending");
+          const logicalExpiry = deletedIdentityLogicalExpiryMs(data);
+          if (logicalExpiry === null || !(data.deletedAt instanceof Timestamp || data.deletedAt instanceof Date) || !(data.expiresAt instanceof Timestamp || data.expiresAt instanceof Date)) throw new Error("remote_deletion_pending");
+          return Object.freeze({ deletedAt: data.deletedAt, expiresAt: data.expiresAt, logicalExpiry });
+        });
+        const existingDetails = markerDetails.filter((detail): detail is NonNullable<typeof detail> => detail !== null);
+        let deletedAt = checkpoint?.deletedAt ?? existingDetails[0]?.deletedAt ?? (userExists ? proposedDeletedAt : null);
+        const deletedAtMillis = deletedAt instanceof Timestamp ? deletedAt.toMillis() : deletedAt?.getTime();
+        let expiresAt = checkpoint?.expiresAt ?? existingDetails[0]?.expiresAt ?? (deletedAtMillis !== undefined ? Timestamp.fromMillis(deletedAtMillis + ACCOUNT_DELETION_TOMBSTONE_RETENTION_MS) : null);
+        if (!deletedAt || !expiresAt || deletedIdentityLogicalExpiryMs({ provider: identities[0]?.provider, keyVersion: identities[0]?.keyVersion, subjectHmac: identities[0]?.subjectHmac, deletedAt, expiresAt }) === null) throw new Error("remote_deletion_pending");
+        const deletedAtMs = deletedAt instanceof Timestamp ? deletedAt.toMillis() : deletedAt.getTime();
+        const expiresAtMs = expiresAt instanceof Timestamp ? expiresAt.toMillis() : expiresAt.getTime();
+        if (existingDetails.some((detail) => (detail.deletedAt instanceof Timestamp ? detail.deletedAt.toMillis() : detail.deletedAt.getTime()) !== deletedAtMs
+          || (detail.expiresAt instanceof Timestamp ? detail.expiresAt.toMillis() : detail.expiresAt.getTime()) !== expiresAtMs)) throw new Error("remote_deletion_pending");
+        if (checkpoint && existing.some((snapshot, index) => snapshot?.exists && markerDetails[index] === null)) throw new Error("remote_deletion_pending");
+        if (!checkpoint && existing.some((snapshot) => !snapshot?.exists) && existingDetails.length > 0) throw new Error("remote_deletion_pending");
+        if (!checkpoint && !userExists && existingDetails.length !== identities.length) throw new Error("remote_deletion_pending");
+        if (!checkpoint) transaction.set(ref, { firestoreErasureDeletedAt: deletedAt, firestoreErasureExpiresAt: expiresAt }, { merge: true });
+        committedCheckpoint = Object.freeze({ deletedAt, expiresAt });
+        const writes = identities.map((identity, index) => {
+          const snapshot = existing[index];
+          if (!identity || !snapshot) throw new Error("remote_deletion_pending");
+          if (snapshot.exists) return null;
+          if (deletedIdentityLogicalExpiryMs({ provider: identity.provider, keyVersion: identity.keyVersion, subjectHmac: identity.subjectHmac, deletedAt, expiresAt })! <= Date.now()) return null;
+          return { provider: identity.provider, keyVersion: identity.keyVersion, subjectHmac: identity.subjectHmac, deletedAt, expiresAt };
+        });
+        return Object.freeze({ deletedAt: deletedAt instanceof Timestamp ? deletedAt : Timestamp.fromDate(deletedAt), writes: Object.freeze(writes) });
+      },
+      ...(operation.firestoreErasureCheckpoint ? { tombstoneCheckpoint: operation.firestoreErasureCheckpoint } : {}),
+      getTombstoneCheckpoint: () => committedCheckpoint,
     });
-
-    await this.deleteOwnedQuery(this.db.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", userId), operation, fence);
-    await this.deleteOwnedQuery(this.db.collection(COLLECTIONS.accountRecoveryOperations).where("userId", "==", userId), operation, fence);
-    await this.deleteOwnedQuery(this.db.collection(COLLECTIONS.accountRecoveryOperationResults).where("userId", "==", userId), operation, fence);
-    await this.deleteOwnedQuery(this.db.collection(COLLECTIONS.sessionRevocationOperations).where("userId", "==", userId), operation, fence);
-    for (;;) {
-      const page = await this.db.collection("revenueCatTransactions").where("ownerAccountId", "==", userId).limit(100).get();
-      if (page.empty) break;
-      for (const fact of page.docs) await this.deleteSubtreeOwned(fact.ref, operation, fence);
-      await this.deleteDocumentsOwned(page.docs.map(doc => doc.ref), operation, fence);
-    }
-    await this.deleteOwnedQuery(this.db.collection(COLLECTIONS.accountDataExportAudits).where("userId", "==", userId), operation, fence);
-    await this.deleteDocumentsOwned([this.db.collection(COLLECTIONS.accountDataExportRateLimits).doc(userId)], operation, fence);
-    await this.unlinkOwnedReports(userId, operation, fence);
-    await this.unlinkOwnedPrivacyRequests(userId, operation, fence);
-    await this.deleteSubtreeOwned(userRef, operation, fence);
-    await this.deleteRootUserOwned(userRef, operation, fence);
-    await this.assertFirestoreDeletionComplete(userId, identityRefs);
+    if (!committedCheckpoint) throw new Error("remote_deletion_pending");
+    await assertFirestoreAccountErasureComplete(this.db, userId, identityRefs, committedCheckpoint);
   }
 
   private async assertDeletionOwnerInTransaction(transaction: FirebaseFirestore.Transaction, operation: StoredDeletionOperation, fence: string, phase: DeletionPhase): Promise<void> {
@@ -1541,111 +1564,22 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
     if (data.phase !== phase || data.fence !== fence || data.userId !== operation.userId || leaseMs <= Date.now()) throw new Error("account_deletion_conflict");
   }
 
-  private tombstoneWrite(identity: StoredDeletionIdentity, snapshot: { exists: boolean; data: () => unknown }, deletedAt: Timestamp): Record<string, unknown> {
-    const existing = snapshot.exists ? asRecord(snapshot.data(), "deleted_identity") : null;
-    if (existing !== null) {
-      if (existing.provider !== identity.provider) throw new Error("remote_deletion_pending");
-      if (existing.keyVersion !== identity.keyVersion || existing.subjectHmac !== identity.subjectHmac) throw new Error("remote_deletion_pending");
-    }
-    const existingDeletedAt = existing?.deletedAt instanceof Timestamp || existing?.deletedAt instanceof Date ? existing.deletedAt : deletedAt;
-    return {
-      provider: identity.provider,
-      keyVersion: identity.keyVersion,
-      subjectHmac: identity.subjectHmac,
-      deletedAt: existingDeletedAt,
-      expiresAt: Timestamp.fromMillis(asTimestamp(existingDeletedAt, "deleted_identity").toMillis() + TOMBSTONE_RETENTION_MS),
-    };
-  }
-
-  private assertTombstoneSnapshots(identityRefs: readonly StoredDeletionIdentity[], tombstones: readonly { id: string; exists: boolean; data: () => unknown }[]): void {
+  private assertTombstoneSnapshots(identityRefs: readonly StoredDeletionIdentity[], tombstones: readonly { id: string; exists: boolean; data: () => unknown }[], checkpoint?: StoredDeletionOperation["firestoreErasureCheckpoint"]): void {
     if (identityRefs.length === 0 || tombstones.length !== identityRefs.length) throw new Error("remote_deletion_pending");
     for (let index = 0; index < identityRefs.length; index += 1) {
       const identity = identityRefs[index];
       const tombstone = tombstones[index];
-      if (!identity || !tombstone || tombstone.id !== identity.identityId || !tombstone.exists) throw new Error("remote_deletion_pending");
-      const data = asRecord(tombstone.data(), "deleted_identity");
-      if (data.provider !== identity.provider || data.keyVersion !== identity.keyVersion || data.subjectHmac !== identity.subjectHmac || !(data.expiresAt instanceof Timestamp || data.expiresAt instanceof Date)) throw new Error("remote_deletion_pending");
-    }
-  }
-
-  private async deleteDocumentsOwned(refs: readonly DocumentReference[], operation: StoredDeletionOperation, fence: string): Promise<void> {
-    const batchSize = 400;
-    for (let offset = 0; offset < refs.length; offset += batchSize) {
-      const batchRefs = refs.slice(offset, offset + batchSize);
-      await this.db.runTransaction(async (transaction) => {
-        await this.assertDeletionOwnerInTransaction(transaction, operation, fence, "firestore_deleting");
-        for (const ref of batchRefs) transaction.delete(ref);
-      });
-    }
-  }
-
-  private async deleteOwnedQuery(query: Query, operation: StoredDeletionOperation, fence: string): Promise<void> {
-    for (;;) {
-      const page = await query.orderBy(FieldPath.documentId()).limit(400).get();
-      if (page.empty) return;
-      await this.deleteDocumentsOwned(page.docs.map((document) => document.ref), operation, fence);
-    }
-  }
-
-  private async unlinkOwnedReports(userId: string, operation: StoredDeletionOperation, fence: string): Promise<void> {
-    const query = this.db.collection(COLLECTIONS.contentReports).where("accountId", "==", userId).orderBy(FieldPath.documentId()).limit(400);
-    for (;;) {
-      const page = await query.get();
-      if (page.empty) return;
-      const refs = page.docs.map((report) => report.ref);
-      await this.db.runTransaction(async (transaction) => {
-        await this.assertDeletionOwnerInTransaction(transaction, operation, fence, "firestore_deleting");
-        const reports = await transaction.getAll(...refs);
-        const updatedAt = now();
-        for (const report of reports) {
-          if (report.exists && asRecord(report.data(), "content_report").accountId === userId) transaction.update(report.ref, {
-            accountId: FieldValue.delete(),
-            contactEmail: FieldValue.delete(),
-            updatedAt,
-          });
-        }
-      });
-    }
-  }
-
-  private async unlinkOwnedPrivacyRequests(userId: string, operation: StoredDeletionOperation, fence: string): Promise<void> {
-    const query = this.db.collection(COLLECTIONS.privacyRequests).where("userId", "==", userId).orderBy(FieldPath.documentId()).limit(400);
-    for (;;) {
-      const page = await query.get();
-      if (page.empty) return;
-      await this.db.runTransaction(async (transaction) => {
-        await this.assertDeletionOwnerInTransaction(transaction, operation, fence, "firestore_deleting");
-        const requests = await transaction.getAll(...page.docs.map((document) => document.ref));
-        for (const request of requests) {
-          if (request.exists && asRecord(request.data(), "privacy_request").userId === userId) transaction.update(request.ref, {
-            userId: FieldValue.delete(),
-            subjectPseudonym: FieldValue.delete(),
-          });
-        }
-      });
-    }
-  }
-
-  private async deleteSubtreeOwned(ref: DocumentReference, operation: StoredDeletionOperation, fence: string): Promise<void> {
-    const collections = await ref.listCollections();
-    for (const collection of collections) {
-      for (;;) {
-        const page = await collection.orderBy(FieldPath.documentId()).limit(200).get();
-        if (page.empty) break;
-        for (const document of page.docs) await this.deleteSubtreeOwned(document.ref, operation, fence);
-        await this.deleteDocumentsOwned(page.docs.map((document) => document.ref), operation, fence);
+      if (!identity || !tombstone || tombstone.id !== identity.identityId) throw new Error("remote_deletion_pending");
+      if (!tombstone.exists) {
+        const logicalExpiry = checkpoint ? deletedIdentityLogicalExpiryMs({ provider: identity.provider, keyVersion: identity.keyVersion, subjectHmac: identity.subjectHmac, deletedAt: checkpoint.deletedAt, expiresAt: checkpoint.expiresAt }) : null;
+        if (logicalExpiry === null || logicalExpiry > Date.now()) throw new Error("remote_deletion_pending");
+        continue;
       }
+      const data = asRecord(tombstone.data(), "deleted_identity");
+      if (data.provider !== identity.provider || data.keyVersion !== identity.keyVersion || data.subjectHmac !== identity.subjectHmac || deletedIdentityLogicalExpiryMs(data) === null
+        || (checkpoint && (asTimestamp(data.deletedAt, "deleted_identity").toMillis() !== asTimestamp(checkpoint.deletedAt, "deletion_checkpoint").toMillis()
+          || asTimestamp(data.expiresAt, "deleted_identity").toMillis() !== asTimestamp(checkpoint.expiresAt, "deletion_checkpoint").toMillis()))) throw new Error("remote_deletion_pending");
     }
-  }
-
-  private async deleteRootUserOwned(userRef: DocumentReference, operation: StoredDeletionOperation, fence: string): Promise<void> {
-    await this.db.runTransaction(async (transaction) => {
-      await this.assertDeletionOwnerInTransaction(transaction, operation, fence, "firestore_deleting");
-      const user = await transaction.get(userRef);
-      if (!user.exists) return;
-      if (!this.userOwnsDeletion(asRecord(user.data(), "user"), operation, fence)) throw new Error("account_deletion_conflict");
-      transaction.delete(userRef);
-    });
   }
 
   private async deleteAuthSubjects(subjects: readonly string[]): Promise<void> {
@@ -1659,26 +1593,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
     }
   }
 
-  private async assertFirestoreDeletionComplete(userId: string, identityRefs: readonly StoredDeletionIdentity[]): Promise<void> {
-    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
-    const [user, mappings, recoveryCodes, recoveryOperations, recoveryResults, sessionRevocations, linkedReports, linkedPrivacyRequests, exportAudits, exportRateLimit, purchaseTransactions] = await Promise.all([
-      userRef.get(),
-      this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId).get(),
-      this.db.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", userId).get(),
-      this.db.collection(COLLECTIONS.accountRecoveryOperations).where("userId", "==", userId).get(),
-      this.db.collection(COLLECTIONS.accountRecoveryOperationResults).where("userId", "==", userId).get(),
-      this.db.collection(COLLECTIONS.sessionRevocationOperations).where("userId", "==", userId).get(),
-      this.db.collection(COLLECTIONS.contentReports).where("accountId", "==", userId).get(),
-      this.db.collection(COLLECTIONS.privacyRequests).where("userId", "==", userId).get(),
-      this.db.collection(COLLECTIONS.accountDataExportAudits).where("userId", "==", userId).get(),
-      this.db.collection(COLLECTIONS.accountDataExportRateLimits).doc(userId).get(),
-      this.db.collection("revenueCatTransactions").where("ownerAccountId", "==", userId).get(),
-    ]);
-    if (user.exists || !mappings.empty || !recoveryCodes.empty || !recoveryOperations.empty || !recoveryResults.empty || !sessionRevocations.empty || !linkedReports.empty || !linkedPrivacyRequests.empty || !exportAudits.empty || exportRateLimit.exists || !purchaseTransactions.empty) throw new Error("remote_deletion_pending");
-    const childCollections = await userRef.listCollections();
-    const childDocuments = await Promise.all(childCollections.map((collection) => collection.limit(1).get()));
-    if (childDocuments.some((documents) => !documents.empty)) throw new Error("remote_deletion_pending");
-    const tombstones = await this.db.getAll(...identityRefs.map((identity) => this.db.collection(COLLECTIONS.deletedIdentities).doc(identity.identityId)));
-    this.assertTombstoneSnapshots(identityRefs, tombstones);
+  private async assertFirestoreDeletionComplete(userId: string, identityRefs: readonly StoredDeletionIdentity[], checkpoint?: StoredDeletionOperation["firestoreErasureCheckpoint"]): Promise<void> {
+    await assertFirestoreAccountErasureComplete(this.db, userId, identityRefs, checkpoint ?? undefined);
   }
 }

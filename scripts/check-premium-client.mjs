@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { parsePremiumMap, productIdentifier } from "../src/config/premiumMap.ts";
+import { defaultPremiumMap, parsePremiumMap, productIdentifier } from "../src/config/premiumMap.ts";
 import { createRevenueCatEntitlementReader } from "../src/infrastructure/revenuecat/client.ts";
 
 const mobileRoot = resolve(process.env.PATTERNLY_FRONTEND_ROOT ?? "../patternly");
@@ -59,3 +59,41 @@ for (const binding of map.bindings) {
   }
 }
 console.log(`Premium reader → APP cache: ${checks} store/lifecycle cases PASS; map/environment/expiry rejection PASS.`);
+
+// The existing sandbox grant has no store purchase source. Exercise its real
+// reader output against the APP parser as well as the paid-source matrix above.
+const promoNow = Date.now();
+const promoCutoff = new Date(promoNow + 60_000).toISOString();
+const promoMap = defaultPremiumMap("proj8ae78267", "SANDBOX");
+assert.ok(promoMap);
+const promoConfig = {
+  baseUrl: "https://api.revenuecat.com", apiKey: "explicit-local-v1-fixture",
+  entitlementId: "premium", productId: identity.productId, environment: "SANDBOX",
+  firebaseProjectId: "patternly-app-sandbox", revenueCatProjectId: promoMap.projectId,
+  revenueCatAppId: "app7b06e9a4c1", premiumMap: promoMap,
+  sandboxPromotionalAccess: { firebaseProjectId: "patternly-app-sandbox", revenueCatProjectId: promoMap.projectId,
+    revenueCatAppId: "app7b06e9a4c1", customerId: accountId, expiresAt: promoCutoff },
+};
+const promoPayload = {
+  request_date_ms: promoNow,
+  subscriber: { original_app_user_id: accountId,
+    entitlements: { premium: { product_identifier: "rc_promo_premium_custom", expires_date: promoCutoff, grace_period_expires_date: null } },
+    subscriptions: { rc_promo_premium_custom: { store: "promotional", is_sandbox: false, expires_date: promoCutoff,
+      grace_period_expires_date: null, refunded_at: null, billing_issues_detected_at: null } } },
+};
+const promoReader = createRevenueCatEntitlementReader(promoConfig, { fetch: async () => new Response(JSON.stringify(promoPayload)) });
+const promoResult = await promoReader.read(accountId);
+const promoIdentity = { ...identity, projectId: promoMap.projectId, mapVersion: promoMap.version };
+const promoWire = JSON.parse(JSON.stringify({ serverObservedAt: new Date(promoNow).toISOString(), entitlements: [{ accountId, ...promoResult, source: "revenuecat" }] }));
+const promoCache = premiumCacheFromFreshResponse(promoWire, promoIdentity, promoNow, null);
+assert.ok(promoCache, "sandbox promotional producer rejected by exact APP parser");
+assert.equal(promoCache.snapshot.reason, "promotional");
+assert.deepEqual(promoCache.snapshot.sources, []);
+assert.equal(evaluateOfflinePremiumAccess(promoCache, promoIdentity, promoNow).allowed, true);
+assert.equal(evaluateOfflinePremiumAccess(promoCache, promoIdentity, Date.parse(promoCutoff)).allowed, false);
+assert.equal(evaluateOfflinePremiumAccess(promoCache, { ...promoIdentity, accountId: "another-account" }, promoNow).allowed, false);
+assert.equal((await promoReader.read("another-account")).state, "unavailable");
+const oldItem = { ...promoWire.entitlements[0] };
+for (const key of ["mapVersion", "projectId", "environment", "reason", "sources"]) delete oldItem[key];
+assert.equal(premiumCacheFromFreshResponse({ ...promoWire, entitlements: [oldItem] }, promoIdentity, promoNow, null), null);
+console.log("Sandbox promotional reader → APP cache: scoped v2 accepted; old DTO, wrong account and expiry denied.");

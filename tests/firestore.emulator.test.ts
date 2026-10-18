@@ -1742,7 +1742,7 @@ test("account deletion removes owned Firestore documents, preserves a tombstone,
   const tombstone = (await firestore().collection("deletedIdentities").doc(tombstoneId).get()).data();
   assert.ok(tombstone?.deletedAt instanceof Timestamp);
   assert.ok(tombstone?.expiresAt instanceof Timestamp);
-  assert.equal(tombstone.expiresAt.toMillis() - tombstone.deletedAt.toMillis(), 45 * 24 * 60 * 60 * 1_000);
+  assert.equal(tombstone.expiresAt.toMillis() - tombstone.deletedAt.toMillis(), 7 * 24 * 60 * 60 * 1_000);
   assert.equal("subject" in (tombstone ?? {}), false);
   const report = (await firestore().collection("contentReports").doc(linked.clientSubmissionId).get()).data();
   assert.ok(report);
@@ -1969,6 +1969,54 @@ test("deletion resumes to proof when a crash follows recursive user deletion", a
   assert.equal(operation?.phase, "complete");
   assert.equal("userId" in (operation ?? {}), false);
   assert.deepEqual(await context.stores.accountLifecycle.readDeletionProof(proofId), { status: "deleted", operationId, proofId });
+});
+
+test("live deletion retry uses its original checkpoint after tombstone TTL removal", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const userId = auth.userId;
+  const operationId = "cccccccc-cccc-4ccc-8ccc-cccccccccccd";
+  const secret = "f".repeat(64);
+  const lifecycle = context.stores.accountLifecycle as unknown as {
+    advanceDeletionPhase: (ref: FirebaseFirestore.DocumentReference, operation: unknown, fence: string, target: string) => Promise<unknown>;
+  };
+  const originalAdvance = lifecycle.advanceDeletionPhase;
+  const originalDateNow = Date.now;
+  lifecycle.advanceDeletionPhase = async function (ref, operation, fence, target) {
+    if (target === "remote_deleted") throw new Error("injected_crash_after_firestore_cleanup");
+    return originalAdvance.call(this, ref, operation, fence, target);
+  };
+  try {
+    await assert.rejects(context.stores.accountLifecycle.deleteAccount(userId, 1, operationId, secret), { message: "remote_deletion_pending" });
+  } finally {
+    lifecycle.advanceDeletionPhase = originalAdvance;
+  }
+  const pseudonym = parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson).active("firebase", auth.localId);
+  const markerRef = firestore().collection(COLLECTIONS.deletedIdentities).doc(pseudonym.documentId);
+  const operationRef = firestore().collection(COLLECTIONS.accountDeletionOperations).doc(operationId);
+  const operationBeforeTtl = (await operationRef.get()).data();
+  const markerBeforeTtl = (await markerRef.get()).data();
+  assert.equal(operationBeforeTtl?.phase, "firestore_deleting");
+  assert.ok(operationBeforeTtl?.firestoreErasureDeletedAt instanceof Timestamp);
+  assert.ok(operationBeforeTtl?.firestoreErasureExpiresAt instanceof Timestamp);
+  assert.equal(operationBeforeTtl?.firestoreErasureDeletedAt.toMillis(), markerBeforeTtl?.deletedAt.toMillis());
+  const expiresAt = markerBeforeTtl?.expiresAt.toMillis() as number;
+  assert.equal(expiresAt - (markerBeforeTtl?.deletedAt as Timestamp).toMillis(), 7 * 24 * 60 * 60 * 1000);
+  await markerRef.delete();
+
+  try {
+    Date.now = () => expiresAt - 1;
+    const beforeExpiry = await context.stores.accountLifecycle.resumeDeletion(operationId, secret);
+    assert.equal(beforeExpiry?.status, "pending", "a missing marker before its logical expiry keeps the operation pending");
+    assert.equal((await markerRef.get()).exists, false, "a failed pre-expiry retry does not silently recreate the marker");
+    Date.now = () => expiresAt;
+    const resumed = await context.stores.accountLifecycle.resumeDeletion(operationId, secret);
+    assert.equal(resumed?.status, "complete");
+    assert.equal((await markerRef.get()).exists, false, "an expired marker is not recreated as a new seven-day block");
+  } finally {
+    Date.now = originalDateNow;
+  }
+  assert.equal((await operationRef.get()).get("phase"), "complete");
+  assert.equal((await firestore().collection(COLLECTIONS.users).doc(userId).get()).exists, false);
 });
 
 test("simultaneous deletion operation IDs conflict so only one can own account deletion", async () => {

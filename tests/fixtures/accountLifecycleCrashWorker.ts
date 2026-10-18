@@ -7,8 +7,8 @@ import { FirestoreAccountLifecycleStore } from "../../src/modules/account-lifecy
 // Test-only child. IPC is acknowledged after the real Admin effect returns;
 // the parent kills this process before the store can persist finalization.
 if (process.env.FIREBASE_PROJECT_ID !== "demo-patternly-b4-crash"
-  || process.env.FIREBASE_AUTH_EMULATOR_HOST !== "127.0.0.1:19119"
-  || process.env.FIRESTORE_EMULATOR_HOST !== "127.0.0.1:18119" || !process.send) throw Error("fixture_runtime_rejected");
+  || process.env.FIREBASE_AUTH_EMULATOR_HOST !== `127.0.0.1:${process.env.PATTERNLY_ISOLATED_TEST_PORT_BASE ?? "19119"}`
+  || process.env.FIRESTORE_EMULATOR_HOST !== `127.0.0.1:${Number(process.env.PATTERNLY_ISOLATED_TEST_PORT_BASE ?? 19119) + 1}` || !process.send) throw Error("fixture_runtime_rejected");
 
 process.once("message", (input: unknown) => {
   void (async () => {

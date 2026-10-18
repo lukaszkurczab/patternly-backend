@@ -6,6 +6,7 @@ import { asIsoString, asRecord, now } from "../../infrastructure/firestore/value
 import type { AuthenticatedIdentity } from "../auth/contracts.js";
 import { activeAuthorizationGeneration, assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
 import type { PseudonymKeyRing } from "../../infrastructure/security/pseudonymKeyRing.js";
+import { deletedIdentityLogicalExpiryMs } from "../account-lifecycle/firestoreAccountErasure.js";
 
 export type UserProfile = Readonly<{
   id: string;
@@ -41,9 +42,11 @@ export interface UserStore {
   recordPurchaseConfirmation(userId: string, expectedAuthorizationGeneration: number, input: Readonly<{ confirmationId: string; termsVersion: string; productIdentifier: string; storefrontPrice: string; locale: "en" | "pl"; store?: PurchaseStore }>): Promise<Readonly<{ confirmationId: string; acceptedAt: string; attemptExpiresAt: string }>>;
 }
 
-function isExpiredTombstone(value: unknown): boolean {
-  const expiresAt = asRecord(value, "deleted_identity").expiresAt;
-  return (expiresAt instanceof Timestamp ? expiresAt.toMillis() : expiresAt instanceof Date ? expiresAt.getTime() : Number.POSITIVE_INFINITY) <= Date.now();
+function isExpiredTombstone(value: unknown, provider: string, expectedIdentityId: string): boolean {
+  const data = asRecord(value, "deleted_identity");
+  if (data.provider !== provider || typeof data.keyVersion !== "string" || typeof data.subjectHmac !== "string"
+    || `${data.keyVersion}_${data.subjectHmac}` !== expectedIdentityId) return false;
+  return (deletedIdentityLogicalExpiryMs(data) ?? Number.POSITIVE_INFINITY) <= Date.now();
 }
 
 function deletedIdentityReferences(db: Firestore, pseudonymKeyRing: PseudonymKeyRing, provider: string, subject: string) {
@@ -93,7 +96,7 @@ export class FirestoreUserStore implements UserStore {
     const deletedIdentityRefs = deletedIdentityReferences(this.db, this.pseudonymKeyRing, identity.provider, identity.subject);
     const result = await this.db.runTransaction(async (transaction) => {
       const [identitySnapshot, ...deletedSnapshots] = await transaction.getAll(identityRef, ...deletedIdentityRefs);
-      if (deletedSnapshots.some((snapshot) => snapshot.exists && !isExpiredTombstone(snapshot.data()))) throw new Error("account_deleted");
+      if (deletedSnapshots.some((snapshot, index) => snapshot.exists && !isExpiredTombstone(snapshot.data(), identity.provider, deletedIdentityRefs[index]?.id ?? ""))) throw new Error("account_deleted");
       if (!identitySnapshot?.exists) throw new Error("account_not_found");
       const data = asRecord(identitySnapshot.data(), "identity_mapping");
       const existingUserId = data.userId;
@@ -116,7 +119,7 @@ export class FirestoreUserStore implements UserStore {
     const deletedIdentityRefs = deletedIdentityReferences(this.db, this.pseudonymKeyRing, identity.provider, identity.subject);
     return this.db.runTransaction(async (transaction) => {
       const [identitySnapshot, ...deletedSnapshots] = await transaction.getAll(identityRef, ...deletedIdentityRefs);
-      if (deletedSnapshots.some((snapshot) => snapshot.exists && !isExpiredTombstone(snapshot.data()))) throw new Error("account_deleted");
+      if (deletedSnapshots.some((snapshot, index) => snapshot.exists && !isExpiredTombstone(snapshot.data(), identity.provider, deletedIdentityRefs[index]?.id ?? ""))) throw new Error("account_deleted");
       if (!identitySnapshot?.exists) throw new Error("account_not_found");
       const identityData = asRecord(identitySnapshot.data(), "identity_mapping");
       if (identityData.provider !== identity.provider || identityData.subject !== identity.subject || typeof identityData.userId !== "string") throw new Error("identity_mapping_invalid");
@@ -144,7 +147,7 @@ export class FirestoreUserStore implements UserStore {
     const createdAt = now();
     const result = await this.db.runTransaction(async (transaction) => {
       const [identitySnapshot, ...deletedSnapshots] = await transaction.getAll(identityRef, ...deletedIdentityRefs);
-      if (deletedSnapshots.some((snapshot) => snapshot.exists && !isExpiredTombstone(snapshot.data()))) throw new Error("account_deleted");
+      if (deletedSnapshots.some((snapshot, index) => snapshot.exists && !isExpiredTombstone(snapshot.data(), identity.provider, deletedIdentityRefs[index]?.id ?? ""))) throw new Error("account_deleted");
       if (identitySnapshot?.exists) {
         const identityData = asRecord(identitySnapshot.data(), "identity_mapping");
         const existingUserId = identityData.userId;

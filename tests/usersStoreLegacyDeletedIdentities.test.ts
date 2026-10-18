@@ -75,7 +75,7 @@ const registration: AccountRegistrationInput = Object.freeze({
 function storeFor(initial: Readonly<Record<string, unknown>>) {
   const memory = createMemoryFirestore(initial);
   const keyRing = new PseudonymKeyRing([{ version: "test-v1", status: "active", keyBase64: Buffer.alloc(32, 7).toString("base64") }]);
-  return { ...memory, store: new FirestoreUserStore(memory.db, keyRing) };
+  return { ...memory, keyRing, store: new FirestoreUserStore(memory.db, keyRing) };
 }
 
 test("user lookups and registration continue to honor legacy SHA-256 deletion tombstones", async () => {
@@ -88,15 +88,65 @@ test("user lookups and registration continue to honor legacy SHA-256 deletion to
   assert.deepEqual(writes, []);
 });
 
-test("expired legacy SHA-256 tombstones retain the existing registration replacement behavior", async () => {
+test("legacy SHA-256 tombstones without key metadata remain fail-closed despite a stale expiry", async () => {
   const legacyPath = `${COLLECTIONS.deletedIdentities}/${identityDocumentId(identity.provider, identity.subject)}`;
   const { store, documents, writes } = storeFor({
     [legacyPath]: { provider: identity.provider, deletedAt: Timestamp.fromMillis(Date.now() - 60_000), expiresAt: Timestamp.fromMillis(Date.now() - 1) },
   });
 
-  const result = await store.registerUser(identity, registration);
+  await assert.rejects(store.registerUser(identity, registration), { message: "account_deleted" });
+  assert.equal(documents.has(legacyPath), true);
+  assert.deepEqual(writes, []);
+});
 
-  assert.equal(result.created, true);
-  assert.equal(documents.has(legacyPath), false);
-  assert.equal(writes.some((write) => write === `delete:${legacyPath}`), true);
+test("known 45-day HMAC tombstones block only through seven days from their original deletion time", async () => {
+  const deletedAtMs = Date.UTC(2026, 0, 1);
+  const keyRing = new PseudonymKeyRing([{ version: "test-v1", status: "active", keyBase64: Buffer.alloc(32, 7).toString("base64") }]);
+  const candidate = keyRing.active(identity.provider, identity.subject);
+  const markerPath = `${COLLECTIONS.deletedIdentities}/${candidate.documentId}`;
+  const { store, documents } = storeFor({
+    [markerPath]: {
+      provider: identity.provider,
+      keyVersion: candidate.keyVersion,
+      subjectHmac: candidate.subjectHmac,
+      deletedAt: Timestamp.fromMillis(deletedAtMs),
+      expiresAt: Timestamp.fromMillis(deletedAtMs + 45 * 24 * 60 * 60 * 1000),
+    },
+  });
+  const originalDateNow = Date.now;
+  try {
+    Date.now = () => deletedAtMs + 6 * 24 * 60 * 60 * 1000;
+    await assert.rejects(store.registerUser(identity, registration), { message: "account_deleted" });
+    Date.now = () => deletedAtMs + 7 * 24 * 60 * 60 * 1000;
+    const result = await store.registerUser(identity, registration);
+    assert.equal(result.created, true);
+    assert.equal(documents.has(markerPath), false);
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
+test("a stale tombstone whose payload does not match its candidate document ID fails closed without replacement", async () => {
+  const deletedAtMs = Date.UTC(2026, 0, 1);
+  const keyRing = new PseudonymKeyRing([{ version: "test-v1", status: "active", keyBase64: Buffer.alloc(32, 7).toString("base64") }]);
+  const candidate = keyRing.active(identity.provider, identity.subject);
+  const markerPath = `${COLLECTIONS.deletedIdentities}/${candidate.documentId}`;
+  const { store, documents, writes } = storeFor({
+    [markerPath]: {
+      provider: identity.provider,
+      keyVersion: candidate.keyVersion,
+      subjectHmac: "0".repeat(64),
+      deletedAt: Timestamp.fromMillis(deletedAtMs),
+      expiresAt: Timestamp.fromMillis(deletedAtMs + 45 * 24 * 60 * 60 * 1000),
+    },
+  });
+  const originalDateNow = Date.now;
+  try {
+    Date.now = () => deletedAtMs + 8 * 24 * 60 * 60 * 1000;
+    await assert.rejects(store.registerUser(identity, registration), { message: "account_deleted" });
+    assert.equal(documents.has(markerPath), true);
+    assert.deepEqual(writes, []);
+  } finally {
+    Date.now = originalDateNow;
+  }
 });

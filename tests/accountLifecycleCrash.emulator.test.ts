@@ -16,8 +16,9 @@ const enabled = process.env.B4_CRASH_TESTS === "1";
 for (const kind of ["revoke", "deletion"] as const) {
   test(`B4 SIGKILL after real ${kind} effect preserves unfinalized operation and resumes exact ID`, { skip: !enabled, timeout: 180_000 }, async (t) => {
     assert.equal(process.env.FIREBASE_PROJECT_ID, "demo-patternly-b4-crash");
-    assert.equal(process.env.FIREBASE_AUTH_EMULATOR_HOST, "127.0.0.1:19119");
-    assert.equal(process.env.FIRESTORE_EMULATOR_HOST, "127.0.0.1:18119");
+    const portBase = Number(process.env.PATTERNLY_ISOLATED_TEST_PORT_BASE ?? 19119);
+    assert.equal(process.env.FIREBASE_AUTH_EMULATOR_HOST, `127.0.0.1:${portBase}`);
+    assert.equal(process.env.FIRESTORE_EMULATOR_HOST, `127.0.0.1:${portBase + 1}`);
     const app = initializeApp({ projectId: "demo-patternly-b4-crash" }, `b4-parent-${kind}`);
     const db = getFirestore(app);
     const admin = getAuth(app);
