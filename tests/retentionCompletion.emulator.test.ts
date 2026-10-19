@@ -58,7 +58,10 @@ test("bounded scans continue through an empty expired page and survive deletion 
   await assert.rejects(readOperatorPage(collection, () => true, { cursor: first.nextCursor, dueOnly: true }), /cursor_invalid/);
 });
 
-test("legacy privacy archives and their secrets obey calendar/working caps without physical deletion", async () => {
+test("legacy privacy archives and their secrets obey calendar/working caps without physical deletion", async (t) => {
+  const realDate = Date;
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-19T12:00:00.000Z") });
+  t.after(() => { t.mock.timers.reset(); assert.equal(Date, realDate); });
   const id = await context.stores.privacyRequests.createGuest({ clientRequestId: randomUUID(), email: "fixture@example.test", right: "access", narrative: "Private narrative", reportSubmissionIds: [], rateLimitKey: "legacy" }, { send: async () => {} });
   const ref = firestore().collection("privacyRequests").doc(id);
   await ref.update({ status: "closed", closedAt: ago(400), expiresAt: afterMonths(24) });
@@ -73,7 +76,7 @@ test("legacy privacy archives and their secrets obey calendar/working caps witho
   assert.ok(Date.parse(due.items[0]!.nextReviewAt!) <= Date.now());
   await context.stores.privacyRequests.transitionAdmin(id, "op", { action: "record_review", expectedRevision: 0, reason: "Uncertain delivery inspected; no automatic repeat", nextReviewAt: new Date(Date.now() + 86400000).toISOString() }, null);
   assert.equal((await context.stores.privacyRequests.listOperatorQueue("op", { dueOnly: true })).items.length, 0);
-  await ref.update({ extensionNoticeStatus: "delivered", deliveryFailure: "response_email_failed", deliveryFailureAt: ago(2) });
+  await ref.update({ extensionNoticeStatus: "delivered", deliveryFailure: "response_email_failed", deliveryFailureAt: Timestamp.fromDate(new Date("2026-10-16T10:00:00.000Z")) });
   assert.equal((await context.stores.privacyRequests.listOperatorQueue("op", { dueOnly: true })).items.length, 0); // already reviewed failure predates acknowledgment
   await ref.update({ deliveryReviewAcknowledgedAt: null });
   assert.equal((await context.stores.privacyRequests.listOperatorQueue("op", { dueOnly: true })).items.length, 1);
@@ -124,9 +127,35 @@ test("legacy incident caps distinguish working copies, necessary breach evidence
   assert.ok(await store.readAuthorityExport(created.incidentId, 1, "op"));
 });
 
-test("operational next working day skips weekends without changing legal deadlines", () => {
-  assert.equal(nextWorkingReviewAt(new Date("2026-10-16T10:00:00Z")).toISOString(), "2026-10-19T00:00:00.000Z");
-});
+// Literal UTC expectations are independent of nextWorkingReviewAt's output.
+const weekendAttempts = ["2026-10-16T10:00:00.000Z", "2026-10-17T10:00:00.000Z", "2026-10-18T10:00:00.000Z"];
+for (const attemptedAt of weekendAttempts) {
+  test(`operational review for ${attemptedAt} is due on Monday UTC`, async (t) => {
+    const realDate = Date;
+    t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-18T23:59:59.999Z") });
+    t.after(() => { t.mock.timers.reset(); assert.equal(Date, realDate); });
+    assert.equal(nextWorkingReviewAt(new Date(attemptedAt)).toISOString(), "2026-10-19T00:00:00.000Z");
+    const store = context.stores.privacyRequests;
+    const id = await store.createGuest({ clientRequestId: randomUUID(), email: "fixture@example.test", right: "access", narrative: "Delivery review", reportSubmissionIds: [], rateLimitKey: "weekend" }, { send: async () => {} });
+    const ref = firestore().collection("privacyRequests").doc(id);
+    await ref.update({ subjectVerifiedAt: Timestamp.now(), deliveryFailure: "response_email_failed", deliveryFailureAt: Timestamp.fromDate(new Date(attemptedAt)) });
+    const boundaries = [
+      { at: "2026-10-18T23:59:59.999Z", count: 0 },
+      { at: "2026-10-19T00:00:00.000Z", count: 1 },
+      { at: "2026-10-19T00:00:00.001Z", count: 1 },
+    ];
+    for (const [revision, boundary] of boundaries.entries()) {
+      t.mock.timers.setTime(Date.parse(boundary.at));
+      await ref.update({ deliveryReviewAcknowledgedAt: null });
+      const queue = await store.listOperatorQueue("op");
+      assert.equal(queue.items[0]!.nextReviewAt, "2026-10-19T00:00:00.000Z");
+      const due = await store.listOperatorQueue("op", { dueOnly: true });
+      assert.deepEqual(due.items.map((item) => item.requestId), boundary.count ? [id] : [], boundary.at);
+      await store.transitionAdmin(id, "op", { action: "record_review", expectedRevision: revision, reason: "Delivery inspected manually", nextReviewAt: "2026-10-20T00:00:00.000Z" }, null);
+      assert.equal((await store.listOperatorQueue("op", { dueOnly: true })).items.length, 0, `acknowledged at ${boundary.at}`);
+    }
+  });
+}
 
 
 test("closing a held nonbreach preserves full evidence; release minimizes it without extending the core expiry", async () => {
