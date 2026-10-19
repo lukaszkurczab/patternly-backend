@@ -7,6 +7,7 @@ import test from "node:test";
 import { initializeApp, deleteApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
+import { validateIsolatedEmulatorRuntime } from "../scripts/isolated-emulator-test-runner.mjs";
 import { createFirebaseAdminAuth } from "../src/infrastructure/firebase/adminAuth.js";
 import { COLLECTIONS } from "../src/infrastructure/firestore/paths.js";
 import { PseudonymKeyRing } from "../src/infrastructure/security/pseudonymKeyRing.js";
@@ -15,10 +16,7 @@ import { FirestoreAccountLifecycleStore } from "../src/modules/account-lifecycle
 const enabled = process.env.B4_CRASH_TESTS === "1";
 for (const kind of ["revoke", "deletion"] as const) {
   test(`B4 SIGKILL after real ${kind} effect preserves unfinalized operation and resumes exact ID`, { skip: !enabled, timeout: 180_000 }, async (t) => {
-    assert.equal(process.env.FIREBASE_PROJECT_ID, "demo-patternly-b4-crash");
-    const portBase = Number(process.env.PATTERNLY_ISOLATED_TEST_PORT_BASE ?? 19119);
-    assert.equal(process.env.FIREBASE_AUTH_EMULATOR_HOST, `127.0.0.1:${portBase}`);
-    assert.equal(process.env.FIRESTORE_EMULATOR_HOST, `127.0.0.1:${portBase + 1}`);
+    validateIsolatedEmulatorRuntime(process.env, "demo-patternly-b4-crash");
     const app = initializeApp({ projectId: "demo-patternly-b4-crash" }, `b4-parent-${kind}`);
     const db = getFirestore(app);
     const admin = getAuth(app);

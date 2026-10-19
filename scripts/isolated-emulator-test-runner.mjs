@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 const DEFAULT_PORTS = Object.freeze({ auth: 19119, firestore: 18119, hub: 4419, logging: 4519 });
 
-function isolatedPorts(baseValue) {
+export function resolveIsolatedEmulatorPorts(baseValue) {
   if (baseValue === undefined || baseValue === "") return DEFAULT_PORTS;
   if (typeof baseValue !== "string" || !/^\d{4,5}$/u.test(baseValue)) throw new Error("isolated_test_unsafe_port_configuration");
   const base = Number(baseValue);
@@ -14,7 +14,7 @@ function isolatedPorts(baseValue) {
   return Object.freeze({ auth: base, firestore: base + 1, hub: base + 2, logging: base + 3 });
 }
 
-export function validateIsolatedEmulatorConfiguration(config, projectId, ports = DEFAULT_PORTS) {
+export function validateIsolatedEmulatorConfiguration(config, projectId, ports = resolveIsolatedEmulatorPorts()) {
   if (!/^demo-[a-z0-9-]+$/u.test(projectId)) throw new Error("isolated_test_demo_project_required");
   if (config?.emulators?.ui?.enabled !== false || config.emulators.singleProjectMode !== false) throw new Error("isolated_test_unsafe_emulator_configuration");
   for (const [name, port] of Object.entries(ports)) {
@@ -23,8 +23,14 @@ export function validateIsolatedEmulatorConfiguration(config, projectId, ports =
   }
 }
 
+export function validateIsolatedEmulatorRuntime(environment, projectId, ports = resolveIsolatedEmulatorPorts(environment.PATTERNLY_ISOLATED_TEST_PORT_BASE)) {
+  if (!/^demo-[a-z0-9-]+$/u.test(projectId) || environment.FIREBASE_PROJECT_ID !== projectId) throw new Error("isolated_test_demo_project_required");
+  if (environment.FIREBASE_AUTH_EMULATOR_HOST !== `127.0.0.1:${ports.auth}`
+    || environment.FIRESTORE_EMULATOR_HOST !== `127.0.0.1:${ports.firestore}`) throw new Error("isolated_test_unsafe_port_configuration");
+}
+
 export async function runIsolatedEmulatorTests({ backendRoot, projectId, command, environment = {} }) {
-  const ports = isolatedPorts(environment.PATTERNLY_ISOLATED_TEST_PORT_BASE ?? process.env.PATTERNLY_ISOLATED_TEST_PORT_BASE);
+  const ports = resolveIsolatedEmulatorPorts(environment.PATTERNLY_ISOLATED_TEST_PORT_BASE ?? process.env.PATTERNLY_ISOLATED_TEST_PORT_BASE);
   const config = JSON.parse(await readFile(join(backendRoot, "config/firebase.isolated-tests.json"), "utf8"));
   for (const [name, port] of Object.entries(ports)) config.emulators[name].port = port;
   validateIsolatedEmulatorConfiguration(config, projectId, ports);
