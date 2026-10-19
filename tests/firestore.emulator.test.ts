@@ -743,14 +743,28 @@ test("registration rejects an active deletion tombstone and replaces only an exp
   const auth = await createAuthUser();
   const pseudonym = parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson).active("firebase", auth.localId);
   const tombstoneRef = firestore().collection(COLLECTIONS.deletedIdentities).doc(pseudonym.documentId);
-  const deletedAt = Timestamp.now();
-  await tombstoneRef.set({ provider: "firebase", keyVersion: pseudonym.keyVersion, subjectHmac: pseudonym.subjectHmac, deletedAt, expiresAt: Timestamp.fromMillis(Date.now() + 60_000) });
-  const blocked = await context.app.inject({ method: "POST", url: "/v1/account/registration", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: accountRegistrationPayload });
-  assert.equal(blocked.statusCode, 401);
-  assert.deepEqual(blocked.json(), { error: { code: "account_deleted" } });
-  assert.equal((await firestore().collection(COLLECTIONS.users).get()).size, 0);
-  assert.equal((await firestore().collection(COLLECTIONS.identityMappings).get()).size, 0);
-  await tombstoneRef.update({ expiresAt: Timestamp.fromMillis(Date.now() - 1) });
+  // One clock anchor and whole-day margins keep the cases away from expiry boundaries.
+  const anchorMs = Date.now();
+  const dayMs = 24 * 60 * 60 * 1_000;
+  const marker = (deletedAtMs: number, expiresAtMs: number) => ({
+    provider: "firebase", keyVersion: pseudonym.keyVersion, subjectHmac: pseudonym.subjectHmac,
+    deletedAt: Timestamp.fromMillis(deletedAtMs), expiresAt: Timestamp.fromMillis(expiresAtMs),
+  });
+  const rejectedMarkers = [
+    { name: "active seven-day marker", data: marker(anchorMs - dayMs, anchorMs + 6 * dayMs) },
+    { name: "malformed short period", data: marker(anchorMs, anchorMs + 60_000) },
+    { name: "malformed reversed dates", data: marker(anchorMs, anchorMs - 1) },
+  ];
+  for (const { name, data } of rejectedMarkers) {
+    await tombstoneRef.set(data);
+    const blocked = await context.app.inject({ method: "POST", url: "/v1/account/registration", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: accountRegistrationPayload });
+    assert.equal(blocked.statusCode, 401, name);
+    assert.deepEqual(blocked.json(), { error: { code: "account_deleted" } }, name);
+    assert.equal((await firestore().collection(COLLECTIONS.users).get()).size, 0, name);
+    assert.equal((await firestore().collection(COLLECTIONS.identityMappings).get()).size, 0, name);
+    assert.deepEqual((await tombstoneRef.get()).data(), data, name);
+  }
+  await tombstoneRef.set(marker(anchorMs - 8 * dayMs, anchorMs - dayMs));
   const registered = await registerAuthUser(context, auth);
   assert.match(registered.userId, /^[0-9a-f-]{36}$/u);
   assert.equal((await firestore().collection(COLLECTIONS.users).get()).size, 1);
@@ -1943,11 +1957,15 @@ test("a stale deletion worker cannot mutate a user subtree after cleanup fence t
     leaseUntil,
   };
   const privateCleanup = context.stores.accountLifecycle as unknown as {
-    deleteSubtreeOwned(ref: typeof userRef, operation: typeof staleOperation, fence: string): Promise<void>;
+    deleteFirestoreOwnedData(userId: string, identities: readonly StoredDeletionIdentity[], operation: typeof staleOperation, fence: string): Promise<void>;
   };
-  await assert.rejects(privateCleanup.deleteSubtreeOwned(userRef, staleOperation, staleFence), { message: "account_deletion_conflict" });
+  const operationRef = firestore().collection(COLLECTIONS.accountDeletionOperations).doc(operationId);
+  const userBefore = (await userRef.get()).data();
+  const operationBefore = (await operationRef.get()).data();
+  await assert.rejects(privateCleanup.deleteFirestoreOwnedData(auth.userId, staleOperation.identityRefs, staleOperation, staleFence), { message: "account_deletion_conflict" });
   assert.deepEqual((await childRef.get()).data(), { retainedForAssertion: true });
-  assert.equal((await userRef.get()).get("securityOperation.fence"), currentFence);
+  assert.deepEqual((await userRef.get()).data(), userBefore);
+  assert.deepEqual((await operationRef.get()).data(), operationBefore);
 });
 
 test("deletion resumes to proof when a crash follows recursive user deletion", async () => {
