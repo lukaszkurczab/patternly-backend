@@ -44,9 +44,18 @@ const canonicalSyncPayload = (expectedAccountRevision: number, mutations: readon
   mutations,
 });
 
+// Inject only into purchase scenarios that need a successful fresh provider read.
+const expiredPurchaseReader: NonNullable<ApplicationDependencies["revenueCatEntitlementReader"]> = {
+  read: async () => ({
+    entitlement: "premium", productId: "monthly", state: "expired",
+    providerExpiresAt: null, providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString(),
+    projectId: "projtest", mapVersion: "test-expired-purchase-v1", environment: "SANDBOX", reason: null, sources: [],
+  }),
+};
+
 let context: EmulatorContext;
 
-function buildAppWithOverrides(overrides: Partial<BackendStores>, extras: Pick<ApplicationDependencies, "legalRequestEmailSender"> = {}) {
+function buildAppWithOverrides(overrides: Partial<BackendStores>, extras: Pick<ApplicationDependencies, "legalRequestEmailSender" | "revenueCatEntitlementReader"> = {}) {
   return buildApplication({
     environment: testEnvironment,
     firestore: null,
@@ -367,7 +376,9 @@ test("legal case creation fences authenticated and optional-bearer accounts befo
   assert.equal(sent.length, 1);
 });
 
-test("legal acceptance and purchase confirmation transactions reject a generation rotated after the request guard", async () => {
+test("legal acceptance and purchase confirmation transactions reject a generation rotated after the request guard", async (t) => {
+  const purchaseContext = { app: buildAppWithOverrides({}, { revenueCatEntitlementReader: expiredPurchaseReader }) };
+  t.after(() => purchaseContext.app.close());
   async function appThatChangesAccountBefore(method: "recordLegalAcceptance" | "recordPurchaseConfirmation", userId: string, changes: Readonly<Record<string, unknown>> = { authorizationGeneration: 2, authorizationState: "rotating" }) {
     const originalUsers = context.stores.users;
     let rotated = false;
@@ -392,6 +403,7 @@ test("legal acceptance and purchase confirmation transactions reject a generatio
       verifier: createFirebaseTokenVerifier(testEnvironment),
       appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
       stores: { ...context.stores, users },
+      revenueCatEntitlementReader: expiredPurchaseReader,
     });
   }
 
@@ -421,10 +433,10 @@ test("legal acceptance and purchase confirmation transactions reject a generatio
   const inactiveEvidence = await firestore().collection(COLLECTIONS.users).doc(inactiveAuth.userId).collection("legalAcceptances").doc("terms-generation-race-inactive").get();
   assert.equal(inactiveEvidence.exists, false);
 
-  const purchaseAuth = await createRegisteredAuthUser(context);
+  const purchaseAuth = await createRegisteredAuthUser(purchaseContext);
   const purchasePayload = { confirmationId: "00000000-0000-4000-8000-000000000091", termsVersion: "test-baseline-v1", productIdentifier: "monthly", storefrontPrice: "29,99 zł", locale: "pl", immediateStartRequested: true };
   const purchaseHeaders = { authorization: `Bearer ${purchaseAuth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
-  const first = await context.app.inject({ method: "POST", url: "/v1/purchase-confirmations", headers: purchaseHeaders, payload: purchasePayload });
+  const first = await purchaseContext.app.inject({ method: "POST", url: "/v1/purchase-confirmations", headers: purchaseHeaders, payload: purchasePayload });
   assert.equal(first.statusCode, 201);
   const purchaseApp = await appThatChangesAccountBefore("recordPurchaseConfirmation", purchaseAuth.userId);
   const replay = await purchaseApp.inject({ method: "POST", url: "/v1/purchase-confirmations", headers: purchaseHeaders, payload: purchasePayload });
@@ -760,20 +772,24 @@ test("legal acceptance is versioned, immutable, and exposed by the account profi
   assert.equal(invalid.statusCode, 400);
 });
 
-test("purchase confirmation requires current Terms acceptance and preserves the immediate-start evidence", async () => {
-  const auth = await createRegisteredAuthUser(context);
+test("purchase confirmation requires current Terms acceptance and preserves the immediate-start evidence", async (t) => {
+  const purchaseContext = { app: buildAppWithOverrides({}, { revenueCatEntitlementReader: expiredPurchaseReader }) };
+  t.after(() => purchaseContext.app.close());
+  const auth = await createRegisteredAuthUser(purchaseContext);
   const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
   const payload = { confirmationId: "00000000-0000-4000-8000-000000000059", termsVersion: "2026-09-05", productIdentifier: "monthly", storefrontPrice: "29,99 zł", locale: "pl", immediateStartRequested: true };
-  assert.equal((await context.app.inject({ method: "POST", url: "/v1/purchase-confirmations", headers, payload })).statusCode, 409);
-  await context.app.inject({ method: "POST", url: "/v1/legal-acceptances", headers, payload: { termsVersion: payload.termsVersion, minimumAgeConfirmed: 18 } });
-  const created = await context.app.inject({ method: "POST", url: "/v1/purchase-confirmations", headers, payload });
+  const missingTerms = await purchaseContext.app.inject({ method: "POST", url: "/v1/purchase-confirmations", headers, payload });
+  assert.equal(missingTerms.statusCode, 409);
+  assert.deepEqual(missingTerms.json(), { error: { code: "legal_acceptance_required" } });
+  await purchaseContext.app.inject({ method: "POST", url: "/v1/legal-acceptances", headers, payload: { termsVersion: payload.termsVersion, minimumAgeConfirmed: 18 } });
+  const created = await purchaseContext.app.inject({ method: "POST", url: "/v1/purchase-confirmations", headers, payload });
   assert.equal(created.statusCode, 201);
   assert.equal(typeof created.json().confirmation.attemptExpiresAt, "string");
-  assert.equal((await context.app.inject({ method: "POST", url: "/v1/purchase-confirmations", headers, payload })).statusCode, 201);
-  const competing = await context.app.inject({ method: "POST", url: "/v1/purchase-confirmations", headers, payload: { ...payload, confirmationId: "00000000-0000-4000-8000-000000000060" } });
+  assert.equal((await purchaseContext.app.inject({ method: "POST", url: "/v1/purchase-confirmations", headers, payload })).statusCode, 201);
+  const competing = await purchaseContext.app.inject({ method: "POST", url: "/v1/purchase-confirmations", headers, payload: { ...payload, confirmationId: "00000000-0000-4000-8000-000000000060" } });
   assert.equal(competing.statusCode, 409);
   assert.equal(competing.json().error.code, "purchase_attempt_active");
-  const me = await context.app.inject({ method: "GET", url: "/v1/me", headers });
+  const me = await purchaseContext.app.inject({ method: "GET", url: "/v1/me", headers });
   const records = await firestore().collection("users").doc(me.json().user.id).collection("purchaseConfirmations").get();
   assert.equal(records.size, 1);
   assert.deepEqual({ autoRenews: records.docs[0]?.data().autoRenews, immediateStartRequested: records.docs[0]?.data().immediateStartRequested, trialOffered: records.docs[0]?.data().trialOffered }, { autoRenews: true, immediateStartRequested: true, trialOffered: false });
@@ -802,10 +818,10 @@ test("production excludes hosted admin origin while local admin requires loopbac
     SMTP_FROM_EMAIL: "privacy@example.com",
     SMTP_FROM_NAME: "Patternly",
     REVENUECAT_WEBHOOK_SECRET: "Bearer test-revenuecat-secret",
-    REVENUECAT_PROJECT_ID: "projtest",
-    REVENUECAT_APP_ID: "app-1",
+    REVENUECAT_PROJECT_ID: "proj8ae78267",
+    REVENUECAT_APP_ID: "app7b06e9a4c1",
     REVENUECAT_ENTITLEMENT_ID: "premium",
-    REVENUECAT_PRODUCT_ID: "monthly",
+    REVENUECAT_PRODUCT_ID: "prod8d07384c8c",
     REVENUECAT_WEBHOOK_ENVIRONMENT: "PRODUCTION",
   };
   assert.equal(loadEnvironment(production).adminWebOrigin, undefined);

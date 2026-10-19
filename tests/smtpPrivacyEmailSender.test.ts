@@ -71,10 +71,10 @@ test("SMTP runtime configuration is all-or-nothing and production requires it", 
     PRIVACY_RESPONSE_KEY_BASE64: Buffer.alloc(32, 11).toString("base64"),
     PRIVACY_AUDIT_HMAC_SECRET: "test-only-privacy-audit-hmac-secret-0123456789",
     REVENUECAT_WEBHOOK_SECRET: "Bearer test-revenuecat-secret",
-    REVENUECAT_PROJECT_ID: "projtest",
-    REVENUECAT_APP_ID: "app-1",
+    REVENUECAT_PROJECT_ID: "proj8ae78267",
+    REVENUECAT_APP_ID: "app7b06e9a4c1",
     REVENUECAT_ENTITLEMENT_ID: "premium",
-    REVENUECAT_PRODUCT_ID: "monthly",
+    REVENUECAT_PRODUCT_ID: "prod8d07384c8c",
     REVENUECAT_WEBHOOK_ENVIRONMENT: "PRODUCTION",
   };
   assert.throws(() => loadEnvironment(base), { message: "production_smtp_config_required" });
