@@ -9,6 +9,7 @@ export type StoredDeletionIdentity = Readonly<{ identityId: string; provider: st
 
 export type AccountErasureCounts = Readonly<{
   userTreeDocuments: number;
+  accountTreeDocuments: number;
   identityMappings: number;
   recoveryCodeIndex: number;
   recoveryOperations: number;
@@ -100,7 +101,7 @@ export async function eraseFirestoreAccountData(options: AccountErasureOptions):
   if (identityRefs.length === 0 || new Set(identityRefs.map(({ identityId }) => identityId)).size !== identityRefs.length) throw new Error("remote_deletion_pending");
   const userRef = userId === null ? null : db.collection(COLLECTIONS.users).doc(userId);
   const operationCounts = {
-    userTreeDocuments: 0, identityMappings: 0, recoveryCodeIndex: 0, recoveryOperations: 0,
+    userTreeDocuments: 0, accountTreeDocuments: 0, identityMappings: 0, recoveryCodeIndex: 0, recoveryOperations: 0,
     recoveryOperationResults: 0, sessionRevocations: 0, exportAudits: 0, exportRateLimits: 0,
     purchaseTransactions: 0, contentReportsUnlinked: 0, privacyRequestsUnlinked: 0,
   };
@@ -109,6 +110,8 @@ export async function eraseFirestoreAccountData(options: AccountErasureOptions):
   await db.runTransaction(async (transaction) => {
     await assertWriteAllowed(transaction);
     const user = userRef ? await transaction.get(userRef) : null;
+    const account = userId === null ? null : await transaction.get(db.collection(COLLECTIONS.accounts).doc(userId));
+    if (account?.exists) assertAccountRootOwner(account.data(), userId!);
     const mappings = userId === null ? null : await transaction.get(db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId));
     const tombstoneRefs = identityRefs.map((identity) => db.collection(COLLECTIONS.deletedIdentities).doc(identity.identityId));
     const tombstones = await transaction.getAll(...tombstoneRefs);
@@ -153,6 +156,16 @@ export async function eraseFirestoreAccountData(options: AccountErasureOptions):
     operationCounts.exportRateLimits += await deleteDocumentsOwned([rateLimitRef], options);
     operationCounts.contentReportsUnlinked += await unlinkOwnedReports(db.collection(COLLECTIONS.contentReports).where("accountId", "==", userId).orderBy(FieldPath.documentId()).limit(400), userId, options);
     operationCounts.privacyRequestsUnlinked += await unlinkOwnedPrivacyRequests(db.collection(COLLECTIONS.privacyRequests).where("userId", "==", userId).orderBy(FieldPath.documentId()).limit(400), userId, options);
+    const accountRef = db.collection(COLLECTIONS.accounts).doc(userId);
+    operationCounts.accountTreeDocuments += await deleteSubtreeOwned(accountRef, options);
+    operationCounts.accountTreeDocuments += await db.runTransaction(async (transaction) => {
+      await assertWriteAllowed(transaction);
+      const account = await transaction.get(accountRef);
+      if (!account.exists) return 0;
+      assertAccountRootOwner(account.data(), userId);
+      transaction.delete(accountRef);
+      return 1;
+    });
     operationCounts.userTreeDocuments += await deleteSubtreeOwned(userRef, options);
     operationCounts.userTreeDocuments += await deleteRootUserOwned(userRef, options);
 
@@ -160,6 +173,11 @@ export async function eraseFirestoreAccountData(options: AccountErasureOptions):
 
   await assertFirestoreAccountErasureComplete(db, userId, identityRefs, options.getTombstoneCheckpoint?.() ?? options.tombstoneCheckpoint);
   return Object.freeze(operationCounts);
+}
+
+function assertAccountRootOwner(value: unknown, userId: string): void {
+  const data = asRecord(value);
+  if (Object.hasOwn(data, "accountId") && data.accountId !== userId) throw new Error("remote_deletion_pending");
 }
 
 async function deleteDocumentsOwned(refs: readonly DocumentReference[], options: AccountErasureOptions): Promise<number> {
@@ -282,7 +300,9 @@ export async function assertFirestoreAccountErasureComplete(db: Firestore, userI
   assertTombstones(identityRefs, tombstones, checkpoint, !checkpoint);
   if (userId === null) return;
   const userRef = db.collection(COLLECTIONS.users).doc(userId);
-  const [user, mappings, recoveryCodes, recoveryOperations, recoveryResults, sessionRevocations, linkedReports, linkedPrivacyRequests, exportAudits, exportRateLimit, purchaseTransactions] = await Promise.all([
+  const accountRef = db.collection(COLLECTIONS.accounts).doc(userId);
+  const [account, user, mappings, recoveryCodes, recoveryOperations, recoveryResults, sessionRevocations, linkedReports, linkedPrivacyRequests, exportAudits, exportRateLimit, purchaseTransactions] = await Promise.all([
+    accountRef.get(),
     userRef.get(),
     db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId).get(),
     db.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", userId).get(),
@@ -295,6 +315,6 @@ export async function assertFirestoreAccountErasureComplete(db: Firestore, userI
     db.collection(COLLECTIONS.accountDataExportRateLimits).doc(userId).get(),
     db.collection("revenueCatTransactions").where("ownerAccountId", "==", userId).get(),
   ]);
-  if (user.exists || !mappings.empty || !recoveryCodes.empty || !recoveryOperations.empty || !recoveryResults.empty || !sessionRevocations.empty || !linkedReports.empty || !linkedPrivacyRequests.empty || !exportAudits.empty || exportRateLimit.exists || !purchaseTransactions.empty) throw new Error("remote_deletion_pending");
-  if (await subtreeHasDocuments(userRef)) throw new Error("remote_deletion_pending");
+  if (account.exists || user.exists || !mappings.empty || !recoveryCodes.empty || !recoveryOperations.empty || !recoveryResults.empty || !sessionRevocations.empty || !linkedReports.empty || !linkedPrivacyRequests.empty || !exportAudits.empty || exportRateLimit.exists || !purchaseTransactions.empty) throw new Error("remote_deletion_pending");
+  if (await subtreeHasDocuments(accountRef) || await subtreeHasDocuments(userRef)) throw new Error("remote_deletion_pending");
 }

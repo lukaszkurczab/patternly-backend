@@ -1,3 +1,5 @@
+import { seedStagedErasureFixture } from "./stagedErasureFixtures.js";
+import { assertFirestoreAccountErasureComplete, type StoredDeletionIdentity } from "../src/modules/account-lifecycle/firestoreAccountErasure.js";
 import { attemptState } from "./progressFixtures.js";
 import assert from "node:assert/strict";
 import { createHash, createHmac, randomUUID } from "node:crypto";
@@ -2194,4 +2196,99 @@ test("account-owned writers reject a tombstoned or missing user after authentica
   assert.deepEqual((await userRef.listCollections()).map((collection) => collection.id), ["legalAcceptances"]);
   assert.equal((await firestore().collection("contentReports").get()).size, 0);
   assert.equal((await firestore().collection("sessionRevocationOperations").get()).size, 0);
+});
+
+
+for (const missingParents of [false, true]) test(`staged erasure removes account tree and blocks proof on residual data (missing parents: ${missingParents})`, async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const staged = await seedStagedErasureFixture(firestore(), auth.userId, { missingParents });
+  const foreign = await seedStagedErasureFixture(firestore(), "unrelated-staged-account");
+  const foreignBefore = await firestore().getAll(...foreign.refs);
+  const operationId = randomUUID();
+  const result = await context.stores.accountLifecycle.deleteAccount(auth.userId, 1, operationId, "a".repeat(64));
+  assert.equal(result.status, "remote_deleted");
+  for (const snapshot of await firestore().getAll(...staged.refs)) assert.equal(snapshot.exists, false, snapshot.ref.path);
+  assert.equal((await staged.root.get()).exists, false);
+  assert.deepEqual(await staged.root.listCollections(), []);
+  const operationRef = firestore().collection(COLLECTIONS.accountDeletionOperations).doc(operationId);
+  const operation = (await operationRef.get()).data()!;
+  const identities = operation.identityRefs as StoredDeletionIdentity[];
+  const proofRef = firestore().collection("deletionProofs").doc(result.proofId);
+  // Root-only and orphan-only residuals must each prevent a success receipt.
+  for (const residual of [staged.root, staged.root.collection("adoptionTransfers").doc("missing").collection("records").doc("orphan")]) {
+    await residual.set({ private: true });
+    await assert.rejects(assertFirestoreAccountErasureComplete(firestore(), auth.userId, identities), /remote_deletion_pending/u);
+    await assert.rejects(context.stores.accountLifecycle.completeDeletion(operationId, result.proofId), /remote_deletion_pending/u);
+    assert.equal((await operationRef.get()).get("phase"), "remote_deleted");
+    assert.equal((await proofRef.get()).exists, false);
+    await residual.delete();
+  }
+  assert.equal((await context.stores.accountLifecycle.completeDeletion(operationId, result.proofId)).status, "deleted");
+  assert.equal((await proofRef.get()).get("status"), "deleted");
+  const foreignAfter = await firestore().getAll(...foreign.refs);
+  assert.deepEqual(foreignAfter.map((snapshot) => snapshot.data()), foreignBefore.map((snapshot) => snapshot.data()));
+});
+
+test("staged erasure resumes partial cleanup and rejects the old worker after fence takeover", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const staged = await seedStagedErasureFixture(firestore(), auth.userId, { recordCount: 205 });
+  const lifecycle = context.stores.accountLifecycle as unknown as {
+    assertDeletionOwnerInTransaction(transaction: FirebaseFirestore.Transaction, operation: { operationId: string }, fence: string, phase: string): Promise<void>;
+    deleteFirestoreOwnedData(userId: string, identities: StoredDeletionIdentity[], operation: { operationId: string }, fence: string): Promise<void>;
+  };
+  const originalGate = lifecycle.assertDeletionOwnerInTransaction;
+  let oldOperation: { operationId: string } | undefined;
+  let oldFence = "";
+  let interrupted = false;
+  let rejectedStale = false;
+  const operationId = randomUUID();
+  lifecycle.assertDeletionOwnerInTransaction = async function (transaction, operation, fence, phase) {
+    await originalGate.call(this, transaction, operation, fence, phase);
+    if (!oldOperation) { oldOperation = operation; oldFence = fence; }
+    if (!interrupted) {
+      const documents = await firestore().getAll(...staged.refs);
+      const remaining = documents.filter((snapshot) => snapshot.exists).length;
+      if (remaining > 0 && remaining < staged.refs.length) {
+        interrupted = true;
+        throw new Error("injected_staged_cleanup_interruption");
+      }
+    } else if (!rejectedStale && fence !== oldFence) {
+      const before = await firestore().getAll(...staged.refs);
+      const identities = (await firestore().collection(COLLECTIONS.accountDeletionOperations).doc(operationId).get()).get("identityRefs") as StoredDeletionIdentity[];
+      await assert.rejects(this.deleteFirestoreOwnedData(auth.userId, identities, oldOperation!, oldFence), /account_deletion_conflict/u);
+      rejectedStale = true;
+      const after = await firestore().getAll(...staged.refs);
+      assert.deepEqual(after.map((snapshot) => snapshot.data()), before.map((snapshot) => snapshot.data()));
+    }
+  };
+  try {
+    await assert.rejects(context.stores.accountLifecycle.deleteAccount(auth.userId, 1, operationId, "b".repeat(64)), /remote_deletion_pending/u);
+    assert.equal(interrupted, true);
+    const operationRef = firestore().collection(COLLECTIONS.accountDeletionOperations).doc(operationId);
+    const operation = (await operationRef.get()).data()!;
+    assert.equal(operation.phase, "firestore_deleting");
+    assert.equal((await firestore().collection("deletionProofs").doc(operation.proofId as string).get()).exists, false);
+    const remaining = (await firestore().getAll(...staged.refs)).filter((snapshot) => snapshot.exists).length;
+    assert.ok(remaining > 0 && remaining < staged.refs.length);
+    const resumed = await context.stores.accountLifecycle.resumeDeletion(operationId, "b".repeat(64));
+    assert.equal(resumed?.status, "complete");
+    assert.equal(rejectedStale, true);
+    for (const snapshot of await firestore().getAll(...staged.refs)) assert.equal(snapshot.exists, false, snapshot.ref.path);
+    assert.deepEqual(await staged.root.listCollections(), []);
+  } finally { lifecycle.assertDeletionOwnerInTransaction = originalGate; }
+});
+
+
+test("staged erasure refuses conflicting root ownership without changing its descendants", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const staged = await seedStagedErasureFixture(firestore(), auth.userId);
+  await staged.root.update({ accountId: "different-account" });
+  const before = await firestore().getAll(...staged.refs);
+  const operationId = randomUUID();
+  await assert.rejects(context.stores.accountLifecycle.deleteAccount(auth.userId, 1, operationId, "c".repeat(64)), /remote_deletion_pending/u);
+  const after = await firestore().getAll(...staged.refs);
+  assert.deepEqual(after.map((snapshot) => snapshot.data()), before.map((snapshot) => snapshot.data()));
+  const operation = (await firestore().collection(COLLECTIONS.accountDeletionOperations).doc(operationId).get()).data()!;
+  assert.equal(operation.phase, "firestore_deleting");
+  assert.equal((await firestore().collection("deletionProofs").doc(operation.proofId as string).get()).exists, false);
 });

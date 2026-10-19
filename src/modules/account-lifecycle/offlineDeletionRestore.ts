@@ -285,10 +285,10 @@ export async function reconcileOfflineDeletionRestore(options: Readonly<{
   if (finalAdmissionAt < restoreAt || finalAdmissionAt - restoreAt >= ACCOUNT_DELETION_TOMBSTONE_RETENTION_MS) return fail("offline_restore_outside_retention");
   const sum = (key: keyof AccountErasureCounts): number => counts.reduce((total, item) => total + item[key], 0);
   const erased = Object.freeze({
-    userTreeDocuments: sum("userTreeDocuments"), identityMappings: sum("identityMappings"), recoveryCodeIndex: sum("recoveryCodeIndex"),
+    userTreeDocuments: sum("userTreeDocuments"), accountTreeDocuments: sum("accountTreeDocuments"), identityMappings: sum("identityMappings"), recoveryCodeIndex: sum("recoveryCodeIndex"),
     recoveryOperations: sum("recoveryOperations"), recoveryOperationResults: sum("recoveryOperationResults"), sessionRevocations: sum("sessionRevocations"),
     exportAudits: sum("exportAudits"), exportRateLimits: sum("exportRateLimits"), purchaseTransactions: sum("purchaseTransactions"),
     contentReportsUnlinked: sum("contentReportsUnlinked"), privacyRequestsUnlinked: sum("privacyRequestsUnlinked"),
   });
-  return Object.freeze({ scope: "offline_emulator_only_not_deployable", status: "reconciled", sourceLedgerFingerprint: sourceFingerprint, targetBeforeFingerprint: targetBefore, targetAfterFingerprint: targetAfter, markerCount: activeMarkers.length, affectedAccountCount: counts.filter((count) => count.identityMappings > 0 || count.userTreeDocuments > 0).length, erased });
+  return Object.freeze({ scope: "offline_emulator_only_not_deployable", status: "reconciled", sourceLedgerFingerprint: sourceFingerprint, targetBeforeFingerprint: targetBefore, targetAfterFingerprint: targetAfter, markerCount: activeMarkers.length, affectedAccountCount: counts.filter((count) => count.identityMappings > 0 || count.userTreeDocuments > 0 || count.accountTreeDocuments > 0).length, erased });
 }

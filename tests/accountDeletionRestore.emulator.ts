@@ -6,6 +6,7 @@ import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { COLLECTIONS, identityDocumentId } from "../src/infrastructure/firestore/paths.js";
 import { PseudonymKeyRing } from "../src/infrastructure/security/pseudonymKeyRing.js";
 import { fingerprintDatabase, fingerprintDeletionMarkers, OFFLINE_RESTORE_DATABASES, reconcileOfflineDeletionRestore } from "../src/modules/account-lifecycle/offlineDeletionRestore.js";
+import { seedStagedErasureFixture } from "./stagedErasureFixtures.js";
 
 const PROJECT = "demo-patternly-account-restore";
 assert.equal(process.env.FIREBASE_PROJECT_ID, PROJECT);
@@ -32,6 +33,7 @@ async function clear(db: FirebaseFirestore.Firestore): Promise<void> {
 async function seedRestoredTarget(identityIds: readonly string[], restoreAt: Timestamp) {
   const oldUser = target.collection(COLLECTIONS.users).doc("restored-old-user");
   await oldUser.set({ createdAt: Timestamp.fromDate(new Date("2026-10-01T12:00:00.000Z")), profile: { displayName: "Old account" } });
+  const staged = await seedStagedErasureFixture(target, oldUser.id, { missingParents: true, recordCount: 3 });
   await oldUser.collection("progress").doc("attempt").set({ status: "complete" });
   await oldUser.collection("security").doc("recoveryCodes").set({ hashes: ["hash"] });
   const fingerprintBeforeOrphans = await fingerprintDatabase(target);
@@ -68,7 +70,7 @@ async function seedRestoredTarget(identityIds: readonly string[], restoreAt: Tim
     phase: "firestore_deleting", fence: "offline-restore-test-fence", userId: oldUser.id,
     leaseUntil: Timestamp.fromMillis(Date.now() + 10 * 60_000),
   });
-  return { oldUser, unrelated, targetFingerprint };
+  return { oldUser, unrelated, targetFingerprint, stagedRefs: staged.refs };
 }
 
 test("offline restore reconciliation refuses pending or partial clones and scrubs a clean restored clone", async (t) => {
@@ -128,7 +130,7 @@ test("offline restore reconciliation refuses pending or partial clones and scrub
   assert.equal((await orphanRecord.get()).exists, true, "unknown ownership is not guessed or silently erased");
   await clear(target);
 
-  let { oldUser, unrelated, targetFingerprint } = await seedRestoredTarget(identities.map(({ documentId }) => documentId), restoreAt);
+  let { oldUser, unrelated, targetFingerprint, stagedRefs } = await seedRestoredTarget(identities.map(({ documentId }) => documentId), restoreAt);
   const gate = async (transaction: FirebaseFirestore.Transaction) => {
     assert.equal(source.databaseId, OFFLINE_RESTORE_DATABASES.source);
     assert.equal(target.databaseId, OFFLINE_RESTORE_DATABASES.target);
@@ -225,11 +227,16 @@ test("offline restore reconciliation refuses pending or partial clones and scrub
   assert.equal((await target.collection(COLLECTIONS.identityMappings).doc(identityDocumentId("firebase", "old-firebase-subject")).get()).exists, false);
   await assert.rejects(run(), /offline_restore_target_drift/u, "a partial target is rejected and must be discarded");
   await clear(target);
-  ({ oldUser, unrelated, targetFingerprint } = await seedRestoredTarget(identities.map(({ documentId }) => documentId), restoreAt));
+  ({ oldUser, unrelated, targetFingerprint, stagedRefs } = await seedRestoredTarget(identities.map(({ documentId }) => documentId), restoreAt));
   const receipt = await run();
   assert.equal(receipt.status, "reconciled");
   assert.equal(receipt.markerCount, identities.length);
   assert.equal(receipt.affectedAccountCount, 1);
+  assert.ok(receipt.erased.accountTreeDocuments > 0, "the receipt counts physically erased staged account-tree documents");
+  const stagedReadback = await target.getAll(...stagedRefs);
+  assert.ok(stagedReadback.length > 0);
+  assert.ok(stagedReadback.every((snapshot) => !snapshot.exists), "staged account documents, including children below a missing transfer parent, are physically erased");
+  assert.equal((await target.collection(COLLECTIONS.accounts).doc(oldUser.id).get()).exists, false);
   assert.equal((await target.collection(COLLECTIONS.identityMappings).doc(identity.documentId).get()).exists, false);
   for (const item of identities) assert.equal((await target.collection(COLLECTIONS.deletedIdentities).doc(item.documentId).get()).get("expiresAt").toMillis(), expiresAt.toMillis());
   assert.equal((await target.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", oldUser.id).get()).empty, true);
