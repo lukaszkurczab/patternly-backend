@@ -127,6 +127,33 @@ test("one-shot adoption uses the same exact identity and explicit group choice s
   assert.deepEqual(replay, first);
 });
 
+for (const resolution of ["keep_account", "keep_guest"] as const) {
+  test(`one-shot grouped ${resolution} preserves exact v2 pair and replays once`, async () => {
+    const userId = await account();
+    const pair = goalPlanPair(trackId, "2027-09-09");
+    await store.applyBatch(userId, 1, deviceId, 0, pair, metadata(10));
+    const source = await store.readSnapshot(userId);
+    const guestPair = goalPlanPair(trackId, "2027-10-10", 2, 2);
+    const records = guestPair.map((row) => ({ recordId: row.targetId, recordType: row.recordType, trackId: row.trackId, state: row.state, fingerprint: row.fingerprint, version: 8 }));
+    const snapshot = { guestSnapshotVersion: 1, guestUserId: randomUUID(), records, activeSession: false, pendingJournal: false };
+    const preview = await store.previewAdoption(userId, snapshot);
+    assert.deepEqual(preview.preview.conflicts, []);
+    assert.equal(preview.preview.goalPlanConflictGroups.length, 1);
+    const confirmation = { operationId: preview.preview.operationId, previewFingerprint: preview.preview.fingerprint, resolutions: [], groupChoices: [{ groupId: preview.preview.goalPlanConflictGroups[0]!.groupId, resolution }] };
+    const first = await store.confirmAdoption(userId, 1, deviceId, snapshot, confirmation);
+    assert.equal(first.accountRevision, resolution === "keep_account" ? 2 : 4);
+    assert.equal(first.mutationIds.length, resolution === "keep_account" ? 0 : 2);
+    for (const row of first.records) {
+      const expected = resolution === "keep_account" ? source.records.find((item) => item.recordType === row.recordType)! : guestPair.find((item) => item.recordType === row.recordType)!;
+      assert.deepEqual(row.state, expected.state);
+      assert.equal(row.fingerprint, expected.fingerprint);
+      assert.equal(row.version, resolution === "keep_account" ? 1 : 2);
+    }
+    assert.deepEqual(await store.confirmAdoption(userId, 1, deviceId, snapshot, confirmation), first);
+    assert.equal((await store.readSnapshot(userId)).accountRevision, first.accountRevision);
+  });
+}
+
 test("legacy identity leaves are rejected before a write", async () => {
   const userId = await account();
   const state = { identity: { trackId, questionId: "question-1", contentVersion: "2026.09.1", artifactSha256: "a".repeat(64), packagePin: "retired" } };

@@ -6,7 +6,7 @@ import { Timestamp, type Firestore, type Transaction } from "firebase-admin/fire
 import { buildApplication } from "../src/api/app.js";
 import { FirestoreProgressStore } from "../src/modules/progress/store.js";
 import { adoptionTransferRecordKey, createAdoptionSnapshotSeal, createAdoptionTransferChunkFingerprint } from "../src/modules/users/adoptionTransfer.js";
-import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
+import { createMergeRecordFingerprint, type GuestMergeRecord } from "../src/modules/users/merge.js";
 import { createFirebaseTokenVerifier } from "../src/infrastructure/firebase/verifier.js";
 import { progressDocumentId } from "../src/infrastructure/firestore/paths.js";
 import { testEnvironment } from "./support.js";
@@ -23,7 +23,7 @@ function learningRecord(recordId: string, recordTrackId: string, value = recordI
   return { recordType: "training_attempt", recordId, trackId: recordTrackId, state, version: 0, fingerprint: createMergeRecordFingerprint({ recordType: "training_attempt", recordId, trackId: recordTrackId, state }) };
 }
 
-async function prepareConfirmedTransfer(auth: Awaited<ReturnType<typeof createRegisteredAuthUser>>, sessionId: string, records: ReturnType<typeof learningRecord>[]) {
+async function prepareConfirmedTransfer(auth: Awaited<ReturnType<typeof createRegisteredAuthUser>>, sessionId: string, records: GuestMergeRecord[], groupChoices: Array<{ groupId: string; resolution: "keep_guest" | "keep_account" }> = []) {
   const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
   const recordKeys = records.map(adoptionTransferRecordKey);
   const chunkBase = { chunkId: "chunk-0", index: 0, recordKeys, bytes: 512 };
@@ -39,10 +39,40 @@ async function prepareConfirmedTransfer(auth: Awaited<ReturnType<typeof createRe
   assert.equal(seal.statusCode, 200, JSON.stringify(seal.json()));
   const preview = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/preview`, headers, payload: { canonicalVersion, deviceId } });
   assert.equal(preview.statusCode, 200, JSON.stringify(preview.json()));
-  const confirmation = { canonicalVersion, deviceId, operationId: preview.json().preview.operationId as string, previewFingerprint: preview.json().preview.fingerprint as string, resolutions: [], groupChoices: [] };
+  const confirmation = { canonicalVersion, deviceId, operationId: preview.json().preview.operationId as string, previewFingerprint: preview.json().preview.fingerprint as string, resolutions: [], groupChoices };
   const confirm = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/confirm`, headers, payload: confirmation });
   assert.equal(confirm.statusCode, 200, JSON.stringify(confirm.json()));
-  return { headers, confirm, preview, chunk };
+  return { headers, confirm, preview, chunk, confirmation };
+}
+
+function goalPlanState(track: string, targetDate: string, goalRevision = 1, planRevision = 1) {
+  return {
+    goal: { schemaVersion: 1, revision: goalRevision, record: { goalType: "prepare_for_a_certification", preferredDays: ["mon"], status: "active", targetDate, trackId: track, weeklySessionTarget: 1 } },
+    learning_plan: { schemaVersion: 1, revision: planRevision, plan: { schemaVersion: 2, planId: `plan-${track}`, trackId: track, goalRevision, status: "accepted", timezone: "Europe/Warsaw", contentVersion: "content-v1", artifactSha256: "a".repeat(64), acceptedTarget: { meaning: "event", targetDate }, createdAt: "2026-09-09T08:00:00.000Z", updatedAt: "2026-09-09T08:00:00.000Z", planRevision, commandId: `command-${planRevision}`, slots: [{ slotId: `slot-${planRevision}`, day: "mon", localTime: "18:00", sessionLength: 25 }], minutesPerStudyDay: 25, executionPolicy: { policyVersion: "patternly-learning-execution-v1", initialDiagnosis: null, practice: { modeId: "coding-interview-guided-practice", requestedLength: 10 } }, planningPolicyIdentity: { contentVersion: "content-v1", artifactSha256: "a".repeat(64), policyVersion: "policy-v1" } } },
+  };
+}
+
+function goalPlanRecords(track: string, targetDate: string, goalRevision = 1, planRevision = 1): GuestMergeRecord[] {
+  const states = goalPlanState(track, targetDate, goalRevision, planRevision);
+  return (["goal", "learning_plan"] as const).map((recordType) => {
+    const state = states[recordType];
+    return { recordId: track, recordType, trackId: track, state, version: 0, fingerprint: createMergeRecordFingerprint({ recordId: track, recordType, trackId: track, state }) };
+  });
+}
+
+async function seedAccountGoalPlan(auth: Awaited<ReturnType<typeof createRegisteredAuthUser>>, records: GuestMergeRecord[]) {
+  const result = await context.stores.progress.applyBatch(auth.userId, 1, deviceId, 0, records.map((record, index) => ({
+    mutationId: `seed-group-mutation-${String(index).padStart(4, "0")}`,
+    kind: "node" as const,
+    recordType: record.recordType as "goal" | "learning_plan",
+    trackId: record.trackId,
+    targetId: record.recordId,
+    expectedVersion: null,
+    fingerprint: record.fingerprint,
+    state: record.state,
+  })), { sessionId: "seed-group-session", batchId: "seed-group-batch", highWatermark: 1 });
+  assert.equal(result.applied.length, records.length);
+  return context.stores.progress.readSnapshot(auth.userId);
 }
 
 test.before(async () => {
@@ -98,6 +128,197 @@ test("canonical transfer persists chunks, applies one generation, and retries sa
   assert.equal(Object.hasOwn(operation!, "protocolVersion"), false);
   assert.equal(Object.hasOwn(operation!, "contentIdentitySchema"), false);
   assert.equal((await firestore().collection("users").doc(accountId).collection("progressGenerations").doc("1").collection("records").get()).size, records.length);
+});
+
+async function assertStagedGoalPlanGroupChoice(resolution: "keep_account" | "keep_guest") {
+  const track = "aws-certified-solutions-architect-associate";
+  const auth = await createRegisteredAuthUser(context);
+  const accountPair = goalPlanRecords(track, "2027-09-09");
+  const seed = await seedAccountGoalPlan(auth, accountPair);
+  const guestPair = goalPlanRecords(track, "2027-10-10");
+  const ungrouped = Array.from({ length: 199 }, (_, index) => learningRecord(`group-${resolution}-record-${index}`, `group-${resolution}-track-${index}`));
+  const records: GuestMergeRecord[] = [...guestPair, ...ungrouped];
+  const sessionId = `staged-group-${resolution}`;
+  const groupChoices = [{ groupId: `track:${track}`, resolution }];
+  const { headers, confirm, preview, confirmation } = await prepareConfirmedTransfer(auth, sessionId, records, groupChoices);
+  assert.deepEqual(preview.json().preview.goalPlanConflictGroups.map((group: { groupId: string }) => group.groupId), [`track:${track}`]);
+  assert.deepEqual(confirmation.resolutions, []);
+
+  const interruptedApp = buildTransferTransactionRotationApp(auth.userId, 3);
+  const applyPayload = { canonicalVersion, deviceId, decisionFingerprint: confirm.json().decisionFingerprint };
+  const interrupted = await interruptedApp.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers, payload: applyPayload });
+  assert.equal(interrupted.statusCode, 409, JSON.stringify(interrupted.json()));
+  assert.deepEqual(interrupted.json(), { error: { code: "authorization_generation_conflict" } });
+  const transferRef = transferRefFor(auth.userId, sessionId);
+  const applying = (await transferRef.get()).data()!;
+  assert.equal(applying.state, "applying");
+  assert.equal(applying.applyCursor, 200);
+  const source = await context.stores.progress.readSnapshot(auth.userId);
+  assert.equal(source.generation, 0);
+  assert.equal(source.accountRevision, seed.accountRevision);
+  assert.equal(source.records.length, accountPair.length);
+  assert.deepEqual(source.records.map((record) => record.fingerprint).sort(), accountPair.map((record) => record.fingerprint).sort());
+  await interruptedApp.close();
+
+  const refreshed = await setAuthCustomClaimsAndSignIn(auth, { authorizationGeneration: 2 });
+  const freshHeaders = { ...headers, authorization: `Bearer ${refreshed.idToken}` };
+  const resumed = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers: freshHeaders, payload: applyPayload });
+  assert.equal(resumed.statusCode, 200, JSON.stringify(resumed.json()));
+  assert.equal(resumed.json().state, "complete");
+
+  const expectedGrouped = resolution === "keep_account" ? seed.records.map((record) => ({ recordId: record.targetId, recordType: record.recordType, trackId: record.trackId, state: record.state, fingerprint: record.fingerprint, version: record.version })) : guestPair.map((record) => ({ ...record, version: 2 }));
+  const expected = [...expectedGrouped, ...ungrouped.map((record) => ({ ...record, version: 1 }))];
+  const completed = (await transferRef.get()).data()!;
+  const expectedChanges = resolution === "keep_account" ? ungrouped.length : ungrouped.length + guestPair.length;
+  assert.equal(completed.applyChangeCount, expectedChanges);
+  assert.equal(completed.accountRevision, seed.accountRevision + expectedChanges);
+  assert.equal(completed.applyCursor, expected.length);
+  const targetRef = firestore().collection("users").doc(auth.userId).collection("progressGenerations").doc(String(completed.targetGeneration));
+  const targetRows = (await targetRef.collection("records").get()).docs.map((document) => document.data());
+  assert.equal(targetRows.length, expected.length);
+  const byKey = new Map(expected.map((record) => [`${record.recordType}:${record.trackId}:${record.recordId}`, record]));
+  for (const row of targetRows) {
+    const key = `${row.recordType}:${row.trackId}:${row.targetId}`;
+    const record = byKey.get(key);
+    assert.ok(record, `unexpected materialized record ${key}`);
+    assert.equal(row.fingerprint, record.fingerprint, key);
+    assert.equal(row.version, record.version, key);
+    assert.deepEqual(row.state, record.state, key);
+  }
+  const active = await context.stores.progress.readSnapshot(auth.userId);
+  assert.equal(active.accountRevision, seed.accountRevision + expectedChanges);
+  assert.equal(active.generation, completed.targetGeneration);
+  const beforeReplay = {
+    operation: (await transferRef.get()).data(),
+    target: (await targetRef.get()).data(),
+    metadata: (await firestore().collection("users").doc(auth.userId).collection("syncMetadata").doc("account").get()).data(),
+    rows: (await targetRef.collection("records").get()).docs.map((document) => document.data()).sort((left, right) => String(left.targetId).localeCompare(String(right.targetId))),
+  };
+  const replay = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers: freshHeaders, payload: applyPayload });
+  assert.equal(replay.statusCode, 200, JSON.stringify(replay.json()));
+  assert.equal(replay.json().state, "complete");
+  const status = await context.app.inject({ method: "GET", url: `/v1/account-data/adoption/transfer/${sessionId}/status?deviceId=${deviceId}`, headers: freshHeaders });
+  assert.equal(status.statusCode, 200, JSON.stringify(status.json()));
+  assert.equal(status.json().state, "complete");
+  const afterReplay = {
+    operation: (await transferRef.get()).data(),
+    target: (await targetRef.get()).data(),
+    metadata: (await firestore().collection("users").doc(auth.userId).collection("syncMetadata").doc("account").get()).data(),
+    rows: (await targetRef.collection("records").get()).docs.map((document) => document.data()).sort((left, right) => String(left.targetId).localeCompare(String(right.targetId))),
+  };
+  assert.deepEqual(afterReplay, beforeReplay);
+}
+test("staged keep_account choice survives a committed chunk, resume, and replay exactly", async () => {
+  await assertStagedGoalPlanGroupChoice("keep_account");
+});
+
+test("staged keep_guest choice survives a committed chunk, resume, and replay exactly", async () => {
+  await assertStagedGoalPlanGroupChoice("keep_guest");
+});
+
+test("staged preview rejects a goal-only guest bundle before promotion", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const track = "aws-certified-solutions-architect-associate";
+  const accountPair = goalPlanRecords(track, "2027-09-09");
+  const seed = await seedAccountGoalPlan(auth, accountPair);
+  const guestGoal = goalPlanRecords(track, "2027-10-10")[0]!;
+  const sessionId = "staged-goal-only-keep-guest";
+  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const chunkBase = { chunkId: "chunk-0", index: 0, recordKeys: [adoptionTransferRecordKey(guestGoal)], bytes: 512 };
+  const chunk = { ...chunkBase, fingerprint: createAdoptionTransferChunkFingerprint(chunkBase) };
+  const start = await context.app.inject({ method: "POST", url: "/v1/account-data/adoption/transfer/start", headers, payload: { canonicalVersion, sessionId, idempotencyKey: sessionId, guestUserId, snapshotVersion: 1, expectedGeneration: 0, deviceId } });
+  assert.equal(start.statusCode, 200, JSON.stringify(start.json()));
+  const upload = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/upload`, headers, payload: { canonicalVersion, deviceId, chunk, records: [guestGoal] } });
+  assert.equal(upload.statusCode, 200, JSON.stringify(upload.json()));
+  const snapshotFingerprint = createAdoptionSnapshotSeal({ guestUserId, snapshotVersion: 1, records: [guestGoal], chunks: [chunk] });
+  const seal = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/seal`, headers, payload: { canonicalVersion, deviceId, snapshotFingerprint, recordCount: 1, chunkCount: 1 } });
+  assert.equal(seal.statusCode, 200, JSON.stringify(seal.json()));
+  const preview = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/preview`, headers, payload: { canonicalVersion, deviceId } });
+  assert.equal(preview.statusCode, 409, JSON.stringify(preview.json()));
+  assert.deepEqual(preview.json(), { error: { code: "adoption_transfer_track_group_incomplete" } });
+  assert.equal((await transferRefFor(auth.userId, sessionId).get()).data()?.previewFingerprint, undefined);
+  const source = await context.stores.progress.readSnapshot(auth.userId);
+  assert.equal(source.accountRevision, seed.accountRevision);
+  assert.deepEqual(source.records.map((record) => record.fingerprint).sort(), accountPair.map((record) => record.fingerprint).sort());
+  assert.equal((await firestore().collection("users").doc(auth.userId).collection("syncMetadata").doc("account").get()).data()?.generation ?? 0, 0);
+});
+
+test("staged group choice preserves account or guest tombstones as one atomic bundle", async () => {
+  const track = "aws-certified-solutions-architect-associate";
+  for (const resolution of ["keep_account", "keep_guest"] as const) {
+    const auth = await createRegisteredAuthUser(context);
+    const accountPair = goalPlanRecords(track, "2027-09-09");
+    const seed = await seedAccountGoalPlan(auth, accountPair);
+    const tombstoneState = { deleted: true };
+    const guestTombstones: GuestMergeRecord[] = (["goal", "learning_plan"] as const).map((recordType) => ({
+      recordId: track,
+      recordType,
+      trackId: track,
+      state: tombstoneState,
+      version: 0,
+      fingerprint: createMergeRecordFingerprint({ recordId: track, recordType, trackId: track, state: tombstoneState }),
+    }));
+    const sessionId = `staged-group-tombstone-${resolution}`;
+    const { headers, confirm } = await prepareConfirmedTransfer(auth, sessionId, guestTombstones, [{ groupId: `track:${track}`, resolution }]);
+    const apply = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers, payload: { canonicalVersion, deviceId, decisionFingerprint: confirm.json().decisionFingerprint } });
+    assert.equal(apply.statusCode, 200, JSON.stringify(apply.json()));
+    const operation = (await transferRefFor(auth.userId, sessionId).get()).data()!;
+    const target = await firestore().collection("users").doc(auth.userId).collection("progressGenerations").doc(String(operation.targetGeneration)).collection("records").get();
+    assert.equal(target.size, 2);
+    const rows = target.docs.map((document) => document.data());
+    if (resolution === "keep_account") {
+      assert.equal(operation.applyChangeCount, 0);
+      assert.equal(operation.accountRevision, seed.accountRevision);
+      assert.deepEqual(rows.map((row) => row.fingerprint).sort(), seed.records.map((record) => record.fingerprint).sort());
+    } else {
+      assert.equal(operation.applyChangeCount, 2);
+      assert.equal(operation.accountRevision, seed.accountRevision + 2);
+      assert.ok(rows.every((row) => row.state.deleted === true && row.version === 2));
+    }
+  }
+});
+
+test("staged keep_account makes no changes when a conflicting group shares one exact member", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const track = "aws-certified-solutions-architect-associate";
+  const accountPair = goalPlanRecords(track, "2027-09-09");
+  const seed = await seedAccountGoalPlan(auth, accountPair);
+  const guestPair = goalPlanRecords(track, "2027-09-09", 1, 2);
+  const sessionId = "staged-group-unchanged-member";
+  const { headers, confirm, preview } = await prepareConfirmedTransfer(auth, sessionId, guestPair, [{ groupId: `track:${track}`, resolution: "keep_account" }]);
+  assert.equal(preview.json().preview.goalPlanConflictGroups.length, 1);
+  const apply = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers, payload: { canonicalVersion, deviceId, decisionFingerprint: confirm.json().decisionFingerprint } });
+  assert.equal(apply.statusCode, 200, JSON.stringify(apply.json()));
+  const operation = (await transferRefFor(auth.userId, sessionId).get()).data()!;
+  assert.equal(operation.applyChangeCount, 0);
+  assert.equal(operation.accountRevision, seed.accountRevision);
+  const target = await firestore().collection("users").doc(auth.userId).collection("progressGenerations").doc(String(operation.targetGeneration)).collection("records").get();
+  assert.equal(target.size, 2);
+  assert.deepEqual(target.docs.map((document) => document.data().fingerprint).sort(), seed.records.map((record) => record.fingerprint).sort());
+});
+
+test("staged preview rejects a plan-only guest bundle before promotion", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
+  const track = "aws-certified-solutions-architect-associate";
+  const planOnly = goalPlanRecords(track, "2027-10-10")[1]!;
+  const sessionId = "staged-plan-only-invalid";
+  const chunkBase = { chunkId: "chunk-0", index: 0, recordKeys: [adoptionTransferRecordKey(planOnly)], bytes: 512 };
+  const chunk = { ...chunkBase, fingerprint: createAdoptionTransferChunkFingerprint(chunkBase) };
+  const start = await context.app.inject({ method: "POST", url: "/v1/account-data/adoption/transfer/start", headers, payload: { canonicalVersion, sessionId, idempotencyKey: sessionId, guestUserId, snapshotVersion: 1, expectedGeneration: 0, deviceId } });
+  assert.equal(start.statusCode, 200, JSON.stringify(start.json()));
+  const upload = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/upload`, headers, payload: { canonicalVersion, deviceId, chunk, records: [planOnly] } });
+  assert.equal(upload.statusCode, 200, JSON.stringify(upload.json()));
+  const snapshotFingerprint = createAdoptionSnapshotSeal({ guestUserId, snapshotVersion: 1, records: [planOnly], chunks: [chunk] });
+  const seal = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/seal`, headers, payload: { canonicalVersion, deviceId, snapshotFingerprint, recordCount: 1, chunkCount: 1 } });
+  assert.equal(seal.statusCode, 200, JSON.stringify(seal.json()));
+  const preview = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/preview`, headers, payload: { canonicalVersion, deviceId } });
+  assert.equal(preview.statusCode, 400, JSON.stringify(preview.json()));
+  assert.deepEqual(preview.json(), { error: { code: "goal_plan_bundle_invalid" } });
+  const operation = (await transferRefFor(auth.userId, sessionId).get()).data();
+  assert.equal(operation?.state, "result_building");
+  assert.equal(operation?.previewFingerprint, undefined);
+  assert.equal((await firestore().collection("users").doc(auth.userId).collection("syncMetadata").doc("account").get()).data()?.generation ?? 0, 0);
 });
 
 test("apply fences reservation, every chunk, and empty-transfer promotion against authorization rotation", async () => {

@@ -259,6 +259,7 @@ function buildAdoptionMaterialization(operationId: string, guestRecords: readonl
   const resolved = new Map(remoteByKey);
   const changes: Array<{ record: GuestMergeRecord; remote: GuestMergeRecord | undefined; mutationId: string }> = [];
   const preview = buildGuestMergePreview({ accountUserId: "00000000-0000-4000-8000-000000000000", accountSnapshotVersion: 0, guestSnapshot: { guestSnapshotVersion: 0, guestUserId: "11111111-1111-4111-8111-111111111111", records: [...guestRecords], activeSession: false, pendingJournal: false }, remoteRecords });
+  const groupedKeys = new Set(preview.preview.goalPlanConflictGroups.flatMap((group) => [...group.localRecordIds, ...group.accountRecordIds]));
   for (const group of preview.preview.goalPlanConflictGroups) {
     const choice = confirmation.groupChoices.find((candidate) => candidate.groupId === group.groupId);
     if (!choice || choice.resolution === "keep_account") continue;
@@ -276,6 +277,7 @@ function buildAdoptionMaterialization(operationId: string, guestRecords: readonl
   }
   for (const record of guestRecords) {
     const key = mergeRecordKey(record);
+    if (groupedKeys.has(key)) continue;
     const remote = remoteByKey.get(key);
     if (remote?.fingerprint === record.fingerprint) continue;
     const resolution = confirmation.resolutions.find((candidate) => candidate.conflictId === key);
