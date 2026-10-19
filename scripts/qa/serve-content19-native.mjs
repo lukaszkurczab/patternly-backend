@@ -6,10 +6,19 @@ import { ContentPackageService, FirestoreContentPackagePointerStore } from "../.
 import { gcsPackageFixture } from "../../tests/fixtures/gcsPackageFixture.ts";
 if (process.env.FIREBASE_PROJECT_ID !== "demo-patternly-content19" || process.env.FIRESTORE_EMULATOR_HOST !== "127.0.0.1:18119") throw Error("native_fixture_isolation_required");
 const metadata = JSON.parse(await readFile(resolve("../patternly/src/content/generated/premium-node-offer.json"), "utf8"));
-const offer = metadata.offer;
-const packageRoot = resolve("../patternly-content/artifacts/premium-nodes", offer.trackId, offer.nodeId, offer.artifactSha256);
-const manifest = JSON.parse(await readFile(join(packageRoot, "manifest.json"), "utf8"));
-const bytes = await readFile(join(packageRoot, `${manifest.packageSha256}.gzip`));
+const configuredOffer = metadata.offer;
+const packageRoot = resolve(process.env.PATTERNLY_CONTENT_PACKAGE_ROOT ?? "../patternly-content/dist", "premium-nodes", configuredOffer.trackId, configuredOffer.nodeId, "current");
+let manifest;
+try { manifest = JSON.parse(await readFile(join(packageRoot, "manifest.json"), "utf8")); }
+catch (error) {
+  if (error?.code === "ENOENT") throw new Error(`premium_package_missing: run (cd ../patternly-content && npm run content:build-premium-node -- --track ${configuredOffer.trackId} --node ${configuredOffer.nodeId})`, { cause: error });
+  throw error;
+}
+if (manifest.trackId !== configuredOffer.trackId || manifest.nodeId !== configuredOffer.nodeId) throw new Error("premium_package_identity_mismatch");
+const bytes = await readFile(join(packageRoot, "package.gzip"));
+// Probe the current generated package with a local runtime identity projection;
+// the APP offer file remains unchanged and is not treated as an applied release.
+const offer = { ...configuredOffer, contentVersion: manifest.contentVersion, artifactSha256: manifest.artifactSha256 };
 let allowed = true;
 const gcs = gcsPackageFixture();
 const context = createEmulatorContext({ revenueCatEntitlementReader: { read: async () => ({ entitlement: "premium", productId: "monthly", state: allowed ? "active" : "expired", providerExpiresAt: "2099-01-01T00:00:00.000Z", providerGraceExpiresAt: null, providerObservedAt: new Date().toISOString() }) }, createContentPackages: (db) => new ContentPackageService(new FirestoreContentPackagePointerStore(db), gcs.storage) });
@@ -35,6 +44,6 @@ const server = createServer(async (request, reply) => {
   } catch { reply.writeHead(503); reply.end("fixture_unavailable"); }
 });
 await new Promise((accept, reject) => { server.once("error", reject); server.listen(29119, "127.0.0.1", accept); });
-console.log("CONTENT19_NATIVE_FIXTURE_READY port=29119; modeled GCS, isolated Auth/Firestore, admitted123");
+console.log("CONTENT19_NATIVE_FIXTURE_READY port=29119; modeled GCS, isolated Auth/Firestore, current-source-package");
 await new Promise((accept) => { process.once("SIGTERM", accept); process.once("SIGINT", accept); });
 await new Promise((accept) => server.close(accept)); await context.close();

@@ -4,8 +4,8 @@ import { LOCAL_ADMIN_CONTRACT, LOCAL_ADMIN_DELETION_PSEUDONYM_KEYS_JSON, buildLo
 
 const values = {
   adminEmail: "admin@local.patternly.test",
-  adminContentRoot: "/workspace/patternly-content/artifacts",
-  adminContentReleaseId: "patternly-launch-2026-08-25-01",
+  adminContentRoot: "/workspace/patternly-content/.local/current",
+  adminContentReleaseId: "patternly-current-local",
 };
 
 test("local admin launcher pins one local deletion pseudonym key and ignores ambient override", () => {

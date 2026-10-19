@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile, writeFile, access } from "node:fs/promises";
 import { createServer } from "node:net";
 import { spawn, spawnSync } from "node:child_process";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildLocalAdminEnvironment, LOCAL_ADMIN_CONTRACT } from "./localAdminEnvironment.mjs";
 const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
@@ -148,10 +148,22 @@ try {
     ensureRunning();
     await auth.createUser({ email: admin.email, password: admin.password, emailVerified: true });
   }
+  const adminContentRoot = resolve(process.env.PATTERNLY_ADMIN_CONTENT_ROOT ?? resolve(root, "../patternly-content/dist/current"));
+  let adminContentReleaseId = process.env.PATTERNLY_ADMIN_CONTENT_RELEASE_ID;
+  if (!adminContentReleaseId) {
+    try {
+      const pointer = JSON.parse(await readFile(join(adminContentRoot, "current.json"), "utf8"));
+      if (typeof pointer.releaseId !== "string" || !/^patternly-local-[a-f0-9]{20}$/u.test(pointer.releaseId)) throw new Error("current_generated_release_pointer_invalid");
+      adminContentReleaseId = pointer.releaseId;
+    } catch (error) {
+      if (error?.code === "ENOENT") throw new Error(`generated_current_content_missing: run (cd ../patternly-content && npm run content:build-release)`, { cause: error });
+      throw error;
+    }
+  }
   const environment = buildLocalAdminEnvironment(process.env, {
     adminEmail: admin.email,
-    adminContentRoot: resolve(root, "../patternly-content/artifacts"),
-    adminContentReleaseId: "patternly-launch-2026-08-25-01",
+    adminContentRoot,
+    adminContentReleaseId,
   });
   start("API", process.execPath, ["--import", "tsx", "src/index.ts"], { cwd: root, env: environment });
   await waitFor(`${apiOrigin}/ready`);
