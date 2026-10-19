@@ -995,7 +995,9 @@ export class FirestoreProgressStore implements ProgressStore {
         .map((mutation) => mutation.trackId));
       if (changedGoalPlanTracks.size > 0) {
         const incomingByTrack = new Map<string, Map<"goal" | "learning_plan", ProgressMutation[]>>();
-        for (const mutation of mutations) {
+        // Receipt replays do not write state; validate only the actual writes
+        // together with their current persisted counterparts.
+        for (const { mutation } of newMutations) {
           if (mutation.recordType !== "goal" && mutation.recordType !== "learning_plan") continue;
           const trackMutations = incomingByTrack.get(mutation.trackId) ?? new Map<"goal" | "learning_plan", ProgressMutation[]>();
           const sameTypeMutations = trackMutations.get(mutation.recordType) ?? [];
