@@ -10,7 +10,7 @@ import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import { COLLECTIONS } from "../src/infrastructure/firestore/paths.js";
 import { createFirebaseAdminAuth } from "../src/infrastructure/firebase/adminAuth.js";
 import { RecoveryOperationCipher } from "../src/modules/account-lifecycle/recoveryOperationCipher.js";
-import { FirestoreAccountLifecycleStore } from "../src/modules/account-lifecycle/store.js";
+import { FixtureAccountLifecycleStore as FirestoreAccountLifecycleStore } from "./revenueCatDeletionFixture.js";
 import { PseudonymKeyRing } from "../src/infrastructure/security/pseudonymKeyRing.js";
 
 type ClientUser = Readonly<{ uid: string; getIdToken(forceRefresh?: boolean): Promise<string> }>;
@@ -181,7 +181,9 @@ after(async () => {
 TEST_GROUP(ENABLED
   ? "AUD-08 B2 recovery store isolated emulator tests"
   : "AUD-08 B2 recovery emulator matrix (skipped: set AUD08_RECOVERY_EMULATOR_TESTS=1 and provide the dedicated demo emulator pins)", () => {
-  test("durable request rate bucket fails closed on a corrupt counter", async () => {
+  test("durable request rate bucket fails closed on a corrupt counter", async (t) => {
+    // All requests belong to one modeled window even when the machine crosses a minute.
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
     const requesterHash = sha256(`aud08-test:${randomUUID()}`);
     const nowMs = Date.now();
     const windowMs = 60_000;

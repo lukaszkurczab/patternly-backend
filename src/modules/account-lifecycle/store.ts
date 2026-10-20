@@ -21,6 +21,22 @@ import { addUtcCalendarMonths } from "../../infrastructure/time/utcCalendar.js";
 import { RecoveryOperationCipher } from "./recoveryOperationCipher.js";
 import type { RecoveryOperationCipherContext, RecoveryOperationCipherEnvelope } from "./recoveryOperationCipher.js";
 
+import type { RevenueCatCustomerDeletionClient } from "../../infrastructure/revenuecat/customerDeletion.js";
+
+export type RevenueCatDeletionRuntime = Readonly<{ projectId: string; client: RevenueCatCustomerDeletionClient | null }>;
+type RevenueCatDeletionCheckpoint = Readonly<{ projectId: string; status: "pending" | "accepted" | "absent" }>;
+
+function revenueCatDeletionCheckpoint(data: Record<string, unknown>): RevenueCatDeletionCheckpoint | null {
+  const value = data.revenueCatDeletion;
+  if (value === undefined) return null;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("remote_deletion_pending");
+  const checkpoint = value as Record<string, unknown>;
+  if (Object.keys(checkpoint).sort().join(",") !== "projectId,status"
+    || typeof checkpoint.projectId !== "string" || !/^proj[A-Za-z0-9]+$/u.test(checkpoint.projectId)
+    || !["pending", "accepted", "absent"].includes(String(checkpoint.status))) throw new Error("remote_deletion_pending");
+  return Object.freeze({ projectId: checkpoint.projectId, status: checkpoint.status as RevenueCatDeletionCheckpoint["status"] });
+}
+
 const RECOVERY_CODE_COUNT = 10;
 const SECURITY_OPERATION_LEASE_MS = 2 * 60 * 1000;
 const RECOVERY_RESULT_TTL_MS = 55 * 60 * 1000;
@@ -35,7 +51,7 @@ const RECOVERY_CODE_PATTERN = /^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){3}$/u;
 type SessionRevocationResult = Readonly<{ status: "revoked"; operationId: string; customToken: string }>;
 type DeletionProof = Readonly<{ status: "deleted"; operationId: string; proofId: string }>;
 type DeletionOperationStatus = Readonly<{ status: "pending" | "remote_deleted" | "complete"; operationId: string; proofId: string | null }>;
-type DeletionPhase = "prepared" | "sessions_revoking" | "firestore_deleting" | "auth_deleting" | "remote_deleted" | "complete";
+type DeletionPhase = "prepared" | "sessions_revoking" | "firestore_deleting" | "auth_deleting" | "revenuecat_deleting" | "remote_deleted" | "complete";
 type StoredDeletionIdentity = Readonly<{ identityId: string; provider: string; keyVersion: string; subjectHmac: string }>;
 type StoredDeletionOperation = Readonly<{
   operationId: string;
@@ -48,10 +64,11 @@ type StoredDeletionOperation = Readonly<{
   expectedAuthorizationGeneration: number;
   fence: string;
   leaseUntil: Timestamp | Date;
+  revenueCatDeletion: RevenueCatDeletionCheckpoint | null;
   firestoreErasureCheckpoint: Readonly<{ deletedAt: Timestamp | Date; expiresAt: Timestamp | Date }> | null;
 }>;
 
-const DELETION_PHASES: readonly DeletionPhase[] = Object.freeze(["prepared", "sessions_revoking", "auth_deleting", "firestore_deleting", "remote_deleted", "complete"]);
+const DELETION_PHASES: readonly DeletionPhase[] = Object.freeze(["prepared", "sessions_revoking", "auth_deleting", "revenuecat_deleting", "firestore_deleting", "remote_deleted", "complete"]);
 
 export interface AccountLifecycleStore {
   claimRecoveryRequestRateLimit(requesterHash: string, max: number, windowSeconds: number): Promise<void>;
@@ -250,7 +267,7 @@ function externalStatus(data: Record<string, unknown>, phase: DeletionPhase): De
 
 function statusForPhase(phase: DeletionPhase): "pending" | "remote_deleting" | "remote_deleted" | "complete" {
   if (phase === "prepared" || phase === "sessions_revoking") return "pending";
-  if (phase === "firestore_deleting" || phase === "auth_deleting") return "remote_deleting";
+  if (phase === "firestore_deleting" || phase === "auth_deleting" || phase === "revenuecat_deleting") return "remote_deleting";
   if (phase === "remote_deleted") return "remote_deleted";
   return "complete";
 }
@@ -274,6 +291,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
     private readonly auth: FirebaseAdminAuth,
     private readonly pseudonymKeyRing: PseudonymKeyRing,
     private readonly recoveryRuntime: RecoveryOperationRuntime | null = null,
+    private readonly revenueCatRuntime: RevenueCatDeletionRuntime | null = null,
   ) {}
 
   public async claimRecoveryRequestRateLimit(requesterHash: string, max: number, windowSeconds: number): Promise<void> {
@@ -1076,7 +1094,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       if (!proof || proof.operationId !== operationId) throw new Error("remote_deletion_pending");
       return Object.freeze({ status: "deleted", operationId, proofId });
     }
-    if (!operation.userId) throw new Error("remote_deletion_pending");
+    if (!operation.userId || !operation.revenueCatDeletion || operation.revenueCatDeletion.status === "pending") throw new Error("remote_deletion_pending");
     try {
       await this.assertFirestoreDeletionComplete(operation.userId, operation.identityRefs, operation.firestoreErasureCheckpoint ?? undefined);
     } catch {
@@ -1091,6 +1109,9 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       if (currentPhase === null || currentData.userId !== operation.userId || currentData.proofId !== proofId || !["remote_deleted", "complete"].includes(currentPhase)) throw new Error("remote_deletion_pending");
       if (currentPhase === "complete") return;
       if (currentData.fence !== operation.fence) throw new Error("account_deletion_conflict");
+      const providerCheckpoint = revenueCatDeletionCheckpoint(currentData);
+      if (!providerCheckpoint || JSON.stringify(providerCheckpoint) !== JSON.stringify(operation.revenueCatDeletion)
+        || providerCheckpoint.status === "pending") throw new Error("remote_deletion_pending");
       const currentIdentityRefs = deletionIdentityReferences(currentData.identityRefs);
       if (!sameIdentityReferences(operation.identityRefs, currentIdentityRefs)) throw new Error("remote_deletion_pending");
       const tombstoneSnapshots = await transaction.getAll(...operation.identityRefs.map((identity) => this.db.collection(COLLECTIONS.deletedIdentities).doc(identity.identityId)));
@@ -1253,10 +1274,46 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
             await this.releaseDeletionLease(ref, operation, fence, "auth_deletion_failed");
             throw new Error("remote_deletion_pending");
           }
+          operation = await this.advanceDeletionPhase(ref, operation, fence, "revenuecat_deleting");
+          continue;
+        }
+        if (operation.phase === "revenuecat_deleting") {
+          try {
+            const checkpoint = operation.revenueCatDeletion;
+            const runtime = this.revenueCatRuntime;
+            if (!checkpoint) throw new Error("revenuecat_deletion_configuration");
+            if (checkpoint.status === "pending") {
+              if (!runtime || checkpoint.projectId !== runtime.projectId
+                || !runtime.client || runtime.client.projectId !== checkpoint.projectId) throw new Error("revenuecat_deletion_configuration");
+              // The authorized backend account ID is the AppUserID used by APP.
+              // Never substitute a Firebase UID, email, or current client SDK ID.
+              const result = await runtime.client.deleteCustomer(userId, () => this.db.runTransaction(async (transaction) => {
+                await this.assertDeletionOwnerInTransaction(transaction, operation, fence, "revenuecat_deleting");
+              }));
+              if (result.status !== "accepted" && result.status !== "absent") throw new Error("revenuecat_deletion_response");
+              await this.db.runTransaction(async (transaction) => {
+                await this.assertDeletionOwnerInTransaction(transaction, operation, fence, "revenuecat_deleting");
+                const current = await transaction.get(ref);
+                const currentCheckpoint = revenueCatDeletionCheckpoint(asRecord(current.data(), "account_deletion_operation"));
+                if (currentCheckpoint?.projectId !== checkpoint.projectId || currentCheckpoint.status !== "pending") throw new Error("account_deletion_conflict");
+                transaction.update(ref, { revenueCatDeletion: { projectId: checkpoint.projectId, status: result.status }, revenueCatDeletionRecordedAt: now() });
+              });
+            }
+          } catch (error) {
+            const code = error instanceof Error && error.message === "revenuecat_deletion_configuration"
+              ? "revenuecat_deletion_configuration" : "revenuecat_deletion_failed";
+            await this.releaseDeletionLease(ref, operation, fence, code).catch(() => undefined);
+            throw new Error("remote_deletion_pending");
+          }
           operation = await this.advanceDeletionPhase(ref, operation, fence, "firestore_deleting");
           continue;
         }
         if (operation.phase === "firestore_deleting") {
+          // Unbound legacy operations cannot acquire a new provider target on retry.
+          if (!operation.revenueCatDeletion || operation.revenueCatDeletion.status === "pending") {
+            await this.releaseDeletionLease(ref, operation, fence, "revenuecat_deletion_unbound");
+            throw new Error("remote_deletion_pending");
+          }
           try {
             await this.deleteFirestoreOwnedData(userId, operation.identityRefs, operation, fence);
           } catch {
@@ -1279,6 +1336,8 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
   private async prepareDeletionOperation(userId: string, expectedAuthorizationGeneration: number, operationId: string, operationSecret: string): Promise<StoredDeletionOperation> {
     const ref = operationRef(this.db, operationId);
     const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
+    const projectId = this.revenueCatRuntime?.projectId;
+    if (!projectId || !/^proj[A-Za-z0-9]+$/u.test(projectId)) throw new Error("remote_deletion_pending");
     await this.db.runTransaction(async (transaction) => {
       const user = await transaction.get(userRef);
       const current = await transaction.get(ref);
@@ -1334,6 +1393,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
         userId,
         status: "pending",
         phase: "sessions_revoking",
+        revenueCatDeletion: { projectId, status: "pending" },
         proofId,
         operationSecretHash: sha256(operationSecret),
         identityRefs,
@@ -1378,6 +1438,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       expectedAuthorizationGeneration,
       fence,
       leaseUntil,
+      revenueCatDeletion: revenueCatDeletionCheckpoint(data),
       firestoreErasureCheckpoint: deletionErasureCheckpoint(data),
     });
   }
@@ -1409,6 +1470,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       expectedAuthorizationGeneration,
       fence,
       leaseUntil,
+      revenueCatDeletion: revenueCatDeletionCheckpoint(data),
       firestoreErasureCheckpoint: deletionErasureCheckpoint(data),
     });
   }
@@ -1436,7 +1498,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
         fence: nextFence,
         leaseUntil: nextLease,
         updatedAt: advancedAt,
-        ...(target === "firestore_deleting" ? { authDeletedAt: advancedAt } : {}),
+        ...(target === "revenuecat_deleting" ? { authDeletedAt: advancedAt } : {}),
         ...(target === "remote_deleted" ? { authDeletedAt: data.authDeletedAt ?? advancedAt, remoteDeletedAt: advancedAt } : {}),
       }, { merge: true });
       if (target !== "remote_deleted" && user) transaction.set(userRef, {

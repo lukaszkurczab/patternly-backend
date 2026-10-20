@@ -1,3 +1,4 @@
+import { absentRevenueCatCustomerFixture } from "./revenueCatDeletionFixture.js";
 import { randomUUID } from "node:crypto";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
@@ -80,7 +81,7 @@ export function createEmulatorContext(options: Readonly<{ projectId?: string; en
         if (code !== "auth/user-not-found" && code !== "user-not-found") throw error;
       }
     },
-  });
+  }, absentRevenueCatCustomerFixture);
   const app = buildApplication({
     environment,
     firestore: runtime,

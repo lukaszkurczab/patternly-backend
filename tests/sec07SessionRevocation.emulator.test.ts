@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
-import { FirestoreAccountLifecycleStore } from "../src/modules/account-lifecycle/store.js";
+import { FixtureAccountLifecycleStore as FirestoreAccountLifecycleStore } from "./revenueCatDeletionFixture.js";
 import { parsePseudonymKeyRing } from "../src/infrastructure/security/pseudonymKeyRing.js";
 import { COLLECTIONS } from "../src/infrastructure/firestore/paths.js";
 import { accountSessionRevokeSchema } from "../src/modules/account-lifecycle/contracts.js";

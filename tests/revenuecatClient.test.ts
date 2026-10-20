@@ -248,7 +248,9 @@ test("OR aggregation selects timestamps from the source with the latest effectiv
   assert.equal(graceWins.providerGraceExpiresAt, new Date(observedAt + 36 * 60 * 60 * 1_000).toISOString());
 });
 
-test("promotional access remains constrained to the configured test customer and cutoff", async () => {
+test("promotional access remains constrained to the configured test customer and cutoff", async (t) => {
+  // This fixture models provider observation time, not the machine's wall clock.
+  t.mock.timers.enable({ apis: ["Date"], now: observedAt });
   const promoCustomerId = "sandbox-test-account";
   const promoExpiresAt = "2026-10-20T12:00:00.000Z";
   const promoMap = parsePremiumMap({

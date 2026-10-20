@@ -23,6 +23,7 @@ import type { DataExportStore } from "../../modules/data-export/contracts.js";
 import { FirestorePrivacyRequestStore, type PrivacyRequestStore } from "../../modules/privacy-requests/store.js";
 import { FirestoreSecurityIncidentStore, type SecurityIncidentStore } from "../../modules/security-incidents/store.js";
 import { FirestoreRevenueCatWebhookStore } from "../../modules/billing/revenuecatWebhookStore.js";
+import { createRevenueCatCustomerDeletionClient } from "../revenuecat/customerDeletion.js";
 import { FirestoreLegalRequestStore, type LegalRequestStore } from "../../modules/legal-requests/store.js";
 
 export type BackendStores = Readonly<{
@@ -44,7 +45,7 @@ export type BackendStores = Readonly<{
   legalRequests: LegalRequestStore;
 }>;
 
-export function createFirestoreStores(runtime: FirestoreRuntime, environment: Environment, authOverride?: FirebaseAdminAuth): BackendStores {
+export function createFirestoreStores(runtime: FirestoreRuntime, environment: Environment, authOverride?: FirebaseAdminAuth, deletionOverride?: import("../../modules/account-lifecycle/store.js").RevenueCatDeletionRuntime): BackendStores {
   const pseudonymKeyRing = parsePseudonymKeyRing(environment.deletionPseudonymKeysJson);
   const recoveryOperationRuntime = createRecoveryOperationRuntime(environment);
   const firebaseAuth = authOverride ?? createFirebaseAdminAuth(runtime.app);
@@ -54,6 +55,15 @@ export function createFirestoreStores(runtime: FirestoreRuntime, environment: En
     rateLimitWindowSeconds: environment.reportRateLimitWindowSeconds,
   });
   const purchaseScope = environment.premiumMap ?? (environment.nodeEnv === "test" && environment.revenueCatProjectId && environment.revenueCatAppId && environment.revenueCatProductId && environment.revenueCatWebhookEnvironment ? { projectId: environment.revenueCatProjectId, appId: environment.revenueCatAppId, productId: environment.revenueCatProductId, environment: environment.revenueCatWebhookEnvironment } : null);
+  const deletionProjectId = environment.premiumMap?.projectId;
+  const revenueCatDeletion = deletionProjectId ? {
+    projectId: deletionProjectId,
+    client: environment.revenueCatV2DeleteApiKey ? createRevenueCatCustomerDeletionClient({
+      baseUrl: environment.revenueCatApiBaseUrl,
+      apiKey: environment.revenueCatV2DeleteApiKey,
+      projectId: deletionProjectId,
+    }) : null,
+  } : null;
   return Object.freeze({
     firebaseAuth,
     users: new FirestoreUserStore(runtime.db, pseudonymKeyRing, purchaseScope),
@@ -63,7 +73,7 @@ export function createFirestoreStores(runtime: FirestoreRuntime, environment: En
     tracks: new FirestoreTrackStore(runtime.db),
     content: new FirestoreContentVersionStore(runtime.db),
     contentReports,
-    accountLifecycle: new FirestoreAccountLifecycleStore(runtime.db, firebaseAuth, pseudonymKeyRing, recoveryOperationRuntime),
+    accountLifecycle: new FirestoreAccountLifecycleStore(runtime.db, firebaseAuth, pseudonymKeyRing, recoveryOperationRuntime, deletionOverride ?? revenueCatDeletion),
     admin: new FirestoreAdminStore(runtime.db, environment.adminContentRoot, environment.adminContentReleaseId),
     dataExport: new FirestoreDataExportStore(runtime.db, {
       rateLimitMax: environment.accountDataExportRateLimitMax,

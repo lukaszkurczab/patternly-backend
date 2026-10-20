@@ -12,7 +12,7 @@ import { createFirebaseTokenVerifier } from "../src/infrastructure/firebase/veri
 import { COLLECTIONS, identityDocumentId } from "../src/infrastructure/firestore/paths.js";
 import { addUtcCalendarMonths } from "../src/infrastructure/time/utcCalendar.js";
 import { createContentReportSchema } from "../src/modules/content-reports/contracts.js";
-import { FirestoreAccountLifecycleStore } from "../src/modules/account-lifecycle/store.js";
+import { FixtureAccountLifecycleStore as FirestoreAccountLifecycleStore } from "./revenueCatDeletionFixture.js";
 import { parsePseudonymKeyRing } from "../src/infrastructure/security/pseudonymKeyRing.js";
 import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
 import { TEST_APP_CHECK_TOKEN, accountRegistrationPayload, clearFirestore, createAuthUser, createEmulatorContext, createRegisteredAuthUser, createVerifiedAuthUser, firestore, registerAuthUser, setAuthCustomClaimsAndSignIn, testEnvironment, sessionRevocationId, type EmulatorContext, verifyAuthUser } from "./support.js";
@@ -1934,6 +1934,8 @@ test("a stale deletion worker cannot mutate a user subtree after cleanup fence t
     userId: auth.userId,
     status: "remote_deleting",
     phase: "firestore_deleting",
+    // This current-operation fixture has already passed the provider stage.
+    revenueCatDeletion: { projectId: "projtest", status: "accepted" },
     proofId: "proof_cleanup_fence_takeover_fixture_12345",
     operationSecretHash: createHash("sha256").update(operationSecret, "utf8").digest("hex"),
     identityRefs: [{ identityId: pseudonym.documentId, provider: "firebase", keyVersion: pseudonym.keyVersion, subjectHmac: pseudonym.subjectHmac }],
@@ -1987,6 +1989,8 @@ test("deletion resumes to proof when a crash follows recursive user deletion", a
     userId,
     status: "remote_deleting",
     phase: "firestore_deleting",
+    // This current-operation fixture has already passed the provider stage.
+    revenueCatDeletion: { projectId: "projtest", status: "accepted" },
     proofId,
     operationSecretHash: createHash("sha256").update(operationSecret, "utf8").digest("hex"),
     identityRefs: [{ identityId, provider: "firebase", keyVersion: pseudonym.keyVersion, subjectHmac: pseudonym.subjectHmac }],
@@ -2105,6 +2109,8 @@ test("a redacted tombstone is never repopulated by a later operation", async () 
     userId,
     status: "remote_deleting",
     phase: "firestore_deleting",
+    // This current-operation fixture has already passed the provider stage.
+    revenueCatDeletion: { projectId: "projtest", status: "accepted" },
     proofId,
     operationSecretHash: createHash("sha256").update("a".repeat(64), "utf8").digest("hex"),
     identityRefs: [{ identityId, provider: "firebase", keyVersion: pseudonym.keyVersion, subjectHmac: pseudonym.subjectHmac }],

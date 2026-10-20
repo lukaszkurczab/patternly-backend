@@ -11,7 +11,7 @@ import { validateIsolatedEmulatorRuntime } from "../scripts/isolated-emulator-te
 import { createFirebaseAdminAuth } from "../src/infrastructure/firebase/adminAuth.js";
 import { COLLECTIONS } from "../src/infrastructure/firestore/paths.js";
 import { PseudonymKeyRing } from "../src/infrastructure/security/pseudonymKeyRing.js";
-import { FirestoreAccountLifecycleStore } from "../src/modules/account-lifecycle/store.js";
+import { FixtureAccountLifecycleStore as FirestoreAccountLifecycleStore } from "./revenueCatDeletionFixture.js";
 
 const enabled = process.env.B4_CRASH_TESTS === "1";
 for (const kind of ["revoke", "deletion"] as const) {

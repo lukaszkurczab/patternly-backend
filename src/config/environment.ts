@@ -43,6 +43,7 @@ const environmentSchema = z.object({
   REVENUECAT_API_BASE_URL: z.string().url().default("https://api.revenuecat.com"),
   REVENUECAT_READ_API_KEY: z.string().min(1).optional(),
   REVENUECAT_V2_READ_API_KEY: z.string().min(1).optional(),
+  REVENUECAT_V2_DELETE_API_KEY: z.string().min(1).optional(),
   REVENUECAT_WEBHOOK_SECRET: z.string().min(1).optional(),
   REVENUECAT_PROJECT_ID: z.string().regex(/^proj[A-Za-z0-9]+$/u).optional(),
   REVENUECAT_APP_ID: z.string().min(1).optional(),
@@ -90,6 +91,7 @@ export type Environment = Readonly<{
   revenueCatApiBaseUrl: string;
   revenueCatReadApiKey: string | undefined;
   revenueCatV2ReadApiKey: string | undefined;
+  revenueCatV2DeleteApiKey?: string | undefined;
   revenueCatWebhookSecret: string | undefined;
   revenueCatProjectId: string | undefined;
   revenueCatAppId: string | undefined;
@@ -165,6 +167,7 @@ export function loadEnvironment(source: NodeJS.ProcessEnv): Environment {
     revenueCatApiBaseUrl: value.REVENUECAT_API_BASE_URL,
     revenueCatReadApiKey: value.REVENUECAT_READ_API_KEY,
     revenueCatV2ReadApiKey: value.REVENUECAT_V2_READ_API_KEY,
+    revenueCatV2DeleteApiKey: value.REVENUECAT_V2_DELETE_API_KEY,
     revenueCatWebhookSecret: value.REVENUECAT_WEBHOOK_SECRET,
     revenueCatProjectId: value.REVENUECAT_PROJECT_ID,
     revenueCatAppId: value.REVENUECAT_APP_ID,

@@ -3,7 +3,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { validateIsolatedEmulatorRuntime } from "../../scripts/isolated-emulator-test-runner.mjs";
 import { createFirebaseAdminAuth } from "../../src/infrastructure/firebase/adminAuth.js";
 import { PseudonymKeyRing } from "../../src/infrastructure/security/pseudonymKeyRing.js";
-import { FirestoreAccountLifecycleStore } from "../../src/modules/account-lifecycle/store.js";
+import { FixtureAccountLifecycleStore as FirestoreAccountLifecycleStore } from "../revenueCatDeletionFixture.js";
 
 // Test-only child. IPC is acknowledged after the real Admin effect returns;
 // the parent kills this process before the store can persist finalization.
