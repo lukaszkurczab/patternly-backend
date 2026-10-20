@@ -29,7 +29,8 @@ export function validateIsolatedEmulatorRuntime(environment, projectId, ports = 
     || environment.FIRESTORE_EMULATOR_HOST !== `127.0.0.1:${ports.firestore}`) throw new Error("isolated_test_unsafe_port_configuration");
 }
 
-export async function runIsolatedEmulatorTests({ backendRoot, projectId, command, environment = {} }) {
+export async function runIsolatedEmulatorTests({ backendRoot, projectId, command, environment = {}, timeoutMs }) {
+  if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600_000 || process.platform === "win32")) throw new Error("isolated_test_invalid_deadline");
   const ports = resolveIsolatedEmulatorPorts(environment.PATTERNLY_ISOLATED_TEST_PORT_BASE ?? process.env.PATTERNLY_ISOLATED_TEST_PORT_BASE);
   const config = JSON.parse(await readFile(join(backendRoot, "config/firebase.isolated-tests.json"), "utf8"));
   for (const [name, port] of Object.entries(ports)) config.emulators[name].port = port;
@@ -55,9 +56,23 @@ export async function runIsolatedEmulatorTests({ backendRoot, projectId, command
     };
     console.log(`Isolated emulator gate: ${projectId} Auth${ports.auth}/Firestore${ports.firestore}`);
     return await new Promise((accept, reject) => {
-      const child = spawn(process.env.FIREBASE_CLI ?? "firebase", ["emulators:exec", "--config", configPath, "--project", projectId, "--only", "auth,firestore", command], { cwd: backendRoot, env, stdio: "inherit" });
-      child.once("error", reject);
-      child.once("exit", (code, signal) => accept(code ?? (signal ? 1 : 0)));
+      // A bounded POSIX run owns its process group, including emulator children.
+      const child = spawn(process.env.FIREBASE_CLI ?? "firebase", ["emulators:exec", "--config", configPath, "--project", projectId, "--only", "auth,firestore", command], { cwd: backendRoot, env, stdio: "inherit", detached: timeoutMs !== undefined });
+      let expired = false;
+      let killTimer;
+      const signalGroup = (signal) => { try { if (child.pid) process.kill(-child.pid, signal); } catch (error) { if (error.code !== "ESRCH") throw error; } };
+      const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
+        expired = true;
+        console.error("isolated_test_deadline_exceeded");
+        signalGroup("SIGTERM");
+        // Keep the group cleanup alive even if the CLI exits before Java.
+        killTimer = setTimeout(() => { signalGroup("SIGKILL"); accept(124); }, 5_000);
+      }, timeoutMs);
+      child.once("error", (error) => { clearTimeout(timer); clearTimeout(killTimer); reject(error); });
+      child.once("exit", (code, signal) => {
+        clearTimeout(timer);
+        if (!expired) accept(code ?? (signal ? 1 : 0));
+      });
     });
   } finally {
     await rm(directory, { recursive: true, force: true });

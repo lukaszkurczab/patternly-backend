@@ -1,0 +1,64 @@
+{
+  "schema": "cost04-cost03-observations-v1",
+  "matrixSha256": "4a7c10f780db8cf6ba01ae5fe5d8d0a0043d85aaee148874d627d10172082dd2",
+  "source": "COST-03 accepted 2026-10-20, private cost03-sync-20261020/after.json; sanitized aggregate counters only",
+  "boundary": "Emulator SDK document-unit estimates and JSON bytes; no Cloud Run timings/billing. N=1 changed mutation; larger writes use labeled store formula and ACK byte scaling.",
+  "flows": [
+    {
+      "id": "account_history_1000_unchanged",
+      "requests": 1,
+      "sampleCount": 1,
+      "firestoreReadsObserved": 8,
+      "firestoreReadsBillableEstimate": 8,
+      "firestoreWrites": 0,
+      "firestoreDeletes": 0,
+      "requestBytes": 0,
+      "responseBytes": 222,
+      "missingPointReads": 2,
+      "queryCount": 0,
+      "emptyQueryCount": 0
+    },
+    {
+      "id": "account_history_1000_changed_sync",
+      "requests": 2,
+      "sampleCount": 1,
+      "firestoreReadsObserved": 17,
+      "firestoreReadsBillableEstimate": 17,
+      "firestoreWrites": 4,
+      "firestoreDeletes": 0,
+      "requestBytes": 1356,
+      "responseBytes": 1543,
+      "missingPointReads": 7,
+      "queryCount": 0,
+      "emptyQueryCount": 0
+    },
+    {
+      "id": "account_history_10000_unchanged",
+      "requests": 1,
+      "sampleCount": 1,
+      "firestoreReadsObserved": 8,
+      "firestoreReadsBillableEstimate": 8,
+      "firestoreWrites": 0,
+      "firestoreDeletes": 0,
+      "requestBytes": 0,
+      "responseBytes": 223,
+      "missingPointReads": 2,
+      "queryCount": 0,
+      "emptyQueryCount": 0
+    },
+    {
+      "id": "account_history_10000_changed_sync",
+      "requests": 2,
+      "sampleCount": 1,
+      "firestoreReadsObserved": 17,
+      "firestoreReadsBillableEstimate": 17,
+      "firestoreWrites": 4,
+      "firestoreDeletes": 0,
+      "requestBytes": 1363,
+      "responseBytes": 1549,
+      "missingPointReads": 7,
+      "queryCount": 0,
+      "emptyQueryCount": 0
+    }
+  ]
+}

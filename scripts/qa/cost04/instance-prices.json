@@ -1,0 +1,15 @@
+{
+  "cpuPerSecond": 0.0000216,
+  "memoryPerGiBSecond": 0.0000024,
+  "source": "https://cloud.google.com/run/pricing",
+  "region": "europe-central2",
+  "verifiedOn": "2026-10-20",
+  "htmlSha256": "25d6495bb01329037c94026ed9c64e56b20c58d5980efa5094cbc641fdedb46c",
+  "extraction": "Embedded AF_initDataCallback key ds:0 JSON data: select array with direct region child Warsaw (europe-central2), CPU and memory rows, no CUD columns. Region is the last string of its record. The initially rendered static table defaults to Iowa; its 0.000018/0.000002 rates are not Warsaw. Whole lifetime, minimum 60 seconds per started instance; no requests charge/free tier/FX/VAT.",
+  "regionalRecordStrings": [
+    "<p>Resource</p>", "<p>Default (USD)</p>",
+    "<p>CPU (per vCPU-second)</p>", "$0.0000216",
+    "<p>Memory (per GiB-second)</p>", "$0.0000024",
+    "Warsaw (europe-central2)"
+  ]
+}

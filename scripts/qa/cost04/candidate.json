@@ -1,0 +1,19 @@
+{
+  "schema": "cost04-candidate-v1",
+  "status": "LOCAL_PROPOSAL_NOT_AUTHORIZED",
+  "scope": "Probe bound only; NOT a configuration accepted for all modeled workloads. 10k DAU peak at 100ms/request offers ~28.63 concurrent requests > 16 slots at max2/concurrency8; expected overload/429, not a throughput promise. Select a lower workload or separately approve a capacity revision before provider testing.",
+  "currentRequiredState": { "scaling": "manual", "count": 0, "tags": [] },
+  "futureProbeCandidate": {
+    "scaling": "automatic", "serviceMin": 0, "serviceMax": 2,
+    "revisionMin": 0, "revisionMax": 2, "concurrency": 8,
+    "billing": "request", "cpuVcpu": 1, "memoryMiB": 512, "startupCpuBoost": true
+  },
+  "alternative": { "serviceMin": 1, "condition": "Owner accepts measured cold-start/p95 tradeoff and extra idle cost" },
+  "providerApproval": {
+    "authorized": false, "ownerDecisionRef": null, "projectId": null, "service": null, "region": null,
+    "imageDigest": null, "inventorySha256": null, "inventoryCapturedAtUtc": null,
+    "maxCost": null, "currency": null, "maxDurationSeconds": null, "maxRequests": null,
+    "maxConcurrency": null, "coldStartLimitMs": null, "p95LimitMs": null, "maxErrorFraction": null,
+    "alarmRecipient": null, "alarmReactionSeconds": null, "stopOwner": null
+  }
+}

@@ -17,4 +17,5 @@ export function runIsolatedEmulatorTests(options: Readonly<{
   projectId: string;
   command: string;
   environment?: Readonly<Record<string, string>>;
+  timeoutMs?: number;
 }>): Promise<number>;
