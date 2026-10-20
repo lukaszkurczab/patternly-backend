@@ -941,11 +941,19 @@ export function buildApplication(dependencies: ApplicationDependencies) {
 
   app.get("/v1/progress", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const query = request.query as Record<string, unknown>;
-    if (Object.keys(query).some((key) => key !== "pageSize" && key !== "pageToken")) {
+    if (Object.keys(query).some((key) => !["pageSize", "pageToken", "conditional", "knownSnapshot", "knownScope", "knownRevision"].includes(key))) {
       return reply.code(400).send({ error: { code: "invalid_request" } });
     }
     const pageSize = query.pageSize === undefined ? 100 : Number(query.pageSize);
     if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) return reply.code(400).send({ error: { code: "invalid_request" } });
+    if ((query.conditional !== undefined && query.conditional !== "1")
+      || (query.knownSnapshot !== undefined && (query.conditional !== "1" || query.pageToken !== undefined
+        || typeof query.knownSnapshot !== "string" || !/^[a-f0-9]{64}$/u.test(query.knownSnapshot)))) return reply.code(400).send({ error: { code: "invalid_request" } });
+    const hasScopeCondition = query.knownScope !== undefined || query.knownRevision !== undefined;
+    if (hasScopeCondition && (query.conditional !== "1" || query.pageToken !== undefined || query.knownSnapshot !== undefined
+      || typeof query.knownScope !== "string" || !/^[a-f0-9]{64}$/u.test(query.knownScope)
+      || typeof query.knownRevision !== "string" || !/^(0|[1-9][0-9]*)$/u.test(query.knownRevision)
+      || !Number.isSafeInteger(Number(query.knownRevision)))) return reply.code(400).send({ error: { code: "invalid_request" } });
     let token = null;
     if (query.pageToken !== undefined) {
       if (typeof query.pageToken !== "string") return reply.code(400).send({ error: { code: "progress_pagination_token_invalid" } });
@@ -953,7 +961,13 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       catch { return reply.code(400).send({ error: { code: "progress_pagination_token_invalid" } }); }
     }
     try {
-      return await requireStores(dependencies).progress.readPage(request.userId!, request.expectedAuthorizationGeneration!, pageSize, token);
+      reply.header("cache-control", "private, no-store");
+      const progress = requireStores(dependencies).progress;
+      return query.conditional === "1"
+        ? await progress.readPage(request.userId!, request.expectedAuthorizationGeneration!, pageSize, token,
+          { ...(typeof query.knownSnapshot === "string" ? { knownSnapshot: query.knownSnapshot } : {}),
+            ...(hasScopeCondition ? { knownScope: query.knownScope as string, knownRevision: Number(query.knownRevision) } : {}) })
+        : await progress.readPage(request.userId!, request.expectedAuthorizationGeneration!, pageSize, token);
     } catch (error) {
       const code = errorCode(error);
       if (code === "progress_generation_conflict" || code === "content_identity_schema_conflict") return reply.code(409).send({ error: { code } });
@@ -1109,6 +1123,8 @@ export function buildApplication(dependencies: ApplicationDependencies) {
   });
 
   app.post("/v1/progress/sync", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
+    const cacheProof = request.headers["x-patternly-progress-cache"];
+    if (cacheProof !== undefined && cacheProof !== "1") return reply.code(400).send({ error: { code: "invalid_request" } });
     const parsed = syncRequestSchema.safeParse(request.body);
     const withinBudget = isSyncRequestWithinBudget(request.body);
     if (!parsed.success || !withinBudget) {
@@ -1121,7 +1137,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
     try {
       const metadata = { sessionId: parsed.data.sessionId, batchId: parsed.data.batchId, highWatermark: parsed.data.highWatermark } as const;
-      const result = await requireStores(dependencies).progress.applyBatch(request.userId!, request.expectedAuthorizationGeneration!, parsed.data.deviceId, parsed.data.expectedAccountRevision, parsed.data.mutations, metadata);
+      const result = await requireStores(dependencies).progress.applyBatch(request.userId!, request.expectedAuthorizationGeneration!, parsed.data.deviceId, parsed.data.expectedAccountRevision, parsed.data.mutations, metadata, cacheProof === "1");
       if (result.conflicts.length > 0 || result.accountRevisionConflict) {
         logAccountSyncRejection(request, "sync", result.accountRevisionConflict?.code ?? result.conflicts[0]?.code);
         return reply.code(409).send({ error: result.accountRevisionConflict ?? { code: result.conflicts[0]!.code } });

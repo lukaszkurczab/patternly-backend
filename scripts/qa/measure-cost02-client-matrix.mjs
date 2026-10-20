@@ -348,13 +348,44 @@ try {
 
   for (const size of sizes) {
     await seedHistory(size);
+    let initialHistoryRecords;
     const row = await measure(`account_history_${size}`, { identity: "registered_account", historyRecords: size, source: "real APP adapter GET /v1/progress via app.inject and AdminSDK/Firestore emulator" }, async () => {
       const result = await api.getProgress();
       assert.equal(result.records.length, size);
       assert.equal(result.accountRevision, size);
+      initialHistoryRecords = result.records;
       return { records: result.records.length, accountRevision: result.accountRevision, pages: requestLog.filter((call) => call.route === "/v1/progress").length };
     });
     assert.equal(row.error, null, `cost02_history_failed:${size}`);
+    if (process.env.COST03_COMPARE === "1") {
+      const repeated = await measure(`account_history_${size}_unchanged`, { identity: "registered_account", historyRecords: size, source: "repeat of the identical COST-02 dataset through the same APP adapter" }, async () => {
+        const result = await api.getProgress();
+        assert.equal(result.records.length, size);
+        assert.equal(result.accountRevision, size);
+        return { records: result.records.length, accountRevision: result.accountRevision };
+      });
+      assert.equal(repeated.error, null, `cost03_repeat_failed:${size}`);
+    }
+    if (process.env.COST03_CHANGED_COMPARE === "1") {
+      const changed = await measure(`account_history_${size}_changed_sync`, { identity: "registered_account", historyRecords: size, source: "one canonical APP sync followed by the same complete progress read" }, async () => {
+        const targetId = `cost03-added-attempt-${size}`;
+        const trackId = "coding-interview-dsa-problem-solving";
+        const state = attemptState(targetId, trackId);
+        const response = await api.syncProgress({ canonicalVersion: "canonical-json-v1", expectedAccountRevision: size,
+          deviceId: "00000000-0000-4000-8000-000000000000", sessionId: `cost03-history-${size}`, batchId: `cost03-batch-${size}`, highWatermark: 1,
+          mutations: [{ mutationId: `cost03_changed_mutation_${size}`, kind: "item", recordType: "training_attempt", trackId, targetId, expectedVersion: null, state,
+            fingerprint: createMergeRecordFingerprint({ recordId: targetId, recordType: "training_attempt", trackId, state }) }] });
+        assert.equal(response.applied.length, 1);
+        assert.deepEqual(response.duplicates, []);
+        const result = await api.getProgress();
+        assert.equal(result.records.length, size + 1);
+        assert.equal(result.accountRevision, size + 1);
+        assert.deepEqual(result.records.filter((record) => record.targetId !== targetId), initialHistoryRecords);
+        assert.deepEqual(result.records.find((record) => record.targetId === targetId), response.applied[0]);
+        return { records: result.records.length, accountRevision: result.accountRevision, appliedRecords: response.applied.length, duplicateCount: response.duplicates.length };
+      });
+      assert.equal(changed.error, null, `cost03_changed_sync_failed:${size}`);
+    }
   }
 
   await seedHistory(0);

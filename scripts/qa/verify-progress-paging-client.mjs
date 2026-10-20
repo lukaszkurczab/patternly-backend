@@ -53,8 +53,9 @@ try {
   const calls = [];
   const api = createPatternlyApiClient({ apiOrigin: "https://paging.test.invalid", getIdToken: async () => auth.idToken, getAppCheckToken: async () => TEST_APP_CHECK_TOKEN,
     fetchImplementation: async (url, init) => {
-      const parsed = new URL(String(url)); calls.push({ method: init.method, path: parsed.pathname, query: parsed.search });
+      const parsed = new URL(String(url)); const call = { method: init.method, path: parsed.pathname, query: parsed.search }; calls.push(call);
       const response = await context.app.inject({ method: init.method, url: parsed.pathname + parsed.search, headers: Object.fromEntries(new Headers(init.headers).entries()), ...(init.body ? { payload: JSON.parse(String(init.body)) } : {}) });
+      if (parsed.pathname === "/v1/progress" && response.statusCode === 200) call.unchanged = response.json().unchanged === true;
       return new Response(response.body, { status: response.statusCode, headers: { "content-type": "application/json" } });
     } });
   stage = "producer_sync";
@@ -82,9 +83,41 @@ try {
   const after = await accountData.buildAccountDataSnapshot(productionLearningDataAdmissionContext);
   assert.deepEqual(logical(after.records), logical(before.records));
   const reads = calls.filter((call) => call.path === "/v1/progress");
-  assert.equal(reads.length, 2 * Math.ceil(before.records.length / 100));
+  assert.equal(reads.length, Math.ceil(before.records.length / 100) + 1, "restore must revalidate the complete cached snapshot in one guarded request");
   assert.ok(reads.every((call) => call.query.includes("pageSize=100")));
   console.log(JSON.stringify({ stage: "producer_consumer_restore", result: "PASS", frontendSha: expectedSha, records: before.records.length, sessions: 105, attempts: 105, reviews: 1, sweeps: 2, pageRequests: reads.length, scope: "actual backend route/store and mobile client/application restore; synthetic MemoryStorage, not native" }));
+  if (process.env.COST03_VERIFY_JOURNALED_SYNC === "1") {
+    stage = "journaled_account_sync";
+    const { commitTrainingSessionStart, commitTrainingOutcome, commitSessionCompletion } = load("src/application/learningMutations/index.ts");
+    const { retryPendingAccountDataSync } = load("src/application/account/accountDataService.ts");
+    const { createTrainingSessionResult, createFamilyEnvelope } = load("src/domain/index.ts");
+    const started = { ...session("active", "paging-journal-session"), modeId: "coding-interview-guided-practice", configurationSnapshot: { kind: "practice" } };
+    await commitTrainingSessionStart({ session: started, draft: null, createdAt: started.startedAt });
+    await commitTrainingOutcome({ attempt: { ...attempt("paging-journal-attempt", started.id), modeId: started.modeId, response: { type: "choice_single", optionId: "a" } }, session: started, reviews: [], createdAt: started.startedAt });
+    const finished = { ...session("completed", started.id), modeId: started.modeId, configurationSnapshot: { kind: "practice" } };
+    const outcome = createTrainingSessionResult({ id: `${finished.id}:result`, sessionId: finished.id, trackId: finished.trackId,
+      totalOccurrences: 1, answeredOccurrenceIds: ["occurrence-1"], unansweredOccurrenceIds: [], completedAt: finished.completedAt,
+      evidence: createFamilyEnvelope({ familyId: "coding_interview", details: { activeForegroundMs: 0, correctCount: 0, partialCount: 0, incorrectCount: 1, pointsEarned: 0, maxPoints: 1 } }) });
+    await commitSessionCompletion(finished, outcome, finished.completedAt);
+    const pending = await accountData.getAccountSyncState(productionLearningDataAdmissionContext);
+    assert.equal(pending.status, "offlinePending");
+    const beforeSync = await accountData.buildAccountDataSnapshot(productionLearningDataAdmissionContext);
+    assert.equal(beforeSync.records.length, before.records.length + 3);
+    const firstSyncCall = calls.length;
+    const synchronized = await retryPendingAccountDataSync(api, auth.userId);
+    assert.equal(synchronized.status, "synced");
+    const syncState = await accountData.getAccountSyncState(productionLearningDataAdmissionContext);
+    assert.equal(syncState.outbox.length, 0);
+    const afterSync = await accountData.buildAccountDataSnapshot(productionLearningDataAdmissionContext);
+    assert.deepEqual(logical(afterSync.records), logical(beforeSync.records));
+    const historicalKeys = new Set(before.records.map((record) => JSON.stringify([record.recordType, record.trackId, record.recordId])));
+    assert.deepEqual(logical(afterSync.records.filter((record) => historicalKeys.has(JSON.stringify([record.recordType, record.trackId, record.recordId])))), logical(before.records));
+    const syncCalls = calls.slice(firstSyncCall);
+    assert.equal(syncCalls.filter((call) => call.path === "/v1/progress/sync").length, 1);
+    assert.equal(syncCalls.filter((call) => call.path === "/v1/progress").length, 1);
+    assert.equal(syncCalls.find((call) => call.path === "/v1/progress").unchanged, true);
+    console.log(JSON.stringify({ stage, result: "PASS", frontendSha: expectedSha, preservedRecords: before.records.length, finalRecords: afterSync.records.length, outboxEntries: syncState.outbox.length, syncRequests: 1, revalidationRequests: 1, revalidationUnchanged: true, scope: "production journal start/answer/completion, accountDataService sync, exact ACK and full local materialization; MemoryStorage/emulator boundary only" }));
+  }
 } catch (error) {
   throw new Error(`paging_client_failed:${stage}`, { cause: error });
 } finally { await context.close(); }

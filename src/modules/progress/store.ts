@@ -68,6 +68,8 @@ import {
   syncableRecordTypeSchema,
   type ProgressMutation,
   type ProgressPage,
+  type ProgressReadCondition,
+  type UnchangedProgressSnapshot,
   type ProgressPageToken,
   type ProgressRecord,
   type ProgressSnapshot,
@@ -300,6 +302,9 @@ function operationRef(db: Firestore, userId: string, operationId: string): Docum
 function syncBatchRef(db: Firestore, userId: string, metadata: SyncBatchMetadata): DocumentReference { return db.collection(COLLECTIONS.users).doc(userId).collection("syncBatches").doc(createHash("sha256").update(`${metadata.sessionId}:${metadata.batchId}`, "utf8").digest("hex")); }
 function syncBatchFingerprint(metadata: SyncBatchMetadata, expectedAccountRevision: number, mutations: readonly ProgressMutation[]): string { return createHash("sha256").update(canonicalJson({ metadata, expectedAccountRevision, mutations }), "utf8").digest("hex"); }
 function readAccountRevision(data: Record<string, unknown> | undefined): number { if (!data || data.accountRevision === undefined) return 0; if (!Number.isSafeInteger(data.accountRevision) || Number(data.accountRevision) < 0) throw new Error("account_revision_invalid"); return Number(data.accountRevision); }
+function progressSnapshotScope(userId: string, authorizationGeneration: number, generation: number): string {
+  return createHash("sha256").update(canonicalJson({ schema: "progress-scope-v1", userId, authorizationGeneration, generation }), "utf8").digest("hex");
+}
 function readAccountGeneration(data: Record<string, unknown> | undefined): number { if (!data || data.generation === undefined) return 0; if (!Number.isSafeInteger(data.generation) || Number(data.generation) < 0) throw new Error("account_generation_invalid"); return Number(data.generation); }
 function readAdoptionGenerationCounter(data: Record<string, unknown> | undefined, activeGeneration: number): number { if (!data || data.adoptionGenerationCounter === undefined) return activeGeneration; if (!Number.isSafeInteger(data.adoptionGenerationCounter) || Number(data.adoptionGenerationCounter) < activeGeneration) throw new Error("account_generation_invalid"); return Number(data.adoptionGenerationCounter); }
 
@@ -317,8 +322,14 @@ export class FirestoreProgressStore implements ProgressStore {
     return Object.freeze({ accountRevision: readAccountRevision(metadata), generation, records: Object.freeze(records) });
   }
 
-  public async readPage(userId: string, expectedAuthorizationGeneration: number, pageSize: number, token: ProgressPageToken | null): Promise<ProgressPage> {
+  public async readPage(userId: string, expectedAuthorizationGeneration: number, pageSize: number, token: ProgressPageToken | null): Promise<ProgressPage>;
+  public async readPage(userId: string, expectedAuthorizationGeneration: number, pageSize: number, token: ProgressPageToken | null, condition?: ProgressReadCondition): Promise<ProgressPage | UnchangedProgressSnapshot>;
+  public async readPage(userId: string, expectedAuthorizationGeneration: number, pageSize: number, token: ProgressPageToken | null, condition?: ProgressReadCondition): Promise<ProgressPage | UnchangedProgressSnapshot> {
     if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) throw new Error("invalid_request");
+    if (condition?.knownSnapshot !== undefined && (token !== null || !/^[a-f0-9]{64}$/u.test(condition.knownSnapshot))) throw new Error("invalid_request");
+    if (condition && ((condition.knownScope === undefined) !== (condition.knownRevision === undefined)
+      || (condition.knownScope !== undefined && (token !== null || condition.knownSnapshot !== undefined
+        || !/^[a-f0-9]{64}$/u.test(condition.knownScope) || !Number.isSafeInteger(condition.knownRevision) || condition.knownRevision! < 0)))) throw new Error("invalid_request");
     const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
     const metaRef = accountMetadataRef(this.db, userId);
     const [user, meta] = await this.db.getAll(userRef, metaRef);
@@ -329,9 +340,22 @@ export class FirestoreProgressStore implements ProgressStore {
     const generation = readAccountGeneration(metadata);
     const accountRevision = readAccountRevision(metadata);
     if (token && (token.userId !== userId || token.accountRevision !== accountRevision || token.generation !== generation)) throw new Error("progress_generation_conflict");
-    let query = progressCollectionRef(this.db, userId, generation).orderBy(FieldPath.documentId()).limit(pageSize + 1);
-    if (token) query = query.startAt(token.cursor);
-    const snapshot = await query.get();
+    // This validator is account/authorization scoped; it grants no authority.
+    // Canonical writes advance revision or generation. Metadata updateTime also
+    // invalidates a validator after same-revision metadata rewrites.
+    const snapshotToken = createHash("sha256").update(canonicalJson({ schema: "progress-snapshot-v1", userId,
+      authorizationGeneration: expectedAuthorizationGeneration, generation, accountRevision,
+      metadataUpdateTime: meta!.exists ? { seconds: meta!.updateTime!.seconds, nanoseconds: meta!.updateTime!.nanoseconds } : null,
+    }), "utf8").digest("hex");
+    const snapshotScope = progressSnapshotScope(userId, expectedAuthorizationGeneration, generation);
+    const unchanged = condition?.knownSnapshot === snapshotToken
+      || (condition?.knownScope === snapshotScope && condition.knownRevision === accountRevision);
+    let snapshot;
+    if (!unchanged) {
+      let query = progressCollectionRef(this.db, userId, generation).orderBy(FieldPath.documentId()).limit(pageSize + 1);
+      if (token) query = query.startAt(token.cursor);
+      snapshot = await query.get();
+    }
     const [currentUser, currentMeta] = await this.db.getAll(userRef, metaRef);
     if (!currentUser?.exists) throw new Error("account_deleted");
     assertExpectedAuthorizationGeneration(asRecord(currentUser.data(), "user"), expectedAuthorizationGeneration);
@@ -340,11 +364,13 @@ export class FirestoreProgressStore implements ProgressStore {
       || hasActiveAdoptionPromotionLease(currentMetadata)
       || meta!.exists !== currentMeta!.exists
       || (meta!.exists && !meta!.updateTime!.isEqual(currentMeta!.updateTime!))) throw new Error("progress_generation_conflict");
+    if (unchanged) return Object.freeze({ accountRevision, generation, snapshotToken, snapshotScope, unchanged: true });
+    if (!snapshot) throw new Error("progress_snapshot_missing");
     if (token && snapshot.docs[0]?.id !== token.cursor) throw new Error("progress_generation_conflict");
     // Validate the lookahead too; malformed persisted facts never become a token.
     const validated = snapshot.docs.map((document) => toView(asRecord(document.data(), "progress")));
     const lookahead = snapshot.docs[pageSize];
-    return Object.freeze({ accountRevision, generation, records: Object.freeze(validated.slice(0, pageSize)),
+    return Object.freeze({ accountRevision, generation, ...(condition ? { snapshotToken, snapshotScope } : {}), records: Object.freeze(validated.slice(0, pageSize)),
       nextPageToken: lookahead ? createProgressPageToken({ version: 2, userId, generation, accountRevision, cursor: lookahead.id }) : null });
   }
 
@@ -938,7 +964,7 @@ export class FirestoreProgressStore implements ProgressStore {
     return adoptionStatusFromData(data);
   }
 
-  public async applyBatch(userId: string, expectedAuthorizationGeneration: number, deviceId: string, expectedAccountRevision: number, mutations: readonly ProgressMutation[], metadata: SyncBatchMetadata): Promise<SyncBatchResult> {
+  public async applyBatch(userId: string, expectedAuthorizationGeneration: number, deviceId: string, expectedAccountRevision: number, mutations: readonly ProgressMutation[], metadata: SyncBatchMetadata, includeSnapshotScope = false): Promise<SyncBatchResult> {
     for (const mutation of mutations) {
       const parsedMutation = progressMutationSchema.safeParse(mutation);
       if (!parsedMutation.success) {
@@ -1048,7 +1074,12 @@ export class FirestoreProgressStore implements ProgressStore {
       const result = Object.freeze({ accountRevision: nextAccountRevision, applied: Object.freeze(applied), duplicates: Object.freeze(duplicates), conflicts: Object.freeze(conflicts) });
       const createdAt = now();
       transaction.create(batchRef, { sessionId: metadata.sessionId, batchId: metadata.batchId, highWatermark: metadata.highWatermark, fingerprint: syncBatchFingerprint(metadata, expectedAccountRevision, mutations), expectedAccountRevision, result, createdAt, expiresAt: expiresAfterSyncRetention(createdAt) });
-      return result;
+      // Only fresh writes have provenance for the active generation. A stored
+      // batch replay above deliberately cannot promote an APP snapshot, and
+      // receipts retain their original durable shape.
+      return includeSnapshotScope && applied.length > 0 && duplicates.length === 0
+        ? Object.freeze({ ...result, snapshotScope: progressSnapshotScope(userId, expectedAuthorizationGeneration, activeGeneration) })
+        : result;
     });
   }
 }

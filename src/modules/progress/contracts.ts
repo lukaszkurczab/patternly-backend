@@ -210,7 +210,12 @@ export type ProgressPage = Readonly<{
   generation: number;
   records: readonly ProgressRecord[];
   nextPageToken: string | null;
+  snapshotToken?: string;
+  snapshotScope?: string;
 }>;
+
+export type UnchangedProgressSnapshot = Readonly<{ accountRevision: number; generation: number; snapshotToken: string; snapshotScope: string; unchanged: true }>;
+export type ProgressReadCondition = Readonly<{ knownSnapshot?: string; knownScope?: string; knownRevision?: number }>;
 
 export function createProgressPageToken(value: ProgressPageToken): string {
   if (!progressPageTokenSchema.safeParse(value).success) throw new Error("progress_pagination_token_invalid");
@@ -254,15 +259,18 @@ export type SyncBatchResult = Readonly<{
   duplicates: readonly string[];
   conflicts: readonly ProgressConflict[];
   accountRevisionConflict?: Readonly<{ code: "account_revision_conflict"; currentAccountRevision: number }>;
+  /** Ephemeral proof from a fresh write transaction; never stored in receipts. */
+  snapshotScope?: string;
 }>;
 
 export interface ProgressStore {
   read(userId: string): Promise<readonly ProgressRecord[]>;
   readSnapshot(userId: string): Promise<ProgressSnapshot>;
   readPage(userId: string, expectedAuthorizationGeneration: number, pageSize: number, token: ProgressPageToken | null): Promise<ProgressPage>;
+  readPage(userId: string, expectedAuthorizationGeneration: number, pageSize: number, token: ProgressPageToken | null, condition?: ProgressReadCondition): Promise<ProgressPage | UnchangedProgressSnapshot>;
   previewAdoption(userId: string, guestSnapshot: GuestMergeSnapshot): Promise<AdoptionPreview>;
   confirmAdoption(userId: string, expectedAuthorizationGeneration: number, deviceId: string, guestSnapshot: GuestMergeSnapshot, confirmation: GuestMergeConfirmation): Promise<AdoptionExecution>;
-  applyBatch(userId: string, expectedAuthorizationGeneration: number, deviceId: string, expectedAccountRevision: number, mutations: readonly ProgressMutation[], metadata: SyncBatchMetadata): Promise<SyncBatchResult>;
+  applyBatch(userId: string, expectedAuthorizationGeneration: number, deviceId: string, expectedAccountRevision: number, mutations: readonly ProgressMutation[], metadata: SyncBatchMetadata, includeSnapshotScope?: boolean): Promise<SyncBatchResult>;
   startAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, input: AdoptionTransferStart): Promise<Readonly<Record<string, unknown>>>;
   uploadAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, sessionId: string, input: AdoptionTransferUpload): Promise<Readonly<Record<string, unknown>>>;
   sealAdoptionTransfer(userId: string, expectedAuthorizationGeneration: number, sessionId: string, input: AdoptionTransferSeal): Promise<Readonly<Record<string, unknown>>>;

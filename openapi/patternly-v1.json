@@ -2391,112 +2391,194 @@
               "type": "string",
               "minLength": 1
             }
+          },
+          {
+            "name": "conditional",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            }
+          },
+          {
+            "name": "knownSnapshot",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          {
+            "name": "knownScope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          {
+            "name": "knownRevision",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Bounded progress page; omitted pageSize defaults to 100. Every response includes generation and nextPageToken. Tokens are opaque and valid only for one account revision and generation.",
+            "description": "Bounded progress page; omitted pageSize defaults to 100. Full pages include generation and nextPageToken. conditional=1 opts into snapshotToken and snapshotScope; knownSnapshot is first-page only and requires conditional=1. Alternatively first-page knownScope+knownRevision revalidates a complete snapshot composed from fresh same-scope ACKs; it cannot be combined with knownSnapshot/pageToken. Matching authenticated snapshots return {accountRevision,generation,snapshotToken,snapshotScope,unchanged:true} after authorization and metadata readback. Full-sweep tokens must match on every page. Page tokens are opaque and valid only for one account revision and generation.",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": [
-                    "accountRevision",
-                    "generation",
-                    "records",
-                    "nextPageToken"
-                  ],
-                  "properties": {
-                    "accountRevision": {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    "generation": {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    "records": {
-                      "type": "array",
-                      "maxItems": 100,
-                      "items": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": [
-                          "kind",
-                          "recordType",
-                          "trackId",
-                          "targetId",
-                          "version",
-                          "fingerprint",
-                          "state",
-                          "lastMutationId",
-                          "updatedAt"
-                        ],
-                        "properties": {
-                          "kind": {
-                            "type": "string",
-                            "enum": [
-                              "node",
-                              "item"
-                            ]
-                          },
-                          "recordType": {
-                            "type": "string",
-                            "enum": [
-                              "active_track",
-                              "training_session_summary",
-                              "training_session_result",
-                              "training_attempt",
-                              "review_queue_entry",
-                              "goal",
-                              "learning_plan"
-                            ]
-                          },
-                          "trackId": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "targetId": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "version": {
-                            "type": "integer",
-                            "minimum": 0
-                          },
-                          "fingerprint": {
-                            "type": "string",
-                            "pattern": "^[a-f0-9]{64}$"
-                          },
-                          "state": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "accountRevision",
+                        "generation",
+                        "records",
+                        "nextPageToken"
+                      ],
+                      "properties": {
+                        "accountRevision": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "generation": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "records": {
+                          "type": "array",
+                          "maxItems": 100,
+                          "items": {
                             "type": "object",
-                            "additionalProperties": true,
-                            "properties": {}
-                          },
-                          "lastMutationId": {
-                            "type": "string",
-                            "minLength": 16,
-                            "maxLength": 128
-                          },
-                          "updatedAt": {
-                            "type": "string",
-                            "format": "date-time"
+                            "additionalProperties": false,
+                            "required": [
+                              "kind",
+                              "recordType",
+                              "trackId",
+                              "targetId",
+                              "version",
+                              "fingerprint",
+                              "state",
+                              "lastMutationId",
+                              "updatedAt"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "node",
+                                  "item"
+                                ]
+                              },
+                              "recordType": {
+                                "type": "string",
+                                "enum": [
+                                  "active_track",
+                                  "training_session_summary",
+                                  "training_session_result",
+                                  "training_attempt",
+                                  "review_queue_entry",
+                                  "goal",
+                                  "learning_plan"
+                                ]
+                              },
+                              "trackId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "targetId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "version": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "fingerprint": {
+                                "type": "string",
+                                "pattern": "^[a-f0-9]{64}$"
+                              },
+                              "state": {
+                                "type": "object",
+                                "additionalProperties": true,
+                                "properties": {}
+                              },
+                              "lastMutationId": {
+                                "type": "string",
+                                "minLength": 16,
+                                "maxLength": 128
+                              },
+                              "updatedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            }
                           }
+                        },
+                        "nextPageToken": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "snapshotToken": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "snapshotScope": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
                         }
                       }
                     },
-                    "nextPageToken": {
-                      "anyOf": [
-                        {
-                          "type": "string"
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "accountRevision",
+                        "generation",
+                        "snapshotToken",
+                        "snapshotScope",
+                        "unchanged"
+                      ],
+                      "properties": {
+                        "accountRevision": {
+                          "type": "integer",
+                          "minimum": 0
                         },
-                        {
-                          "type": "null"
+                        "generation": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "snapshotToken": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "snapshotScope": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "unchanged": {
+                          "const": true
                         }
-                      ]
+                      }
                     }
-                  }
+                  ]
                 }
               }
             }
@@ -3470,6 +3552,19 @@
       "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
       "post": {
+        "parameters": [
+          {
+            "name": "x-patternly-progress-cache",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -3482,7 +3577,7 @@
         },
         "responses": {
           "200": {
-            "description": "Applied or duplicate mutations",
+            "description": "Applied or duplicate mutations. Header x-patternly-progress-cache:1 requests ephemeral snapshotScope only for fresh successful writes, derived in the same transaction. Stored receipt replay and duplicates provide no promotion proof; durable receipts remain unchanged.",
             "content": {
               "application/json": {
                 "schema": {
@@ -14834,6 +14929,10 @@
             "type": "array",
             "maxItems": 0,
             "items": false
+          },
+          "snapshotScope": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
           }
         }
       },

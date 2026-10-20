@@ -5,7 +5,7 @@ import test from "node:test";
 import { initializeApp, deleteApp } from "firebase-admin/app";
 import { getFirestore, Query, Timestamp } from "firebase-admin/firestore";
 import { FirestoreProgressStore } from "../src/modules/progress/store.js";
-import { createProgressPageToken, parseProgressPageToken, type ProgressMutation, type ProgressPageToken } from "../src/modules/progress/contracts.js";
+import { createProgressPageToken, parseProgressPageToken, type ProgressMutation, type ProgressPage, type ProgressPageToken } from "../src/modules/progress/contracts.js";
 import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
 import { progressDocumentId } from "../src/infrastructure/firestore/paths.js";
 
@@ -63,7 +63,7 @@ test("bounded pages sweep canonical producer records exactly once in document-ID
   Query.prototype.get = async function () { const snapshot = await original.call(this); reads.push(snapshot.size); return snapshot; };
   try {
     do {
-      const page = await store.readPage(userId, 1, 100, token);
+      const page: ProgressPage = await store.readPage(userId, 1, 100, token);
       assert.equal(page.accountRevision, 205); assert.equal(page.generation, 0);
       actual.push(...page.records.map((record) => record.targetId));
       token = page.nextPageToken === null ? null : parseProgressPageToken(page.nextPageToken);
@@ -134,4 +134,65 @@ test("strict page validation rejects malformed or fingerprint-corrupt records", 
     await db.collection("users").doc(userId).collection("progress").doc(progressDocumentId(mutation(0))).update(patch);
     await assert.rejects(() => store.readPage(userId, 1, 100, null), /progress_(fingerprint_mismatch|record_invalid)/u);
   }
+});
+
+test("conditional snapshots skip only unchanged queries, remain account scoped, and detect canonical writes", async () => {
+  const userId = await account(205);
+  const first = await store.readPage(userId, 1, 100, null, {});
+  assert.ok(!("unchanged" in first));
+  const knownSnapshot = first.snapshotToken!;
+  const original = Query.prototype.get; let queries = 0;
+  Query.prototype.get = async function () { queries++; return original.call(this); };
+  try {
+    assert.deepEqual(await store.readPage(userId, 1, 100, null, { knownSnapshot }), { accountRevision: 205, generation: 0, snapshotToken: knownSnapshot, snapshotScope: first.snapshotScope, unchanged: true });
+    assert.equal(queries, 0);
+    const other = await account(205);
+    const switched = await store.readPage(other, 1, 100, null, { knownSnapshot });
+    assert.ok(!("unchanged" in switched));
+    assert.notEqual(switched.snapshotToken, knownSnapshot);
+    // A second client changes the canonical revision through the real store.
+    await store.applyBatch(userId, 1, deviceId, 205, [mutation(206)], { sessionId: "second-client", batchId: "second-batch", highWatermark: 1 });
+    const changed = await store.readPage(userId, 1, 100, null, { knownSnapshot });
+    assert.ok(!("unchanged" in changed));
+    assert.equal(changed.accountRevision, 206);
+    assert.notEqual(changed.snapshotToken, knownSnapshot);
+  } finally { Query.prototype.get = original; }
+  const legacy = await store.readPage(userId, 1, 100, null);
+  assert.deepEqual(Object.keys(legacy).sort(), ["accountRevision", "generation", "nextPageToken", "records"]);
+});
+
+test("unchanged path retains post-read auth, deletion, generation, revision, metadata and lease checks", async () => {
+  const cases = [
+    { change: async (id: string) => db.collection("users").doc(id).update({ authorizationGeneration: 2 }), error: /authorization_generation_conflict/u },
+    { change: async (id: string) => db.collection("users").doc(id).update({ authorizationState: "revoked" }), error: /account_deleted/u },
+    { change: async (id: string) => db.collection("users").doc(id).delete(), error: /account_deleted/u },
+    { change: async (id: string) => meta(id).update({ generation: 1 }), error: /progress_generation_conflict/u },
+    { change: async (id: string) => meta(id).update({ accountRevision: 2 }), error: /progress_generation_conflict/u },
+    { change: async (id: string) => meta(id).update({ marker: randomUUID() }), error: /progress_generation_conflict/u },
+    { change: async (id: string) => meta(id).delete(), error: /progress_generation_conflict/u },
+    { change: async (id: string) => meta(id).update({ adoptionPromotionSessionId: "race", adoptionPromotionLeaseExpiresAt: Timestamp.fromMillis(Date.now() + 60_000) }), error: /progress_generation_conflict/u },
+  ];
+  for (const row of cases) for (const mode of ["snapshot", "scope"] as const) {
+    const userId = await account(1);
+    const first = await store.readPage(userId, 1, 100, null, {});
+    const condition = mode === "snapshot" ? { knownSnapshot: first.snapshotToken! } : { knownScope: first.snapshotScope!, knownRevision: first.accountRevision };
+    const original = db.getAll.bind(db); let reads = 0;
+    db.getAll = (async (...refs: Parameters<typeof db.getAll>) => {
+      if (++reads === 2) await row.change(userId);
+      return original(...refs);
+    }) as typeof db.getAll;
+    try { await assert.rejects(() => store.readPage(userId, 1, 100, null, condition), row.error); }
+    finally { db.getAll = original; }
+  }
+});
+
+test("snapshot validators expire on metadata rewrites and active leases still deny before a query", async () => {
+  const userId = await account(1);
+  const first = await store.readPage(userId, 1, 100, null, {});
+  await meta(userId).update({ marker: randomUUID() });
+  const rewritten = await store.readPage(userId, 1, 100, null, { knownSnapshot: first.snapshotToken! });
+  assert.ok(!("unchanged" in rewritten));
+  assert.notEqual(rewritten.snapshotToken, first.snapshotToken);
+  await meta(userId).update({ adoptionPromotionSessionId: "promotion", adoptionPromotionLeaseExpiresAt: Timestamp.fromMillis(Date.now() + 60_000) });
+  await assert.rejects(() => store.readPage(userId, 1, 100, null, { knownSnapshot: rewritten.snapshotToken! }), /progress_generation_conflict/u);
 });
