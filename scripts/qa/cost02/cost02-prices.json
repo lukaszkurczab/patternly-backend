@@ -1,0 +1,137 @@
+{
+  "schema": "cost02-price-input-v1",
+  "currency": "USD",
+  "pricingVerifiedOn": "2026-10-20",
+  "region": "europe-central2",
+  "sources": {
+    "cloudRun": "https://cloud.google.com/run/pricing",
+    "firestore": "https://cloud.google.com/firestore/pricing",
+    "cloudStorage": "https://cloud.google.com/storage/pricing",
+    "artifactRegistry": "https://cloud.google.com/artifact-registry/pricing",
+    "identityPlatform": "https://cloud.google.com/identity-platform/pricing",
+    "secretManager": "https://cloud.google.com/secret-manager/pricing",
+    "network": "https://cloud.google.com/vpc/network-pricing",
+    "cloudRunCpuBoost": "https://docs.cloud.google.com/run/docs/configuring/services/cpu",
+    "cloudRunEvidence": {
+      "pricingPageUrl": "https://cloud.google.com/run/pricing",
+      "fetchedHtmlSha256": "9b9d72cf1b6f8f5192de79f41de18398312de7000081a7916ecc51ea5c5100b5",
+      "evidenceFile": "/Users/lukaszkurczab/Desktop/Projects/Patternly/.agent/private/cost02-20261020/cloud-run-pricing.html",
+      "extraction": "Embedded regional pricing table immediately after the Warsaw (europe-central2) record: active CPU 0.0000336 USD/vCPU-second, idle min-instance CPU 0.0000035 USD/vCPU-second, active/idle RAM 0.0000035 USD/GiB-second, requests 0.40 USD/million."
+    },
+    "cloudRunCpuBoostEvidence": {
+      "pricingPageUrl": "https://docs.cloud.google.com/run/docs/configuring/services/cpu",
+      "extraction": "Official CPU table specifies a 2-vCPU boost for a service configured from 0 through 1 vCPU. The feature covers startup and 10 seconds after container startup; the scenario assumes 3 seconds startup plus 10 seconds post-start and prices the incremental 1 vCPU at active CPU rate."
+    },
+    "cloudStorageEvidence": {
+      "pricingPageUrl": "https://cloud.google.com/storage/pricing",
+      "extraction": "Regional Standard table lists Warsaw (europe-central2) and $0.000027397/GiB-hour. Single-region flat-namespace Standard operations: Class A $0.005/1000, Class B $0.0004/1000. General internet egress: $0.12/GiB through 10 TiB, $0.11 through 150 TiB, then $0.08. Always Free applies only to us-west1, us-central1, and us-east1, so no storage/request/egress free amount is modeled for Warsaw."
+    },
+    "firestoreEvidence": {
+      "pricingPageUrl": "https://cloud.google.com/firestore/pricing",
+      "fetchedHtmlSha256": "344b794f2ac631e63569d5fedb1ca7256c872199310345875773ff80bfced860",
+      "evidenceFile": "/private/tmp/patternly-cost02-model-20261020/firestore-pricing.html",
+      "extraction": "Embedded regional Default USD table immediately after Warsaw (europe-central2): Document Reads $0.039, Writes $0.117, Deletes $0.013 per 100,000; Stored Data and PITR data $0.000267123/GiB-hour (approximately $0.195/GiB-month at 730 hours). The first default table values are Iowa and were rejected. Empty query minimum and index-entry rules documented separately."
+    },
+    "networkEvidence": {
+      "pricingPageUrl": "https://cloud.google.com/vpc/network-pricing",
+      "extraction": "Warsaw (europe-central2) Premium-tier outbound Europe list rates: $0.12/GiB through 1 TiB, $0.11 through 10 TiB, then $0.085. Cloud Run states its 1 GiB/month free internet egress applies within North America only; Warsaw-to-Europe is modeled without it."
+    }
+  },
+  "rates": {
+    "cloudRun": {
+      "regionPriceTier": "Tier 2",
+      "cpuActivePerVcpuSecond": 3.36e-05,
+      "memoryActivePerGiBSecond": 3.5e-06,
+      "cpuIdleMinInstancePerVcpuSecond": 3.5e-06,
+      "memoryIdleMinInstancePerGiBSecond": 3.5e-06,
+      "requestsPerMillion": 0.4,
+      "freeTierMonthly": {
+        "cpuVcpuSeconds": 180000,
+        "memoryGiBSeconds": 360000,
+        "requests": 2000000,
+        "applyByDefault": false,
+        "scope": "Shared across projects on a billing account; this calculator defaults to gross cost and does not consume shared quota."
+      },
+      "billingIncrementSeconds": 0.1,
+      "internetEgressEurope": [
+        { "throughGiB": 1024, "pricePerGiB": 0.12 },
+        { "throughGiB": 10240, "pricePerGiB": 0.11 },
+        { "throughGiB": null, "pricePerGiB": 0.085 }
+      ],
+      "billingNotes": "Request-based active time includes start, graceful shutdown and time processing requests; minimum instances have a separate idle rate. Prices in the published table are regional; Cloud Run's public page embeds per-region tables and lists europe-central2 as Tier 2."
+    },
+    "firestore": {
+      "readsPer100000": 0.039,
+      "writesPer100000": 0.117,
+      "deletesPer100000": 0.013,
+      "storagePerGiBHour": 0.000267123,
+      "pitrStoragePerGiBHour": 0.000267123,
+      "freeTierDaily": {
+        "reads": 50000,
+        "writes": 20000,
+        "deletes": 20000,
+        "applyByDefault": false
+      },
+      "notes": "Warsaw (europe-central2), regional Default USD prices (not Iowa default): reads $0.039/100k, writes $0.117/100k, deletes $0.013/100k, storage $0.000267123/GiB-hour. SDK document snapshots are not automatically billed reads. `firestoreReadsBillableEstimate` must be supplied with its conversion basis; query minimum (1 read/query, including empty queries), index-entry reads, rules-dependent reads and request type can change billing."
+    },
+    "cloudStorage": {
+      "standardStoragePerGiBHour": 2.7397e-05,
+      "classAOperationsPer1000": 0.005,
+      "classBOperationsPer1000": 0.0004,
+      "internetEgressEurope": [
+        {
+          "throughGiB": 10240,
+          "pricePerGiB": 0.12
+        },
+        {
+          "throughGiB": 153600,
+          "pricePerGiB": 0.11
+        },
+        {
+          "throughGiB": null,
+          "pricePerGiB": 0.08
+        }
+      ],
+      "notes": "Warsaw Standard storage regional rate and single-region flat namespace operations. Cloud Storage internet egress uses its separate Worldwide Destinations table: $0.12/GiB up to 10 TiB, $0.11/GiB to 150 TiB, $0.08/GiB thereafter. No free egress tier applied. Bucket class, HNS, destination mix and retrieval charges must be changed if deployment differs."
+    },
+    "identityPlatform": {
+      "tier1Mau": [
+        {
+          "through": 50000,
+          "pricePerMau": 0
+        },
+        {
+          "through": 100000,
+          "pricePerMau": 0.0055
+        },
+        {
+          "through": 1000000,
+          "pricePerMau": 0.0046
+        },
+        {
+          "through": 10000000,
+          "pricePerMau": 0.0032
+        },
+        {
+          "through": null,
+          "pricePerMau": 0.0025
+        }
+      ],
+      "sms": "excluded unless country-specific SMS count and price are supplied",
+      "notes": "Firebase Authentication tier-1 providers include email, phone, anonymous and social; SMS is billed separately. MAU count is a unique monthly user count, not DAU multiplied by sessions. Anonymous MAU treatment depends on automatic clean-up."
+    },
+    "artifactRegistry": {
+      "monthlyIncludedGiB": 0.5,
+      "storagePerGiBHour": 0.000136986,
+      "notes": "Official shared billing-account monthly free tier is 0.5 GiB, but it is not applied; model prices gross storage because account-wide usage is unknown. Internet image pulls from Artifact Registry are not included here; account for them via network egress if relevant."
+    },
+    "secretManager": {
+      "includedActiveVersions": 6,
+      "activeVersionPerHour": 8.2192e-05,
+      "includedAccesses": 10000,
+      "accessPer10000": 0.03,
+      "notes": "Shared billing-account free tier; model defaults to gross cost."
+    },
+    "currencyAndTaxes": "USD only. No exchange conversion, VAT, tax, negotiated discount, committed-use discount, or account-specific credit is assumed."
+  }
+}

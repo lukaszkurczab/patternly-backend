@@ -1,0 +1,464 @@
+{
+  "schema": "cost02-model-output-v1",
+  "generatedAtUtc": "2026-10-20T07:56:57.644Z",
+  "durationDays": 30,
+  "pricing": {
+    "verifiedOn": "2026-10-20",
+    "region": "europe-central2",
+    "sourceUrls": {
+      "cloudRun": "https://cloud.google.com/run/pricing",
+      "firestore": "https://cloud.google.com/firestore/pricing",
+      "cloudStorage": "https://cloud.google.com/storage/pricing",
+      "artifactRegistry": "https://cloud.google.com/artifact-registry/pricing",
+      "identityPlatform": "https://cloud.google.com/identity-platform/pricing",
+      "secretManager": "https://cloud.google.com/secret-manager/pricing",
+      "network": "https://cloud.google.com/vpc/network-pricing",
+      "cloudRunCpuBoost": "https://docs.cloud.google.com/run/docs/configuring/services/cpu",
+      "cloudRunEvidence": {
+        "pricingPageUrl": "https://cloud.google.com/run/pricing",
+        "fetchedHtmlSha256": "9b9d72cf1b6f8f5192de79f41de18398312de7000081a7916ecc51ea5c5100b5",
+        "evidenceFile": "/Users/lukaszkurczab/Desktop/Projects/Patternly/.agent/private/cost02-20261020/cloud-run-pricing.html",
+        "extraction": "Embedded regional pricing table immediately after the Warsaw (europe-central2) record: active CPU 0.0000336 USD/vCPU-second, idle min-instance CPU 0.0000035 USD/vCPU-second, active/idle RAM 0.0000035 USD/GiB-second, requests 0.40 USD/million."
+      },
+      "cloudRunCpuBoostEvidence": {
+        "pricingPageUrl": "https://docs.cloud.google.com/run/docs/configuring/services/cpu",
+        "extraction": "Official CPU table specifies a 2-vCPU boost for a service configured from 0 through 1 vCPU. The feature covers startup and 10 seconds after container startup; the scenario assumes 3 seconds startup plus 10 seconds post-start and prices the incremental 1 vCPU at active CPU rate."
+      },
+      "cloudStorageEvidence": {
+        "pricingPageUrl": "https://cloud.google.com/storage/pricing",
+        "extraction": "Regional Standard table lists Warsaw (europe-central2) and $0.000027397/GiB-hour. Single-region flat-namespace Standard operations: Class A $0.005/1000, Class B $0.0004/1000. General internet egress: $0.12/GiB through 10 TiB, $0.11 through 150 TiB, then $0.08. Always Free applies only to us-west1, us-central1, and us-east1, so no storage/request/egress free amount is modeled for Warsaw."
+      },
+      "firestoreEvidence": {
+        "pricingPageUrl": "https://cloud.google.com/firestore/pricing",
+        "fetchedHtmlSha256": "344b794f2ac631e63569d5fedb1ca7256c872199310345875773ff80bfced860",
+        "evidenceFile": "/private/tmp/patternly-cost02-model-20261020/firestore-pricing.html",
+        "extraction": "Embedded regional Default USD table immediately after Warsaw (europe-central2): Document Reads $0.039, Writes $0.117, Deletes $0.013 per 100,000; Stored Data and PITR data $0.000267123/GiB-hour (approximately $0.195/GiB-month at 730 hours). The first default table values are Iowa and were rejected. Empty query minimum and index-entry rules documented separately."
+      },
+      "networkEvidence": {
+        "pricingPageUrl": "https://cloud.google.com/vpc/network-pricing",
+        "extraction": "Warsaw (europe-central2) Premium-tier outbound Europe list rates: $0.12/GiB through 1 TiB, $0.11 through 10 TiB, then $0.085. Cloud Run states its 1 GiB/month free internet egress applies within North America only; Warsaw-to-Europe is modeled without it."
+      }
+    },
+    "currency": "USD",
+    "firestoreDailyFreeQuotaApplied": false,
+    "pricesAreListRates": true
+  },
+  "assumptions": {
+    "exampleOnly": true,
+    "description": "Deterministic hand example, not a measured Patternly flow or a forecast. 1,000 DAU × 1.5 sessions/day × 30 days; one HTTP request and four billable-read-estimate units per session.",
+    "sessionServiceTimeMs": 400,
+    "httpServiceTimeBasis": "app backend only; milliseconds summed over measured app HTTP requests"
+  },
+  "scenarios": [
+    {
+      "scenario": "example-1000-moderate",
+      "kind": "moderate",
+      "durationDays": 30,
+      "dau": 1000,
+      "accountShare": 0.8,
+      "sessionsPerDauDay": 1.5,
+      "sessionDurationMinutes": 20,
+      "averageConcurrentUsers24h": 20.833333333333332,
+      "concurrentUsersInActiveWindow": 62.5,
+      "foregroundReturnsPerSession": 0,
+      "answersPerSession": 0,
+      "packageDownloadsPerAccountMonth": 0,
+      "completionsPerDauDay": 0,
+      "premiumRefreshesPerSession": 0,
+      "monthlyActiveAccountsAssumption": 800,
+      "historyAccountsStoredAssumption": 800,
+      "historyRetentionDaysAssumption": 30,
+      "pitrGiBAssumption": 0,
+      "retryAttemptsPerRequestAssumption": 0,
+      "monthlySessions": 45000,
+      "dailyTriggerRates": {
+        "session": 1.5,
+        "foreground": 0,
+        "answer": 0,
+        "completion": 0,
+        "premiumRefresh": 0,
+        "packageDownload": 0,
+        "reconnect": 0,
+        "historyPage": 0
+      },
+      "packageQuotaBasis": "monthlyActiveAccounts × packageDownloadsPerAccountMonth; package delivery observations are account-only",
+      "flowCoverage": {
+        "selectedFlowIds": [
+          "hand-session-example"
+        ],
+        "includedFlowIds": [
+          "hand-session-example"
+        ],
+        "excludedFlowIds": [],
+        "missingBillableReadEstimate": false,
+        "measurementsArePerEventOccurrenceAfterSampleNormalization": true
+      },
+      "flowRequests": [
+        {
+          "id": "hand-session-example",
+          "event": "session",
+          "audience": "both",
+          "occurrences": 45000,
+          "requests": 45000,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 400,
+          "evidenceRef": "EXAMPLE ONLY: hand-calculation input, not collected evidence",
+          "indexEntryReads": "NOT_MEASURED"
+        }
+      ],
+      "volumes": {
+        "requests": 45000,
+        "firestoreReadsObserved": 135000,
+        "firestoreReadsBillableEstimate": 180000,
+        "firestoreWrites": 0,
+        "firestoreDeletes": 0,
+        "responseBytes": 11520000,
+        "requestBytesInboundExcludedFromEgress": 1440000,
+        "gcsDownloads": 0,
+        "gcsDownloadBytes": 0,
+        "localHttpServiceTimeMsSumDiagnostic": 18000000,
+        "localHttpServiceTimeMsMaxDiagnostic": 400
+      },
+      "cloudRun": {
+        "min0": {
+          "billing": "request-based",
+          "minInstances": 0,
+          "manualCount0": "disabled; excluded from available-service comparison",
+          "concurrency": 80,
+          "requestServiceTimeMeanMsAssumption": 100,
+          "activeWindowHoursPerDay": 8,
+          "requestsPerSecond": 0.052083333333333336,
+          "offeredMeanConcurrency": 0.005208333333333334,
+          "estimatedActiveInstances": 1,
+          "occupancyApproximation": "Poisson independent arrivals; 1-exp(-mean offered concurrency per instance)",
+          "occupancyFraction": 0.005194793482162896,
+          "activeRequestWindowInstanceSeconds": 4488.301568588742,
+          "minInstanceActiveBilledSeconds": 4548.301568588742,
+          "minInstanceIdleBilledSeconds": 0,
+          "activeBilledSeconds": 4554.400000000001,
+          "activeBillingRoundingRangeSeconds": {
+            "lower": 4548.400000000001,
+            "upperPriced": 4554.400000000001,
+            "perRequestRoundingSlackSeconds": 0,
+            "startupShutdownRoundingSlackSeconds": 6,
+            "incrementSeconds": 0.1,
+            "note": "Priced upper bound adds at most one 100ms rounding interval per request and one each for startup/shutdown per assumed start. This does not model provider interval unions or overlapping requests; Poisson active-window occupancy remains an approximation, not exact invoice billing."
+          },
+          "startupShutdownAssumptions": {
+            "startsPerDay": 1,
+            "startupMsEach": 1000,
+            "shutdownMsEach": 1000,
+            "startupShutdownBilledSeconds": 60
+          },
+          "cpuBoostAssumption": {
+            "extraDurationMsPerStart": 1000,
+            "multiplier": 2,
+            "extraVcpuSeconds": 30,
+            "costedAtActiveCpuRate": true
+          },
+          "cpuVcpuSeconds": 4584.400000000001,
+          "memoryGiBSeconds": 2277.2000000000003,
+          "requests": 45000,
+          "costUsd": {
+            "cpuActive": 0.15403584,
+            "memoryActive": 0.0079702,
+            "cpuIdle": 0,
+            "memoryIdle": 0,
+            "requests": 0.018,
+            "total": 0.18000604
+          }
+        },
+        "min1": {
+          "billing": "request-based",
+          "minInstances": 1,
+          "manualCount0": "disabled; excluded from available-service comparison",
+          "concurrency": 80,
+          "requestServiceTimeMeanMsAssumption": 100,
+          "activeWindowHoursPerDay": 8,
+          "requestsPerSecond": 0.052083333333333336,
+          "offeredMeanConcurrency": 0.005208333333333334,
+          "estimatedActiveInstances": 1,
+          "occupancyApproximation": "Poisson independent arrivals; 1-exp(-mean offered concurrency per instance)",
+          "occupancyFraction": 0.005194793482162896,
+          "activeRequestWindowInstanceSeconds": 4488.301568588742,
+          "minInstanceActiveBilledSeconds": 4548.301568588742,
+          "minInstanceIdleBilledSeconds": 2587451.7,
+          "activeBilledSeconds": 4554.400000000001,
+          "activeBillingRoundingRangeSeconds": {
+            "lower": 4548.400000000001,
+            "upperPriced": 4554.400000000001,
+            "perRequestRoundingSlackSeconds": 0,
+            "startupShutdownRoundingSlackSeconds": 6,
+            "incrementSeconds": 0.1,
+            "note": "Priced upper bound adds at most one 100ms rounding interval per request and one each for startup/shutdown per assumed start. This does not model provider interval unions or overlapping requests; Poisson active-window occupancy remains an approximation, not exact invoice billing."
+          },
+          "startupShutdownAssumptions": {
+            "startsPerDay": 1,
+            "startupMsEach": 1000,
+            "shutdownMsEach": 1000,
+            "startupShutdownBilledSeconds": 60
+          },
+          "cpuBoostAssumption": {
+            "extraDurationMsPerStart": 1000,
+            "multiplier": 2,
+            "extraVcpuSeconds": 30,
+            "costedAtActiveCpuRate": true
+          },
+          "cpuVcpuSeconds": 4584.400000000001,
+          "memoryGiBSeconds": 2277.2000000000003,
+          "requests": 45000,
+          "costUsd": {
+            "cpuActive": 0.15403584,
+            "memoryActive": 0.0079702,
+            "cpuIdle": 9.05608095,
+            "memoryIdle": 4.528040475,
+            "requests": 0.018,
+            "total": 13.764127465000001
+          }
+        }
+      },
+      "sensitivity": {
+        "cloudRunServiceTimeMultipliers": [
+          {
+            "multiplier": 0.5,
+            "serviceTimeMs": 50,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 4563.1,
+              "costUsd": 0.180313585
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2589693,
+              "costUsd": 13.776201835
+            }
+          },
+          {
+            "multiplier": 5,
+            "serviceTimeMs": 500,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 22275.600000000002,
+              "costUsd": 0.8064504600000001
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2569730.5,
+              "costUsd": 14.297535585000002
+            }
+          },
+          {
+            "multiplier": 10,
+            "serviceTimeMs": 1000,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 43914.3,
+              "costUsd": 1.5713785049999998
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2548091.8000000003,
+              "costUsd": 14.948860455000002
+            }
+          }
+        ],
+        "activeWindowHoursPerDay": [
+          {
+            "activeWindowHoursPerDay": 4,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 4542.7,
+              "costUsd": 0.17959244499999996
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2587463.4000000004,
+              "costUsd": 13.763775295000002
+            }
+          },
+          {
+            "activeWindowHoursPerDay": 8,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 4554.400000000001,
+              "costUsd": 0.18000604
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2587451.7,
+              "costUsd": 13.764127465000001
+            }
+          },
+          {
+            "activeWindowHoursPerDay": 16,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 4560.2,
+              "costUsd": 0.18021106999999997
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2587445.9000000004,
+              "costUsd": 13.764302045
+            }
+          }
+        ],
+        "note": "Sensitivity recalculates mean request occupancy, active-instance approximation, and designated min=1 idle. Active-window width is the reuse/burst assumption; no provider traces are inferred."
+      },
+      "firestore": {
+        "observedSdkDocumentSnapshots": 135000,
+        "estimatedBillableDocumentReads": 180000,
+        "estimatedCandidateMissingPointReads": 45000,
+        "emptyQueries": 0,
+        "queryCount": 45000,
+        "indexEntryReads": "NOT_MEASURED",
+        "readsUnknown": false,
+        "writes": 0,
+        "deletes": 0,
+        "storage": {
+          "matureStartingGiB": 0,
+          "acquiredCohortAverageGiB": 0,
+          "retentionDaysAssumption": 30,
+          "matureStorageCost": 0,
+          "acquiredStorageCost": 0,
+          "storageCost": 0
+        },
+        "costUsd": {
+          "reads": 0.0702,
+          "writes": 0,
+          "deletes": 0,
+          "storage": 0,
+          "total": 0.0702
+        }
+      },
+      "network": {
+        "packageDelivery": "none",
+        "cloudRunAppResponseGiB": 0.010728836059570312,
+        "packageObjectGiB": 0,
+        "directGcsPackageEgressGiB": 0,
+        "responseBytesContainsAppDescriptorOrJsonOnly": true,
+        "inboundRequestBytesExcluded": true,
+        "pricingMethod": "current signed-URL flow: app descriptor/JSON egress and direct GCS payload egress are separate SKUs; GCS GET operation remains separate",
+        "costUsd": {
+          "cloudRunEgress": 0.0012874603271484375,
+          "packageEgress": 0
+        }
+      },
+      "cloudStorage": {
+        "retainedPackageGiB": 0,
+        "classAOperations": 0,
+        "classBOperations": 0,
+        "costUsd": {
+          "storage": 0,
+          "operations": 0,
+          "egress": 0,
+          "total": 0
+        }
+      },
+      "identityPlatform": {
+        "monthlyActiveUsers": 800,
+        "costUsd": 0
+      },
+      "artifactRegistry": {
+        "storedGiB": 0,
+        "costUsd": 0
+      },
+      "secretManager": {
+        "activeVersions": 0,
+        "accesses": 0,
+        "costUsd": 0
+      },
+      "pitr": {
+        "retainedGiBAssumption": 0,
+        "quantityBasis": "explicit profile input; configured state is not refreshed by this model",
+        "matureStartingGiB": 0,
+        "acquiredCohortAverageGiB": 0,
+        "costUsd": 0,
+        "costUsdBreakdown": {
+          "matureFixed": 0,
+          "acquiredCohort": 0
+        }
+      },
+      "storageRetentionSensitivity": [
+        {
+          "retentionDays": 30,
+          "hypotheticalOnly": false,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 0,
+          "averageRecordsPerAccount": null,
+          "databaseGiB": 0,
+          "firestoreStorageCostUsd": 0,
+          "pitrCostUsd": 0,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        },
+        {
+          "retentionDays": 90,
+          "hypotheticalOnly": true,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 2,
+          "averageRecordsPerAccount": null,
+          "databaseGiB": 0,
+          "firestoreStorageCostUsd": 0,
+          "pitrCostUsd": 0,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        },
+        {
+          "retentionDays": 365,
+          "hypotheticalOnly": true,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 11.166666666666666,
+          "averageRecordsPerAccount": null,
+          "databaseGiB": 0,
+          "firestoreStorageCostUsd": 0,
+          "pitrCostUsd": 0,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        }
+      ],
+      "fixedAndMarginal": {
+        "fixedAssumptionsUsd": {
+          "min1Idle": 13.584121425,
+          "matureFirestoreStorage": 0,
+          "retainedPackageStorage": 0,
+          "identityPlatform": 0,
+          "artifactRegistry": 0,
+          "secretManager": 0,
+          "maturePitrStorage": 0
+        },
+        "usageComponentAtScenarioUsd": {
+          "min0": 0.25149350032714846,
+          "min1": 0.25149350032714846
+        },
+        "note": "Usage component is an attribution at the scenario point; only marginalCostPer1000SessionsUsd below is a finite difference. Fixed daily startup/shutdown assumptions are held constant in that finite difference."
+      },
+      "totalCostUsd": {
+        "min0": 0.25149350032714846,
+        "min1": 13.83561492532715
+      },
+      "monthlyCostPer1000SessionsUsd": {
+        "min0": 0.00558874445171441,
+        "min1": 0.3074581094517145
+      },
+      "averageVariableCostPer1000SessionsUsd": {
+        "min0": 0.00558874445171441,
+        "min1": 0.00558874445171441
+      },
+      "scope": "MODELED: explicit scenario inputs and official list prices; not invoice or provider measurement",
+      "marginalCostPer1000SessionsUsd": {
+        "addedSessions": 1000,
+        "method": "finite difference: totalCost(profile plus 1,000 monthly sessions) - totalCost(profile); DAU, account mix, MAU, mature history, package quota, registry, secrets and daily starts held fixed; session-derived traffic/completions/history growth scale with sessions; reconnects/day stays fixed.",
+        "min0": 0.005502400229492166,
+        "min1": 0.004980550229490177,
+        "comparisonScenario": "example-1000-moderate+1000 monthly sessions"
+      }
+    }
+  ],
+  "limitations": [
+    "Traffic, audience mix, CCU shape, session/event rates, retry rate, package downloads, history maturity and retention are scenario assumptions unless their evidenceRef points to measured observations.",
+    "Local HTTP service time is diagnostic only. Cloud Run service time requires a separately supplied cloudRunServiceTimeMsAssumption per measured app request flow; client-side Auth SDK RPC and local JS cold mount are not Cloud Run app request service time.",
+    "Cloud Run instance occupancy is a Poisson approximation with supplied active window and concurrency; actual autoscaling, queues, startup, shutdown, min instance routing, CPU and billing need provider-side measurements.",
+    "Startup/shutdown and CPU boost amounts and frequencies are explicit inputs, not measured defaults. Local emulator latency and CPU are not substituted for Cloud Run values.",
+    "Firestore SDK snapshots, candidate missing point reads, empty-query counts and billed-read estimates are separate. Index entry reads are NOT_MEASURED; query shape, rules and document returns can change billable reads.",
+    "Firestore daily operation quota defaults off because other same-project usage is unknown. Cloud Run, Registry and Secret Manager shared free tiers are also not applied; outputs are gross list-price estimates. No FX conversion, VAT, tax, negotiated discounts, billing export, authenticated inventory or provider measurement is included.",
+    "Retention storage distinguishes matured starting history from a uniformly acquired 30-day cohort; shorter expiry is rejected, and 90/365-day cases are storage-only sensitivities. Firestore PITR is priced from an explicit assumed GiB quantity, not a refreshed provider configuration; backup storage, Cloud Build, logs, monitoring, SMS, support and other unprovided SKUs are excluded. HistoryRecordBytes is payload only and omits physical Firestore metadata/index overhead."
+  ]
+}

@@ -1,0 +1,3634 @@
+{
+  "schema": "cost02-model-output-v1",
+  "generatedAtUtc": "2026-10-20T07:56:26.616Z",
+  "durationDays": 30,
+  "pricing": {
+    "verifiedOn": "2026-10-20",
+    "region": "europe-central2",
+    "sourceUrls": {
+      "cloudRun": "https://cloud.google.com/run/pricing",
+      "firestore": "https://cloud.google.com/firestore/pricing",
+      "cloudStorage": "https://cloud.google.com/storage/pricing",
+      "artifactRegistry": "https://cloud.google.com/artifact-registry/pricing",
+      "identityPlatform": "https://cloud.google.com/identity-platform/pricing",
+      "secretManager": "https://cloud.google.com/secret-manager/pricing",
+      "network": "https://cloud.google.com/vpc/network-pricing",
+      "cloudRunCpuBoost": "https://docs.cloud.google.com/run/docs/configuring/services/cpu",
+      "cloudRunEvidence": {
+        "pricingPageUrl": "https://cloud.google.com/run/pricing",
+        "fetchedHtmlSha256": "9b9d72cf1b6f8f5192de79f41de18398312de7000081a7916ecc51ea5c5100b5",
+        "evidenceFile": "/Users/lukaszkurczab/Desktop/Projects/Patternly/.agent/private/cost02-20261020/cloud-run-pricing.html",
+        "extraction": "Embedded regional pricing table immediately after the Warsaw (europe-central2) record: active CPU 0.0000336 USD/vCPU-second, idle min-instance CPU 0.0000035 USD/vCPU-second, active/idle RAM 0.0000035 USD/GiB-second, requests 0.40 USD/million."
+      },
+      "cloudRunCpuBoostEvidence": {
+        "pricingPageUrl": "https://docs.cloud.google.com/run/docs/configuring/services/cpu",
+        "extraction": "Official CPU table specifies a 2-vCPU boost for a service configured from 0 through 1 vCPU. The feature covers startup and 10 seconds after container startup; the scenario assumes 3 seconds startup plus 10 seconds post-start and prices the incremental 1 vCPU at active CPU rate."
+      },
+      "cloudStorageEvidence": {
+        "pricingPageUrl": "https://cloud.google.com/storage/pricing",
+        "extraction": "Regional Standard table lists Warsaw (europe-central2) and $0.000027397/GiB-hour. Single-region flat-namespace Standard operations: Class A $0.005/1000, Class B $0.0004/1000. General internet egress: $0.12/GiB through 10 TiB, $0.11 through 150 TiB, then $0.08. Always Free applies only to us-west1, us-central1, and us-east1, so no storage/request/egress free amount is modeled for Warsaw."
+      },
+      "firestoreEvidence": {
+        "pricingPageUrl": "https://cloud.google.com/firestore/pricing",
+        "fetchedHtmlSha256": "344b794f2ac631e63569d5fedb1ca7256c872199310345875773ff80bfced860",
+        "evidenceFile": "/private/tmp/patternly-cost02-model-20261020/firestore-pricing.html",
+        "extraction": "Embedded regional Default USD table immediately after Warsaw (europe-central2): Document Reads $0.039, Writes $0.117, Deletes $0.013 per 100,000; Stored Data and PITR data $0.000267123/GiB-hour (approximately $0.195/GiB-month at 730 hours). The first default table values are Iowa and were rejected. Empty query minimum and index-entry rules documented separately."
+      },
+      "networkEvidence": {
+        "pricingPageUrl": "https://cloud.google.com/vpc/network-pricing",
+        "extraction": "Warsaw (europe-central2) Premium-tier outbound Europe list rates: $0.12/GiB through 1 TiB, $0.11 through 10 TiB, then $0.085. Cloud Run states its 1 GiB/month free internet egress applies within North America only; Warsaw-to-Europe is modeled without it."
+      }
+    },
+    "currency": "USD",
+    "firestoreDailyFreeQuotaApplied": false,
+    "pricesAreListRates": true
+  },
+  "assumptions": {
+    "generatedAtUtc": "2026-10-20T07:56:18.697Z",
+    "sourceMatrixSha256": "b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+    "sourceInputKind": "matrix-json",
+    "sourceInputSha256": "b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+    "sourceBackendHead": "f0e09535093f378f3e53861253be0138e4c895ca",
+    "sourceBackendHarnessSha256": "6dbeaabb11548188c4549b78edbdf78515adbf2660a60beddc4891064b1cd4c9",
+    "sourceFrontendSha": "c6809aafac112d6b908e6e2433158f14e5c9f0c9",
+    "sourceLifecycleHelperSha256": "ea292eb3014751b50adef3ddee0e8121f3b0d53fbc34cbaceebcd2307a3f5908",
+    "trafficIsScenarioAssumption": true,
+    "sessionColdMountPerModeledSession": "Every modeled session includes account cold JS/SDK mount as an upper workload; foreground returns are separately counted. Warm rerender is measured zero but is not used as an expected traffic frequency.",
+    "accountSessionDerivation": "account_session_base = cold_start_account - account_retry_account_data_sync_current; trailing account-data read is modeled separately only where selected.",
+    "completionSyncDerivation": "account_completion_sync_base = account_changed_sync_retry_success - account_retry_account_data_sync_current; successful retry sequence retained, standalone failure observation excluded.",
+    "completionSyncScaling": "The successful measured completion sync is a 3-record unit. For Q=answersPerSession+2 terminal records, reads are 7+2Q and committed writes are 2Q+2 from verified store.applyBatch mapping; response bytes scale Q/3 as a conservative payload-envelope approximation. Incoming bytes are excluded from egress costs.",
+    "historySweepSelection": "Select one full-sweep cardinality equal to historyRecordsPerAccountAtStart; count once at session and once after completion. Full sweep is not multiplied by historyPagesPerSession.",
+    "retryRates": "0.01 extra attempts per request moderate; 0.05 peak. Conservative scenario multiplier, not measured failure probability.",
+    "premiumRefreshFrequency": "0.1 moderate / 0.5 peak is an assumed fraction of account sessions with an additional premium-entry/admission/manual/SDK entitlement refresh; not measured behavior. Production authorizePremiumSessionStart can refresh/getEntitlements; native SDK subscription refresh frequency is unmeasured.",
+    "cloudRunServiceTime": "100ms assumed service time per app HTTP request for base case; sensitivity runs at 50ms, 500ms, 1,000ms. Local emulator/service timings are diagnostics only.",
+    "packageSize": "71,523B historical local representative gzip artifact; size only, not current content candidate or download-frequency evidence.",
+    "historyRecordBytes": "1,135B modeled record payload assumption; not provider physical stored size and excludes metadata/index overhead.",
+    "historyPolicy": "30-day cost horizon; retention assumption >=30 days and no history expiry/deletion within modeled month. 90/365-day outputs are hypothetical storage sensitivities only.",
+    "pitr": "Explicit quantity set equal to estimated mean primary history GiB under each scenario; historical COST01 note records PITR enabled but there is no fresh provider inventory/configuration read.",
+    "coldStarts": "min=0 24/day moderate or 72/day peak; min=1 one/day; startup 3s and shutdown 1s each; additional 13s CPU boost at 2x for a 1-vCPU instance (official behavior, assumed frequency).",
+    "sharedCharges": "Registry 0.4GiB, Secret Manager 3 active versions and 3,000 accesses/month per profile are explicit scenario assumptions; not refreshed inventory. Free shared allowances remain unapplied."
+  },
+  "scenarios": [
+    {
+      "scenario": "dau-100-moderate",
+      "kind": "moderate",
+      "durationDays": 30,
+      "dau": 100,
+      "accountShare": 0.7,
+      "sessionsPerDauDay": 2,
+      "sessionDurationMinutes": 10,
+      "averageConcurrentUsers24h": 1.3888888888888888,
+      "concurrentUsersInActiveWindow": 2.7777777777777777,
+      "foregroundReturnsPerSession": 0.5,
+      "answersPerSession": 10,
+      "packageDownloadsPerAccountMonth": 2,
+      "completionsPerDauDay": 2,
+      "premiumRefreshesPerSession": 0.1,
+      "monthlyActiveAccountsAssumption": 210,
+      "historyAccountsStoredAssumption": 210,
+      "historyRetentionDaysAssumption": 30,
+      "pitrGiBAssumption": 0.24861842393875122,
+      "retryAttemptsPerRequestAssumption": 0.01,
+      "monthlySessions": 6000,
+      "dailyTriggerRates": {
+        "session": 2,
+        "foreground": 1,
+        "answer": 20,
+        "completion": 2,
+        "premiumRefresh": 0.2,
+        "packageDownload": 0.06666666666666667,
+        "reconnect": 0.2,
+        "historyPage": 0
+      },
+      "packageQuotaBasis": "monthlyActiveAccounts × packageDownloadsPerAccountMonth; package delivery observations are account-only",
+      "flowCoverage": {
+        "selectedFlowIds": [
+          "account_session_base",
+          "history_1000_session",
+          "account_completion_sync_12records",
+          "history_1000_completion",
+          "account_foreground",
+          "account_reconnect",
+          "account_extra_entitlement_refresh",
+          "account_answer_local",
+          "account_completion_local",
+          "guest_session_local",
+          "guest_foreground_local",
+          "guest_reconnect_local",
+          "guest_answer_local",
+          "guest_completion_local",
+          "account_package_download"
+        ],
+        "includedFlowIds": [
+          "account_session_base",
+          "account_foreground",
+          "account_reconnect",
+          "account_extra_entitlement_refresh",
+          "account_answer_local",
+          "account_completion_local",
+          "guest_session_local",
+          "guest_foreground_local",
+          "guest_reconnect_local",
+          "guest_answer_local",
+          "guest_completion_local",
+          "account_package_download",
+          "history_1000_session",
+          "history_1000_completion",
+          "account_completion_sync_12records"
+        ],
+        "excludedFlowIds": [
+          "account_completion_sync_base",
+          "history_0_session",
+          "history_0_completion",
+          "history_100_session",
+          "history_100_completion",
+          "history_10000_session",
+          "history_10000_completion",
+          "account_completion_sync_22records"
+        ],
+        "missingBillableReadEstimate": false,
+        "measurementsArePerEventOccurrenceAfterSampleNormalization": true
+      },
+      "flowRequests": [
+        {
+          "id": "account_session_base",
+          "event": "session",
+          "audience": "account",
+          "occurrences": 4200,
+          "requests": 8484,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/cold_start_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5 + .agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_retry_account_data_sync_current#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_foreground",
+          "event": "foreground",
+          "audience": "account",
+          "occurrences": 2100,
+          "requests": 4242,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 21.42699999999968,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/background_foreground_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_reconnect",
+          "event": "reconnect",
+          "audience": "account",
+          "occurrences": 420,
+          "requests": 424.2,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 25.088999999999942,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/reconnect_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_extra_entitlement_refresh",
+          "event": "premiumRefresh",
+          "audience": "account",
+          "occurrences": 420,
+          "requests": 424.2,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 19.887792000001355,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_entitlements_refresh#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_answer_local",
+          "event": "answer",
+          "audience": "account",
+          "occurrences": 42000,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_local_answer_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_completion_local",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 4200,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_local_completion_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_session_local",
+          "event": "session",
+          "audience": "guest",
+          "occurrences": 1800.0000000000002,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/cold_start_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_foreground_local",
+          "event": "foreground",
+          "audience": "guest",
+          "occurrences": 900.0000000000001,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/background_foreground_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_reconnect_local",
+          "event": "reconnect",
+          "audience": "guest",
+          "occurrences": 180.00000000000003,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/reconnect_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_answer_local",
+          "event": "answer",
+          "audience": "guest",
+          "occurrences": 18000.000000000004,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/guest_local_answer_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_completion_local",
+          "event": "completion",
+          "audience": "guest",
+          "occurrences": 1800.0000000000002,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/guest_local_completion_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_package_download",
+          "event": "packageDownload",
+          "audience": "account",
+          "occurrences": 420,
+          "requests": 424.2,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 41.015166999997746,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_content_package_download#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "history_1000_session",
+          "event": "session",
+          "audience": "account",
+          "occurrences": 4200,
+          "requests": 42420,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 56.62619589999995,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_history_1000#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "history_1000_completion",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 4200,
+          "requests": 42420,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 56.62619589999995,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_history_1000#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_completion_sync_12records",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 4200,
+          "requests": 4242,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_changed_sync_retry_success#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5 + .agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_retry_account_data_sync_current#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5; source shape from patternly-backend/src/modules/progress/store.ts FirestoreProgressStore.applyBatch",
+          "indexEntryReads": "NOT_MEASURED"
+        }
+      ],
+      "volumes": {
+        "requests": 103080.6,
+        "firestoreReadsObserved": 9457963.2,
+        "firestoreReadsBillableEstimate": 9457963.2,
+        "firestoreWrites": 110292,
+        "firestoreDeletes": 0,
+        "responseBytes": 9927452913,
+        "requestBytesInboundExcludedFromEgress": 14333718,
+        "gcsDownloads": 424.2,
+        "gcsDownloadBytes": 30340056.6,
+        "localHttpServiceTimeMsSumDiagnostic": 4931537.583163794,
+        "localHttpServiceTimeMsMaxDiagnostic": 68.31079199999976
+      },
+      "cloudRun": {
+        "min0": {
+          "billing": "request-based",
+          "minInstances": 0,
+          "manualCount0": "disabled; excluded from available-service comparison",
+          "concurrency": 80,
+          "requestServiceTimeMeanMsAssumption": 100,
+          "activeWindowHoursPerDay": 12,
+          "requestsPerSecond": 0.0795375,
+          "offeredMeanConcurrency": 0.00795375,
+          "estimatedActiveInstances": 1,
+          "occupancyApproximation": "Poisson independent arrivals; 1-exp(-mean offered concurrency per instance)",
+          "occupancyFraction": 0.007922202625852637,
+          "activeRequestWindowInstanceSeconds": 10267.174603105017,
+          "minInstanceActiveBilledSeconds": 13147.174603105017,
+          "minInstanceIdleBilledSeconds": 0,
+          "activeBilledSeconds": 13291.2,
+          "activeBillingRoundingRangeSeconds": {
+            "lower": 13147.2,
+            "upperPriced": 13291.2,
+            "perRequestRoundingSlackSeconds": 0,
+            "startupShutdownRoundingSlackSeconds": 144,
+            "incrementSeconds": 0.1,
+            "note": "Priced upper bound adds at most one 100ms rounding interval per request and one each for startup/shutdown per assumed start. This does not model provider interval unions or overlapping requests; Poisson active-window occupancy remains an approximation, not exact invoice billing."
+          },
+          "startupShutdownAssumptions": {
+            "startsPerDay": 24,
+            "startupMsEach": 3000,
+            "shutdownMsEach": 1000,
+            "startupShutdownBilledSeconds": 2880
+          },
+          "cpuBoostAssumption": {
+            "extraDurationMsPerStart": 13000,
+            "multiplier": 2,
+            "extraVcpuSeconds": 9360,
+            "costedAtActiveCpuRate": true
+          },
+          "cpuVcpuSeconds": 22651.2,
+          "memoryGiBSeconds": 6645.6,
+          "requests": 103080.6,
+          "costUsd": {
+            "cpuActive": 0.7610803199999999,
+            "memoryActive": 0.023259600000000002,
+            "cpuIdle": 0,
+            "memoryIdle": 0,
+            "requests": 0.04123224,
+            "total": 0.82557216
+          }
+        },
+        "min1": {
+          "billing": "request-based",
+          "minInstances": 1,
+          "manualCount0": "disabled; excluded from available-service comparison",
+          "concurrency": 80,
+          "requestServiceTimeMeanMsAssumption": 100,
+          "activeWindowHoursPerDay": 12,
+          "requestsPerSecond": 0.0795375,
+          "offeredMeanConcurrency": 0.00795375,
+          "estimatedActiveInstances": 1,
+          "occupancyApproximation": "Poisson independent arrivals; 1-exp(-mean offered concurrency per instance)",
+          "occupancyFraction": 0.007922202625852637,
+          "activeRequestWindowInstanceSeconds": 10267.174603105017,
+          "minInstanceActiveBilledSeconds": 10387.174603105017,
+          "minInstanceIdleBilledSeconds": 2581612.9000000004,
+          "activeBilledSeconds": 10393.2,
+          "activeBillingRoundingRangeSeconds": {
+            "lower": 10387.2,
+            "upperPriced": 10393.2,
+            "perRequestRoundingSlackSeconds": 0,
+            "startupShutdownRoundingSlackSeconds": 6,
+            "incrementSeconds": 0.1,
+            "note": "Priced upper bound adds at most one 100ms rounding interval per request and one each for startup/shutdown per assumed start. This does not model provider interval unions or overlapping requests; Poisson active-window occupancy remains an approximation, not exact invoice billing."
+          },
+          "startupShutdownAssumptions": {
+            "startsPerDay": 1,
+            "startupMsEach": 3000,
+            "shutdownMsEach": 1000,
+            "startupShutdownBilledSeconds": 120
+          },
+          "cpuBoostAssumption": {
+            "extraDurationMsPerStart": 13000,
+            "multiplier": 2,
+            "extraVcpuSeconds": 390,
+            "costedAtActiveCpuRate": true
+          },
+          "cpuVcpuSeconds": 10783.2,
+          "memoryGiBSeconds": 5196.6,
+          "requests": 103080.6,
+          "costUsd": {
+            "cpuActive": 0.36231552,
+            "memoryActive": 0.018188100000000002,
+            "cpuIdle": 9.03564515,
+            "memoryIdle": 4.517822575,
+            "requests": 0.04123224,
+            "total": 13.975203585000001
+          }
+        }
+      },
+      "sensitivity": {
+        "cloudRunServiceTimeMultipliers": [
+          {
+            "multiplier": 0.5,
+            "serviceTimeMs": 50,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 13321.900000000001,
+              "costUsd": 0.8266574050000001
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2586736.3000000003,
+              "costUsd": 14.00318668
+            }
+          },
+          {
+            "multiplier": 5,
+            "serviceTimeMs": 500,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 53553,
+              "costUsd": 2.24882679
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2541351.1,
+              "costUsd": 15.187083764999999
+            }
+          },
+          {
+            "multiplier": 10,
+            "serviceTimeMs": 1000,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 102111.8,
+              "costUsd": 3.9653803699999997
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2492792.3000000003,
+              "costUsd": 16.648703645
+            }
+          }
+        ],
+        "activeWindowHoursPerDay": [
+          {
+            "activeWindowHoursPerDay": 6,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 13250.6,
+              "costUsd": 0.82413695
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2581653.5,
+              "costUsd": 13.973981525
+            }
+          },
+          {
+            "activeWindowHoursPerDay": 12,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 13291.2,
+              "costUsd": 0.82557216
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2581612.9000000004,
+              "costUsd": 13.975203585000001
+            }
+          },
+          {
+            "activeWindowHoursPerDay": 24,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 13311.6,
+              "costUsd": 0.8262932999999999
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2581592.5,
+              "costUsd": 13.975817624999998
+            }
+          }
+        ],
+        "note": "Sensitivity recalculates mean request occupancy, active-instance approximation, and designated min=1 idle. Active-window width is the reuse/burst assumption; no provider traces are inferred."
+      },
+      "firestore": {
+        "observedSdkDocumentSnapshots": 9457963.2,
+        "estimatedBillableDocumentReads": 9457963.2,
+        "estimatedCandidateMissingPointReads": 236703.6,
+        "emptyQueries": 0,
+        "queryCount": 91203,
+        "indexEntryReads": "NOT_MEASURED",
+        "readsUnknown": false,
+        "writes": 110292,
+        "deletes": 0,
+        "storage": {
+          "matureStartingGiB": 0.2219807356595993,
+          "acquiredCohortAverageGiB": 0.026637688279151917,
+          "retentionDaysAssumption": 30,
+          "matureStorageCost": 0.042693235237151385,
+          "acquiredStorageCost": 0.005123188228458166,
+          "storageCost": 0.04781642346560955
+        },
+        "costUsd": {
+          "reads": 3.688605648,
+          "writes": 0.12904163999999999,
+          "deletes": 0,
+          "storage": 0.04781642346560955,
+          "total": 3.865463711465609
+        }
+      },
+      "network": {
+        "packageDelivery": "directGcs",
+        "cloudRunAppResponseGiB": 9.245661006309092,
+        "packageObjectGiB": 0.028256379626691343,
+        "directGcsPackageEgressGiB": 0.028256379626691343,
+        "responseBytesContainsAppDescriptorOrJsonOnly": true,
+        "inboundRequestBytesExcluded": true,
+        "pricingMethod": "current signed-URL flow: app descriptor/JSON egress and direct GCS payload egress are separate SKUs; GCS GET operation remains separate",
+        "costUsd": {
+          "cloudRunEgress": 1.109479320757091,
+          "packageEgress": 0.003390765555202961
+        }
+      },
+      "cloudStorage": {
+        "retainedPackageGiB": 0.1,
+        "classAOperations": 0,
+        "classBOperations": 424.2,
+        "costUsd": {
+          "storage": 0.001972584,
+          "operations": 0.00016968,
+          "egress": 0.003390765555202961,
+          "total": 0.005533029555202961
+        }
+      },
+      "identityPlatform": {
+        "monthlyActiveUsers": 210,
+        "costUsd": 0
+      },
+      "artifactRegistry": {
+        "storedGiB": 0.4,
+        "costUsd": 0.039451968
+      },
+      "secretManager": {
+        "activeVersions": 3,
+        "accesses": 3000,
+        "costUsd": 0.18653472000000001
+      },
+      "pitr": {
+        "retainedGiBAssumption": 0.24861842393875122,
+        "quantityBasis": "explicit profile input; configured state is not refreshed by this model",
+        "matureStartingGiB": 0.2219807356595993,
+        "acquiredCohortAverageGiB": 0.026637688279151917,
+        "costUsd": 0.047816423465609555,
+        "costUsdBreakdown": {
+          "matureFixed": 0.042693235237151385,
+          "acquiredCohort": 0.005123188228458166
+        }
+      },
+      "storageRetentionSensitivity": [
+        {
+          "retentionDays": 30,
+          "hypotheticalOnly": false,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 0,
+          "averageRecordsPerAccount": 1120,
+          "databaseGiB": 0.24861842393875122,
+          "firestoreStorageCostUsd": 0.047816423465609555,
+          "pitrCostUsd": 0.047816423465609555,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        },
+        {
+          "retentionDays": 90,
+          "hypotheticalOnly": true,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 2,
+          "averageRecordsPerAccount": 1600,
+          "databaseGiB": 0.3551691770553589,
+          "firestoreStorageCostUsd": 0.06830917637944223,
+          "pitrCostUsd": 0.06830917637944223,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        },
+        {
+          "retentionDays": 365,
+          "hypotheticalOnly": true,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 11.166666666666666,
+          "averageRecordsPerAccount": 3800,
+          "databaseGiB": 0.8435267955064774,
+          "firestoreStorageCostUsd": 0.16223429390117527,
+          "pitrCostUsd": 0.16223429390117527,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        }
+      ],
+      "fixedAndMarginal": {
+        "fixedAssumptionsUsd": {
+          "min1Idle": 13.553467725,
+          "matureFirestoreStorage": 0.042693235237151385,
+          "retainedPackageStorage": 0.001972584,
+          "identityPlatform": 0,
+          "artifactRegistry": 0.039451968,
+          "secretManager": 0.18653472000000001,
+          "maturePitrStorage": 0.042693235237151385
+        },
+        "usageComponentAtScenarioUsd": {
+          "min0": 5.76650559076921,
+          "min1": 5.36266929076921
+        },
+        "note": "Usage component is an attribution at the scenario point; only marginalCostPer1000SessionsUsd below is a finite difference. Fixed daily startup/shutdown assumptions are held constant in that finite difference."
+      },
+      "totalCostUsd": {
+        "min0": 6.037158098006361,
+        "min1": 19.18678952300636
+      },
+      "monthlyCostPer1000SessionsUsd": {
+        "min0": 1.0061930163343935,
+        "min1": 3.1977982538343936
+      },
+      "averageVariableCostPer1000SessionsUsd": {
+        "min0": 0.9610842651282018,
+        "min1": 0.8937782151282015
+      },
+      "scope": "MODELED: explicit scenario inputs and official list prices; not invoice or provider measurement",
+      "marginalCostPer1000SessionsUsd": {
+        "addedSessions": 1000,
+        "method": "finite difference: totalCost(profile plus 1,000 monthly sessions) - totalCost(profile); DAU, account mix, MAU, mature history, package quota, registry, secrets and daily starts held fixed; session-derived traffic/completions/history growth scale with sessions; reconnects/day stays fixed.",
+        "min0": 0.8888616234499676,
+        "min1": 0.8799927984499689,
+        "comparisonScenario": "dau-100-moderate+1000 monthly sessions"
+      }
+    },
+    {
+      "scenario": "dau-1000-moderate",
+      "kind": "moderate",
+      "durationDays": 30,
+      "dau": 1000,
+      "accountShare": 0.7,
+      "sessionsPerDauDay": 2,
+      "sessionDurationMinutes": 10,
+      "averageConcurrentUsers24h": 13.88888888888889,
+      "concurrentUsersInActiveWindow": 27.77777777777778,
+      "foregroundReturnsPerSession": 0.5,
+      "answersPerSession": 10,
+      "packageDownloadsPerAccountMonth": 2,
+      "completionsPerDauDay": 2,
+      "premiumRefreshesPerSession": 0.1,
+      "monthlyActiveAccountsAssumption": 2100,
+      "historyAccountsStoredAssumption": 2100,
+      "historyRetentionDaysAssumption": 30,
+      "pitrGiBAssumption": 2.486184239387512,
+      "retryAttemptsPerRequestAssumption": 0.01,
+      "monthlySessions": 60000,
+      "dailyTriggerRates": {
+        "session": 2,
+        "foreground": 1,
+        "answer": 20,
+        "completion": 2,
+        "premiumRefresh": 0.2,
+        "packageDownload": 0.06666666666666667,
+        "reconnect": 0.2,
+        "historyPage": 0
+      },
+      "packageQuotaBasis": "monthlyActiveAccounts × packageDownloadsPerAccountMonth; package delivery observations are account-only",
+      "flowCoverage": {
+        "selectedFlowIds": [
+          "account_session_base",
+          "history_1000_session",
+          "account_completion_sync_12records",
+          "history_1000_completion",
+          "account_foreground",
+          "account_reconnect",
+          "account_extra_entitlement_refresh",
+          "account_answer_local",
+          "account_completion_local",
+          "guest_session_local",
+          "guest_foreground_local",
+          "guest_reconnect_local",
+          "guest_answer_local",
+          "guest_completion_local",
+          "account_package_download"
+        ],
+        "includedFlowIds": [
+          "account_session_base",
+          "account_foreground",
+          "account_reconnect",
+          "account_extra_entitlement_refresh",
+          "account_answer_local",
+          "account_completion_local",
+          "guest_session_local",
+          "guest_foreground_local",
+          "guest_reconnect_local",
+          "guest_answer_local",
+          "guest_completion_local",
+          "account_package_download",
+          "history_1000_session",
+          "history_1000_completion",
+          "account_completion_sync_12records"
+        ],
+        "excludedFlowIds": [
+          "account_completion_sync_base",
+          "history_0_session",
+          "history_0_completion",
+          "history_100_session",
+          "history_100_completion",
+          "history_10000_session",
+          "history_10000_completion",
+          "account_completion_sync_22records"
+        ],
+        "missingBillableReadEstimate": false,
+        "measurementsArePerEventOccurrenceAfterSampleNormalization": true
+      },
+      "flowRequests": [
+        {
+          "id": "account_session_base",
+          "event": "session",
+          "audience": "account",
+          "occurrences": 42000,
+          "requests": 84840,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/cold_start_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5 + .agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_retry_account_data_sync_current#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_foreground",
+          "event": "foreground",
+          "audience": "account",
+          "occurrences": 21000,
+          "requests": 42420,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 21.42699999999968,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/background_foreground_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_reconnect",
+          "event": "reconnect",
+          "audience": "account",
+          "occurrences": 4200,
+          "requests": 4242,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 25.088999999999942,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/reconnect_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_extra_entitlement_refresh",
+          "event": "premiumRefresh",
+          "audience": "account",
+          "occurrences": 4200,
+          "requests": 4242,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 19.887792000001355,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_entitlements_refresh#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_answer_local",
+          "event": "answer",
+          "audience": "account",
+          "occurrences": 420000,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_local_answer_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_completion_local",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 42000,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_local_completion_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_session_local",
+          "event": "session",
+          "audience": "guest",
+          "occurrences": 18000.000000000004,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/cold_start_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_foreground_local",
+          "event": "foreground",
+          "audience": "guest",
+          "occurrences": 9000.000000000002,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/background_foreground_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_reconnect_local",
+          "event": "reconnect",
+          "audience": "guest",
+          "occurrences": 1800.0000000000005,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/reconnect_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_answer_local",
+          "event": "answer",
+          "audience": "guest",
+          "occurrences": 180000.00000000003,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/guest_local_answer_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_completion_local",
+          "event": "completion",
+          "audience": "guest",
+          "occurrences": 18000.000000000004,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/guest_local_completion_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_package_download",
+          "event": "packageDownload",
+          "audience": "account",
+          "occurrences": 4200,
+          "requests": 4242,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 41.015166999997746,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_content_package_download#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "history_1000_session",
+          "event": "session",
+          "audience": "account",
+          "occurrences": 42000,
+          "requests": 424200,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 56.62619589999995,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_history_1000#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "history_1000_completion",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 42000,
+          "requests": 424200,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 56.62619589999995,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_history_1000#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_completion_sync_12records",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 42000,
+          "requests": 42420,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_changed_sync_retry_success#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5 + .agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_retry_account_data_sync_current#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5; source shape from patternly-backend/src/modules/progress/store.ts FirestoreProgressStore.applyBatch",
+          "indexEntryReads": "NOT_MEASURED"
+        }
+      ],
+      "volumes": {
+        "requests": 1030806,
+        "firestoreReadsObserved": 94579632,
+        "firestoreReadsBillableEstimate": 94579632,
+        "firestoreWrites": 1102920,
+        "firestoreDeletes": 0,
+        "responseBytes": 99274529130,
+        "requestBytesInboundExcludedFromEgress": 143337180,
+        "gcsDownloads": 4242,
+        "gcsDownloadBytes": 303400566,
+        "localHttpServiceTimeMsSumDiagnostic": 49315375.83163794,
+        "localHttpServiceTimeMsMaxDiagnostic": 68.31079199999976
+      },
+      "cloudRun": {
+        "min0": {
+          "billing": "request-based",
+          "minInstances": 0,
+          "manualCount0": "disabled; excluded from available-service comparison",
+          "concurrency": 80,
+          "requestServiceTimeMeanMsAssumption": 100,
+          "activeWindowHoursPerDay": 12,
+          "requestsPerSecond": 0.7953749999999999,
+          "offeredMeanConcurrency": 0.0795375,
+          "estimatedActiveInstances": 1,
+          "occupancyApproximation": "Poisson independent arrivals; 1-exp(-mean offered concurrency per instance)",
+          "occupancyFraction": 0.07645661355775979,
+          "activeRequestWindowInstanceSeconds": 99087.7711708567,
+          "minInstanceActiveBilledSeconds": 101967.7711708567,
+          "minInstanceIdleBilledSeconds": 0,
+          "activeBilledSeconds": 102111.8,
+          "activeBillingRoundingRangeSeconds": {
+            "lower": 101967.8,
+            "upperPriced": 102111.8,
+            "perRequestRoundingSlackSeconds": 0,
+            "startupShutdownRoundingSlackSeconds": 144,
+            "incrementSeconds": 0.1,
+            "note": "Priced upper bound adds at most one 100ms rounding interval per request and one each for startup/shutdown per assumed start. This does not model provider interval unions or overlapping requests; Poisson active-window occupancy remains an approximation, not exact invoice billing."
+          },
+          "startupShutdownAssumptions": {
+            "startsPerDay": 24,
+            "startupMsEach": 3000,
+            "shutdownMsEach": 1000,
+            "startupShutdownBilledSeconds": 2880
+          },
+          "cpuBoostAssumption": {
+            "extraDurationMsPerStart": 13000,
+            "multiplier": 2,
+            "extraVcpuSeconds": 9360,
+            "costedAtActiveCpuRate": true
+          },
+          "cpuVcpuSeconds": 111471.8,
+          "memoryGiBSeconds": 51055.9,
+          "requests": 1030806,
+          "costUsd": {
+            "cpuActive": 3.74545248,
+            "memoryActive": 0.17869565,
+            "cpuIdle": 0,
+            "memoryIdle": 0,
+            "requests": 0.4123224,
+            "total": 4.33647053
+          }
+        },
+        "min1": {
+          "billing": "request-based",
+          "minInstances": 1,
+          "manualCount0": "disabled; excluded from available-service comparison",
+          "concurrency": 80,
+          "requestServiceTimeMeanMsAssumption": 100,
+          "activeWindowHoursPerDay": 12,
+          "requestsPerSecond": 0.7953749999999999,
+          "offeredMeanConcurrency": 0.0795375,
+          "estimatedActiveInstances": 1,
+          "occupancyApproximation": "Poisson independent arrivals; 1-exp(-mean offered concurrency per instance)",
+          "occupancyFraction": 0.07645661355775979,
+          "activeRequestWindowInstanceSeconds": 99087.7711708567,
+          "minInstanceActiveBilledSeconds": 99207.7711708567,
+          "minInstanceIdleBilledSeconds": 2492792.3000000003,
+          "activeBilledSeconds": 99213.8,
+          "activeBillingRoundingRangeSeconds": {
+            "lower": 99207.8,
+            "upperPriced": 99213.8,
+            "perRequestRoundingSlackSeconds": 0,
+            "startupShutdownRoundingSlackSeconds": 6,
+            "incrementSeconds": 0.1,
+            "note": "Priced upper bound adds at most one 100ms rounding interval per request and one each for startup/shutdown per assumed start. This does not model provider interval unions or overlapping requests; Poisson active-window occupancy remains an approximation, not exact invoice billing."
+          },
+          "startupShutdownAssumptions": {
+            "startsPerDay": 1,
+            "startupMsEach": 3000,
+            "shutdownMsEach": 1000,
+            "startupShutdownBilledSeconds": 120
+          },
+          "cpuBoostAssumption": {
+            "extraDurationMsPerStart": 13000,
+            "multiplier": 2,
+            "extraVcpuSeconds": 390,
+            "costedAtActiveCpuRate": true
+          },
+          "cpuVcpuSeconds": 99603.8,
+          "memoryGiBSeconds": 49606.9,
+          "requests": 1030806,
+          "costUsd": {
+            "cpuActive": 3.3466876799999996,
+            "memoryActive": 0.17362415,
+            "cpuIdle": 8.724773050000001,
+            "memoryIdle": 4.362386525000001,
+            "requests": 0.4123224,
+            "total": 17.019793805000003
+          }
+        }
+      },
+      "sensitivity": {
+        "cloudRunServiceTimeMultipliers": [
+          {
+            "multiplier": 0.5,
+            "serviceTimeMs": 50,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 105093.3,
+              "costUsd": 4.441866555
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2541351.1,
+              "costUsd": 17.38012353
+            }
+          },
+          {
+            "multiplier": 5,
+            "serviceTimeMs": 500,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 428278,
+              "costUsd": 15.8664457
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2166626.1,
+              "costUsd": 26.837396424999998
+            }
+          },
+          {
+            "multiplier": 10,
+            "serviceTimeMs": 1000,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 713994.2000000001,
+              "costUsd": 25.966513369999998
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 1880909.9000000001,
+              "costUsd": 35.437454045
+            }
+          }
+        ],
+        "activeWindowHoursPerDay": [
+          {
+            "activeWindowHoursPerDay": 6,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 98323.90000000001,
+              "costUsd": 4.202568265
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2496580.2,
+              "costUsd": 16.905778015000003
+            }
+          },
+          {
+            "activeWindowHoursPerDay": 12,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 102111.8,
+              "costUsd": 4.33647053
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2492792.3000000003,
+              "costUsd": 17.019793805000003
+            }
+          },
+          {
+            "activeWindowHoursPerDay": 24,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 104081.90000000001,
+              "costUsd": 4.406113565
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2490822.2,
+              "costUsd": 17.079093815
+            }
+          }
+        ],
+        "note": "Sensitivity recalculates mean request occupancy, active-instance approximation, and designated min=1 idle. Active-window width is the reuse/burst assumption; no provider traces are inferred."
+      },
+      "firestore": {
+        "observedSdkDocumentSnapshots": 94579632,
+        "estimatedBillableDocumentReads": 94579632,
+        "estimatedCandidateMissingPointReads": 2367036,
+        "emptyQueries": 0,
+        "queryCount": 912030,
+        "indexEntryReads": "NOT_MEASURED",
+        "readsUnknown": false,
+        "writes": 1102920,
+        "deletes": 0,
+        "storage": {
+          "matureStartingGiB": 2.219807356595993,
+          "acquiredCohortAverageGiB": 0.26637688279151917,
+          "retentionDaysAssumption": 30,
+          "matureStorageCost": 0.4269323523715139,
+          "acquiredStorageCost": 0.05123188228458166,
+          "storageCost": 0.47816423465609553
+        },
+        "costUsd": {
+          "reads": 36.88605648,
+          "writes": 1.2904164,
+          "deletes": 0,
+          "storage": 0.47816423465609553,
+          "total": 38.6546371146561
+        }
+      },
+      "network": {
+        "packageDelivery": "directGcs",
+        "cloudRunAppResponseGiB": 92.45661006309092,
+        "packageObjectGiB": 0.2825637962669134,
+        "directGcsPackageEgressGiB": 0.2825637962669134,
+        "responseBytesContainsAppDescriptorOrJsonOnly": true,
+        "inboundRequestBytesExcluded": true,
+        "pricingMethod": "current signed-URL flow: app descriptor/JSON egress and direct GCS payload egress are separate SKUs; GCS GET operation remains separate",
+        "costUsd": {
+          "cloudRunEgress": 11.09479320757091,
+          "packageEgress": 0.03390765555202961
+        }
+      },
+      "cloudStorage": {
+        "retainedPackageGiB": 0.1,
+        "classAOperations": 0,
+        "classBOperations": 4242,
+        "costUsd": {
+          "storage": 0.001972584,
+          "operations": 0.0016968,
+          "egress": 0.03390765555202961,
+          "total": 0.03757703955202961
+        }
+      },
+      "identityPlatform": {
+        "monthlyActiveUsers": 2100,
+        "costUsd": 0
+      },
+      "artifactRegistry": {
+        "storedGiB": 0.4,
+        "costUsd": 0.039451968
+      },
+      "secretManager": {
+        "activeVersions": 3,
+        "accesses": 3000,
+        "costUsd": 0.18653472000000001
+      },
+      "pitr": {
+        "retainedGiBAssumption": 2.486184239387512,
+        "quantityBasis": "explicit profile input; configured state is not refreshed by this model",
+        "matureStartingGiB": 2.219807356595993,
+        "acquiredCohortAverageGiB": 0.26637688279151917,
+        "costUsd": 0.47816423465609553,
+        "costUsdBreakdown": {
+          "matureFixed": 0.4269323523715139,
+          "acquiredCohort": 0.05123188228458166
+        }
+      },
+      "storageRetentionSensitivity": [
+        {
+          "retentionDays": 30,
+          "hypotheticalOnly": false,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 0,
+          "averageRecordsPerAccount": 1120,
+          "databaseGiB": 2.486184239387512,
+          "firestoreStorageCostUsd": 0.47816423465609553,
+          "pitrCostUsd": 0.47816423465609553,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        },
+        {
+          "retentionDays": 90,
+          "hypotheticalOnly": true,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 2,
+          "averageRecordsPerAccount": 1600,
+          "databaseGiB": 3.551691770553589,
+          "firestoreStorageCostUsd": 0.6830917637944222,
+          "pitrCostUsd": 0.6830917637944222,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        },
+        {
+          "retentionDays": 365,
+          "hypotheticalOnly": true,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 11.166666666666666,
+          "averageRecordsPerAccount": 3800,
+          "databaseGiB": 8.435267955064774,
+          "firestoreStorageCostUsd": 1.6223429390117527,
+          "pitrCostUsd": 1.6223429390117527,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        }
+      ],
+      "fixedAndMarginal": {
+        "fixedAssumptionsUsd": {
+          "min1Idle": 13.087159575000001,
+          "matureFirestoreStorage": 0.4269323523715139,
+          "retainedPackageStorage": 0.001972584,
+          "identityPlatform": 0,
+          "artifactRegistry": 0.039451968,
+          "secretManager": 0.18653472000000001,
+          "maturePitrStorage": 0.4269323523715139
+        },
+        "usageComponentAtScenarioUsd": {
+          "min0": 53.745804837692106,
+          "min1": 53.341968537692104
+        },
+        "note": "Usage component is an attribution at the scenario point; only marginalCostPer1000SessionsUsd below is a finite difference. Fixed daily startup/shutdown assumptions are held constant in that finite difference."
+      },
+      "totalCostUsd": {
+        "min0": 54.40069646206362,
+        "min1": 67.08401973706363
+      },
+      "monthlyCostPer1000SessionsUsd": {
+        "min0": 0.906678274367727,
+        "min1": 1.1180669956177272
+      },
+      "averageVariableCostPer1000SessionsUsd": {
+        "min0": 0.8957634139615351,
+        "min1": 0.889032808961535
+      },
+      "scope": "MODELED: explicit scenario inputs and official list prices; not invoice or provider measurement",
+      "marginalCostPer1000SessionsUsd": {
+        "addedSessions": 1000,
+        "method": "finite difference: totalCost(profile plus 1,000 monthly sessions) - totalCost(profile); DAU, account mix, MAU, mature history, package quota, registry, secrets and daily starts held fixed; session-derived traffic/completions/history growth scale with sessions; reconnects/day stays fixed.",
+        "min0": 0.8847362784499637,
+        "min1": 0.8764801284499555,
+        "comparisonScenario": "dau-1000-moderate+1000 monthly sessions"
+      }
+    },
+    {
+      "scenario": "dau-10000-moderate",
+      "kind": "moderate",
+      "durationDays": 30,
+      "dau": 10000,
+      "accountShare": 0.7,
+      "sessionsPerDauDay": 2,
+      "sessionDurationMinutes": 10,
+      "averageConcurrentUsers24h": 138.88888888888889,
+      "concurrentUsersInActiveWindow": 277.77777777777777,
+      "foregroundReturnsPerSession": 0.5,
+      "answersPerSession": 10,
+      "packageDownloadsPerAccountMonth": 2,
+      "completionsPerDauDay": 2,
+      "premiumRefreshesPerSession": 0.1,
+      "monthlyActiveAccountsAssumption": 21000,
+      "historyAccountsStoredAssumption": 21000,
+      "historyRetentionDaysAssumption": 30,
+      "pitrGiBAssumption": 24.861842393875122,
+      "retryAttemptsPerRequestAssumption": 0.01,
+      "monthlySessions": 600000,
+      "dailyTriggerRates": {
+        "session": 2,
+        "foreground": 1,
+        "answer": 20,
+        "completion": 2,
+        "premiumRefresh": 0.2,
+        "packageDownload": 0.06666666666666667,
+        "reconnect": 0.2,
+        "historyPage": 0
+      },
+      "packageQuotaBasis": "monthlyActiveAccounts × packageDownloadsPerAccountMonth; package delivery observations are account-only",
+      "flowCoverage": {
+        "selectedFlowIds": [
+          "account_session_base",
+          "history_1000_session",
+          "account_completion_sync_12records",
+          "history_1000_completion",
+          "account_foreground",
+          "account_reconnect",
+          "account_extra_entitlement_refresh",
+          "account_answer_local",
+          "account_completion_local",
+          "guest_session_local",
+          "guest_foreground_local",
+          "guest_reconnect_local",
+          "guest_answer_local",
+          "guest_completion_local",
+          "account_package_download"
+        ],
+        "includedFlowIds": [
+          "account_session_base",
+          "account_foreground",
+          "account_reconnect",
+          "account_extra_entitlement_refresh",
+          "account_answer_local",
+          "account_completion_local",
+          "guest_session_local",
+          "guest_foreground_local",
+          "guest_reconnect_local",
+          "guest_answer_local",
+          "guest_completion_local",
+          "account_package_download",
+          "history_1000_session",
+          "history_1000_completion",
+          "account_completion_sync_12records"
+        ],
+        "excludedFlowIds": [
+          "account_completion_sync_base",
+          "history_0_session",
+          "history_0_completion",
+          "history_100_session",
+          "history_100_completion",
+          "history_10000_session",
+          "history_10000_completion",
+          "account_completion_sync_22records"
+        ],
+        "missingBillableReadEstimate": false,
+        "measurementsArePerEventOccurrenceAfterSampleNormalization": true
+      },
+      "flowRequests": [
+        {
+          "id": "account_session_base",
+          "event": "session",
+          "audience": "account",
+          "occurrences": 420000,
+          "requests": 848400,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/cold_start_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5 + .agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_retry_account_data_sync_current#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_foreground",
+          "event": "foreground",
+          "audience": "account",
+          "occurrences": 210000,
+          "requests": 424200,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 21.42699999999968,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/background_foreground_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_reconnect",
+          "event": "reconnect",
+          "audience": "account",
+          "occurrences": 42000,
+          "requests": 42420,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 25.088999999999942,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/reconnect_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_extra_entitlement_refresh",
+          "event": "premiumRefresh",
+          "audience": "account",
+          "occurrences": 42000,
+          "requests": 42420,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 19.887792000001355,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_entitlements_refresh#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_answer_local",
+          "event": "answer",
+          "audience": "account",
+          "occurrences": 4200000,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_local_answer_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_completion_local",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 420000,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_local_completion_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_session_local",
+          "event": "session",
+          "audience": "guest",
+          "occurrences": 180000.00000000003,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/cold_start_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_foreground_local",
+          "event": "foreground",
+          "audience": "guest",
+          "occurrences": 90000.00000000001,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/background_foreground_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_reconnect_local",
+          "event": "reconnect",
+          "audience": "guest",
+          "occurrences": 18000.000000000004,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/reconnect_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_answer_local",
+          "event": "answer",
+          "audience": "guest",
+          "occurrences": 1800000.0000000002,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/guest_local_answer_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_completion_local",
+          "event": "completion",
+          "audience": "guest",
+          "occurrences": 180000.00000000003,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/guest_local_completion_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_package_download",
+          "event": "packageDownload",
+          "audience": "account",
+          "occurrences": 42000,
+          "requests": 42420,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 41.015166999997746,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_content_package_download#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "history_1000_session",
+          "event": "session",
+          "audience": "account",
+          "occurrences": 420000,
+          "requests": 4242000,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 56.62619589999995,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_history_1000#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "history_1000_completion",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 420000,
+          "requests": 4242000,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 56.62619589999995,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_history_1000#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_completion_sync_12records",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 420000,
+          "requests": 424200,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_changed_sync_retry_success#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5 + .agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_retry_account_data_sync_current#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5; source shape from patternly-backend/src/modules/progress/store.ts FirestoreProgressStore.applyBatch",
+          "indexEntryReads": "NOT_MEASURED"
+        }
+      ],
+      "volumes": {
+        "requests": 10308060,
+        "firestoreReadsObserved": 945796320,
+        "firestoreReadsBillableEstimate": 945796320,
+        "firestoreWrites": 11029200,
+        "firestoreDeletes": 0,
+        "responseBytes": 992745291300,
+        "requestBytesInboundExcludedFromEgress": 1433371800,
+        "gcsDownloads": 42420,
+        "gcsDownloadBytes": 3034005660,
+        "localHttpServiceTimeMsSumDiagnostic": 493153758.31637937,
+        "localHttpServiceTimeMsMaxDiagnostic": 68.31079199999976
+      },
+      "cloudRun": {
+        "min0": {
+          "billing": "request-based",
+          "minInstances": 0,
+          "manualCount0": "disabled; excluded from available-service comparison",
+          "concurrency": 80,
+          "requestServiceTimeMeanMsAssumption": 100,
+          "activeWindowHoursPerDay": 12,
+          "requestsPerSecond": 7.95375,
+          "offeredMeanConcurrency": 0.795375,
+          "estimatedActiveInstances": 1,
+          "occupancyApproximation": "Poisson independent arrivals; 1-exp(-mean offered concurrency per instance)",
+          "occupancyFraction": 0.5485880762926667,
+          "activeRequestWindowInstanceSeconds": 710970.146875296,
+          "minInstanceActiveBilledSeconds": 713850.146875296,
+          "minInstanceIdleBilledSeconds": 0,
+          "activeBilledSeconds": 713994.2000000001,
+          "activeBillingRoundingRangeSeconds": {
+            "lower": 713850.2000000001,
+            "upperPriced": 713994.2000000001,
+            "perRequestRoundingSlackSeconds": 0,
+            "startupShutdownRoundingSlackSeconds": 144,
+            "incrementSeconds": 0.1,
+            "note": "Priced upper bound adds at most one 100ms rounding interval per request and one each for startup/shutdown per assumed start. This does not model provider interval unions or overlapping requests; Poisson active-window occupancy remains an approximation, not exact invoice billing."
+          },
+          "startupShutdownAssumptions": {
+            "startsPerDay": 24,
+            "startupMsEach": 3000,
+            "shutdownMsEach": 1000,
+            "startupShutdownBilledSeconds": 2880
+          },
+          "cpuBoostAssumption": {
+            "extraDurationMsPerStart": 13000,
+            "multiplier": 2,
+            "extraVcpuSeconds": 9360,
+            "costedAtActiveCpuRate": true
+          },
+          "cpuVcpuSeconds": 723354.2000000001,
+          "memoryGiBSeconds": 356997.10000000003,
+          "requests": 10308060,
+          "costUsd": {
+            "cpuActive": 24.304701119999997,
+            "memoryActive": 1.24948985,
+            "cpuIdle": 0,
+            "memoryIdle": 0,
+            "requests": 4.123224,
+            "total": 29.677414969999997
+          }
+        },
+        "min1": {
+          "billing": "request-based",
+          "minInstances": 1,
+          "manualCount0": "disabled; excluded from available-service comparison",
+          "concurrency": 80,
+          "requestServiceTimeMeanMsAssumption": 100,
+          "activeWindowHoursPerDay": 12,
+          "requestsPerSecond": 7.95375,
+          "offeredMeanConcurrency": 0.795375,
+          "estimatedActiveInstances": 1,
+          "occupancyApproximation": "Poisson independent arrivals; 1-exp(-mean offered concurrency per instance)",
+          "occupancyFraction": 0.5485880762926667,
+          "activeRequestWindowInstanceSeconds": 710970.146875296,
+          "minInstanceActiveBilledSeconds": 711090.146875296,
+          "minInstanceIdleBilledSeconds": 1880909.9000000001,
+          "activeBilledSeconds": 711096.2000000001,
+          "activeBillingRoundingRangeSeconds": {
+            "lower": 711090.2000000001,
+            "upperPriced": 711096.2000000001,
+            "perRequestRoundingSlackSeconds": 0,
+            "startupShutdownRoundingSlackSeconds": 6,
+            "incrementSeconds": 0.1,
+            "note": "Priced upper bound adds at most one 100ms rounding interval per request and one each for startup/shutdown per assumed start. This does not model provider interval unions or overlapping requests; Poisson active-window occupancy remains an approximation, not exact invoice billing."
+          },
+          "startupShutdownAssumptions": {
+            "startsPerDay": 1,
+            "startupMsEach": 3000,
+            "shutdownMsEach": 1000,
+            "startupShutdownBilledSeconds": 120
+          },
+          "cpuBoostAssumption": {
+            "extraDurationMsPerStart": 13000,
+            "multiplier": 2,
+            "extraVcpuSeconds": 390,
+            "costedAtActiveCpuRate": true
+          },
+          "cpuVcpuSeconds": 711486.2000000001,
+          "memoryGiBSeconds": 355548.10000000003,
+          "requests": 10308060,
+          "costUsd": {
+            "cpuActive": 23.90593632,
+            "memoryActive": 1.2444183500000001,
+            "cpuIdle": 6.583184650000001,
+            "memoryIdle": 3.2915923250000003,
+            "requests": 4.123224,
+            "total": 39.148355645
+          }
+        }
+      },
+      "sensitivity": {
+        "cloudRunServiceTimeMultipliers": [
+          {
+            "multiplier": 0.5,
+            "serviceTimeMs": 50,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 943681,
+              "costUsd": 37.796843349999996
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2166626.1,
+              "costUsd": 48.76779407499999
+            }
+          },
+          {
+            "multiplier": 5,
+            "serviceTimeMs": 500,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 1274731.7000000002,
+              "costUsd": 49.499485595
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 1320172.4000000001,
+              "costUsd": 56.026554395
+            }
+          },
+          {
+            "multiplier": 10,
+            "serviceTimeMs": 1000,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 1298568.7000000002,
+              "costUsd": 50.342123545
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 1296335.4000000001,
+              "costUsd": 56.744048095
+            }
+          }
+        ],
+        "activeWindowHoursPerDay": [
+          {
+            "activeWindowHoursPerDay": 6,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 518979.30000000005,
+              "costUsd": 22.783638255
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2075924.8,
+              "costUsd": 33.278407155
+            }
+          },
+          {
+            "activeWindowHoursPerDay": 12,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 713994.2000000001,
+              "costUsd": 29.677414969999997
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 1880909.9000000001,
+              "costUsd": 39.148355645
+            }
+          },
+          {
+            "activeWindowHoursPerDay": 24,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 853531.9,
+              "costUsd": 34.610072665
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 1741372.2000000002,
+              "costUsd": 43.348440415
+            }
+          }
+        ],
+        "note": "Sensitivity recalculates mean request occupancy, active-instance approximation, and designated min=1 idle. Active-window width is the reuse/burst assumption; no provider traces are inferred."
+      },
+      "firestore": {
+        "observedSdkDocumentSnapshots": 945796320,
+        "estimatedBillableDocumentReads": 945796320,
+        "estimatedCandidateMissingPointReads": 23670360,
+        "emptyQueries": 0,
+        "queryCount": 9120300,
+        "indexEntryReads": "NOT_MEASURED",
+        "readsUnknown": false,
+        "writes": 11029200,
+        "deletes": 0,
+        "storage": {
+          "matureStartingGiB": 22.19807356595993,
+          "acquiredCohortAverageGiB": 2.6637688279151917,
+          "retentionDaysAssumption": 30,
+          "matureStorageCost": 4.269323523715139,
+          "acquiredStorageCost": 0.5123188228458166,
+          "storageCost": 4.781642346560956
+        },
+        "costUsd": {
+          "reads": 368.8605648,
+          "writes": 12.904164000000002,
+          "deletes": 0,
+          "storage": 4.781642346560956,
+          "total": 386.54637114656094
+        }
+      },
+      "network": {
+        "packageDelivery": "directGcs",
+        "cloudRunAppResponseGiB": 924.5661006309092,
+        "packageObjectGiB": 2.825637962669134,
+        "directGcsPackageEgressGiB": 2.825637962669134,
+        "responseBytesContainsAppDescriptorOrJsonOnly": true,
+        "inboundRequestBytesExcluded": true,
+        "pricingMethod": "current signed-URL flow: app descriptor/JSON egress and direct GCS payload egress are separate SKUs; GCS GET operation remains separate",
+        "costUsd": {
+          "cloudRunEgress": 110.9479320757091,
+          "packageEgress": 0.3390765555202961
+        }
+      },
+      "cloudStorage": {
+        "retainedPackageGiB": 0.1,
+        "classAOperations": 0,
+        "classBOperations": 42420,
+        "costUsd": {
+          "storage": 0.001972584,
+          "operations": 0.016968,
+          "egress": 0.3390765555202961,
+          "total": 0.35801713952029607
+        }
+      },
+      "identityPlatform": {
+        "monthlyActiveUsers": 21000,
+        "costUsd": 0
+      },
+      "artifactRegistry": {
+        "storedGiB": 0.4,
+        "costUsd": 0.039451968
+      },
+      "secretManager": {
+        "activeVersions": 3,
+        "accesses": 3000,
+        "costUsd": 0.18653472000000001
+      },
+      "pitr": {
+        "retainedGiBAssumption": 24.861842393875122,
+        "quantityBasis": "explicit profile input; configured state is not refreshed by this model",
+        "matureStartingGiB": 22.19807356595993,
+        "acquiredCohortAverageGiB": 2.6637688279151917,
+        "costUsd": 4.781642346560956,
+        "costUsdBreakdown": {
+          "matureFixed": 4.269323523715139,
+          "acquiredCohort": 0.5123188228458166
+        }
+      },
+      "storageRetentionSensitivity": [
+        {
+          "retentionDays": 30,
+          "hypotheticalOnly": false,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 0,
+          "averageRecordsPerAccount": 1120,
+          "databaseGiB": 24.861842393875122,
+          "firestoreStorageCostUsd": 4.781642346560956,
+          "pitrCostUsd": 4.781642346560956,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        },
+        {
+          "retentionDays": 90,
+          "hypotheticalOnly": true,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 2,
+          "averageRecordsPerAccount": 1600,
+          "databaseGiB": 35.51691770553589,
+          "firestoreStorageCostUsd": 6.830917637944222,
+          "pitrCostUsd": 6.830917637944222,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        },
+        {
+          "retentionDays": 365,
+          "hypotheticalOnly": true,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 11.166666666666666,
+          "averageRecordsPerAccount": 3800,
+          "databaseGiB": 84.35267955064774,
+          "firestoreStorageCostUsd": 16.223429390117527,
+          "pitrCostUsd": 16.223429390117527,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        }
+      ],
+      "fixedAndMarginal": {
+        "fixedAssumptionsUsd": {
+          "min1Idle": 9.874776975000001,
+          "matureFirestoreStorage": 4.269323523715139,
+          "retainedPackageStorage": 0.001972584,
+          "identityPlatform": 0,
+          "artifactRegistry": 0.039451968,
+          "secretManager": 0.18653472000000001,
+          "maturePitrStorage": 4.269323523715139
+        },
+        "usageComponentAtScenarioUsd": {
+          "min0": 523.7707580469211,
+          "min1": 523.366921746921
+        },
+        "note": "Usage component is an attribution at the scenario point; only marginalCostPer1000SessionsUsd below is a finite difference. Fixed daily startup/shutdown assumptions are held constant in that finite difference."
+      },
+      "totalCostUsd": {
+        "min0": 528.2680408426362,
+        "min1": 537.7389815176361
+      },
+      "monthlyCostPer1000SessionsUsd": {
+        "min0": 0.8804467347377269,
+        "min1": 0.8962316358627268
+      },
+      "averageVariableCostPer1000SessionsUsd": {
+        "min0": 0.8729512634115351,
+        "min1": 0.8722782029115349
+      },
+      "scope": "MODELED: explicit scenario inputs and official list prices; not invoice or provider measurement",
+      "marginalCostPer1000SessionsUsd": {
+        "addedSessions": 1000,
+        "method": "finite difference: totalCost(profile plus 1,000 monthly sessions) - totalCost(profile); DAU, account mix, MAU, mature history, package quota, registry, secrets and daily starts held fixed; session-derived traffic/completions/history growth scale with sessions; reconnects/day stays fixed.",
+        "min0": 0.8563148784500072,
+        "min1": 0.8522797284500712,
+        "comparisonScenario": "dau-10000-moderate+1000 monthly sessions"
+      }
+    },
+    {
+      "scenario": "dau-100-peak",
+      "kind": "peak",
+      "durationDays": 30,
+      "dau": 100,
+      "accountShare": 0.9,
+      "sessionsPerDauDay": 4,
+      "sessionDurationMinutes": 20,
+      "averageConcurrentUsers24h": 5.555555555555555,
+      "concurrentUsersInActiveWindow": 33.333333333333336,
+      "foregroundReturnsPerSession": 2,
+      "answersPerSession": 20,
+      "packageDownloadsPerAccountMonth": 8,
+      "completionsPerDauDay": 4,
+      "premiumRefreshesPerSession": 0.5,
+      "monthlyActiveAccountsAssumption": 450,
+      "historyAccountsStoredAssumption": 450,
+      "historyRetentionDaysAssumption": 30,
+      "pitrGiBAssumption": 4.882307723164558,
+      "retryAttemptsPerRequestAssumption": 0.05,
+      "monthlySessions": 12000,
+      "dailyTriggerRates": {
+        "session": 4,
+        "foreground": 8,
+        "answer": 80,
+        "completion": 4,
+        "premiumRefresh": 2,
+        "packageDownload": 0.26666666666666666,
+        "reconnect": 1,
+        "historyPage": 0
+      },
+      "packageQuotaBasis": "monthlyActiveAccounts × packageDownloadsPerAccountMonth; package delivery observations are account-only",
+      "flowCoverage": {
+        "selectedFlowIds": [
+          "account_session_base",
+          "history_10000_session",
+          "account_completion_sync_22records",
+          "history_10000_completion",
+          "account_foreground",
+          "account_reconnect",
+          "account_extra_entitlement_refresh",
+          "account_answer_local",
+          "account_completion_local",
+          "guest_session_local",
+          "guest_foreground_local",
+          "guest_reconnect_local",
+          "guest_answer_local",
+          "guest_completion_local",
+          "account_package_download"
+        ],
+        "includedFlowIds": [
+          "account_session_base",
+          "account_foreground",
+          "account_reconnect",
+          "account_extra_entitlement_refresh",
+          "account_answer_local",
+          "account_completion_local",
+          "guest_session_local",
+          "guest_foreground_local",
+          "guest_reconnect_local",
+          "guest_answer_local",
+          "guest_completion_local",
+          "account_package_download",
+          "history_10000_session",
+          "history_10000_completion",
+          "account_completion_sync_22records"
+        ],
+        "excludedFlowIds": [
+          "account_completion_sync_base",
+          "history_0_session",
+          "history_0_completion",
+          "history_100_session",
+          "history_100_completion",
+          "history_1000_session",
+          "history_1000_completion",
+          "account_completion_sync_12records"
+        ],
+        "missingBillableReadEstimate": false,
+        "measurementsArePerEventOccurrenceAfterSampleNormalization": true
+      },
+      "flowRequests": [
+        {
+          "id": "account_session_base",
+          "event": "session",
+          "audience": "account",
+          "occurrences": 10800,
+          "requests": 22680,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/cold_start_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5 + .agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_retry_account_data_sync_current#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_foreground",
+          "event": "foreground",
+          "audience": "account",
+          "occurrences": 21600,
+          "requests": 45360,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 21.42699999999968,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/background_foreground_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_reconnect",
+          "event": "reconnect",
+          "audience": "account",
+          "occurrences": 2700,
+          "requests": 2835,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 25.088999999999942,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/reconnect_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_extra_entitlement_refresh",
+          "event": "premiumRefresh",
+          "audience": "account",
+          "occurrences": 5400,
+          "requests": 5670,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 19.887792000001355,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_entitlements_refresh#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_answer_local",
+          "event": "answer",
+          "audience": "account",
+          "occurrences": 216000,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_local_answer_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_completion_local",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 10800,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_local_completion_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_session_local",
+          "event": "session",
+          "audience": "guest",
+          "occurrences": 1199.9999999999998,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/cold_start_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_foreground_local",
+          "event": "foreground",
+          "audience": "guest",
+          "occurrences": 2399.9999999999995,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/background_foreground_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_reconnect_local",
+          "event": "reconnect",
+          "audience": "guest",
+          "occurrences": 299.99999999999994,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/reconnect_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_answer_local",
+          "event": "answer",
+          "audience": "guest",
+          "occurrences": 23999.999999999996,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/guest_local_answer_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_completion_local",
+          "event": "completion",
+          "audience": "guest",
+          "occurrences": 1199.9999999999998,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/guest_local_completion_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_package_download",
+          "event": "packageDownload",
+          "audience": "account",
+          "occurrences": 3600,
+          "requests": 3780,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 41.015166999997746,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_content_package_download#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "history_10000_session",
+          "event": "session",
+          "audience": "account",
+          "occurrences": 10800,
+          "requests": 1134000,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 102.59050832999993,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_history_10000#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "history_10000_completion",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 10800,
+          "requests": 1134000,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 102.59050832999993,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_history_10000#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_completion_sync_22records",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 10800,
+          "requests": 11340,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_changed_sync_retry_success#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5 + .agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_retry_account_data_sync_current#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5; source shape from patternly-backend/src/modules/progress/store.ts FirestoreProgressStore.applyBatch",
+          "indexEntryReads": "NOT_MEASURED"
+        }
+      ],
+      "volumes": {
+        "requests": 2359665,
+        "firestoreReadsObserved": 248279850,
+        "firestoreReadsBillableEstimate": 248279850,
+        "firestoreWrites": 521640,
+        "firestoreDeletes": 0,
+        "responseBytes": 264149219880,
+        "requestBytesInboundExcludedFromEgress": 38317860,
+        "gcsDownloads": 3780,
+        "gcsDownloadBytes": 270356940,
+        "localHttpServiceTimeMsSumDiagnostic": 233986130.03933984,
+        "localHttpServiceTimeMsMaxDiagnostic": 168.8079170000001
+      },
+      "cloudRun": {
+        "min0": {
+          "billing": "request-based",
+          "minInstances": 0,
+          "manualCount0": "disabled; excluded from available-service comparison",
+          "concurrency": 80,
+          "requestServiceTimeMeanMsAssumption": 100,
+          "activeWindowHoursPerDay": 4,
+          "requestsPerSecond": 5.4621875,
+          "offeredMeanConcurrency": 0.54621875,
+          "estimatedActiveInstances": 1,
+          "occupancyApproximation": "Poisson independent arrivals; 1-exp(-mean offered concurrency per instance)",
+          "occupancyFraction": 0.42086446837404157,
+          "activeRequestWindowInstanceSeconds": 181813.45033758596,
+          "minInstanceActiveBilledSeconds": 190453.45033758596,
+          "minInstanceIdleBilledSeconds": 0,
+          "activeBilledSeconds": 190885.5,
+          "activeBillingRoundingRangeSeconds": {
+            "lower": 190453.5,
+            "upperPriced": 190885.5,
+            "perRequestRoundingSlackSeconds": 0,
+            "startupShutdownRoundingSlackSeconds": 432,
+            "incrementSeconds": 0.1,
+            "note": "Priced upper bound adds at most one 100ms rounding interval per request and one each for startup/shutdown per assumed start. This does not model provider interval unions or overlapping requests; Poisson active-window occupancy remains an approximation, not exact invoice billing."
+          },
+          "startupShutdownAssumptions": {
+            "startsPerDay": 72,
+            "startupMsEach": 3000,
+            "shutdownMsEach": 1000,
+            "startupShutdownBilledSeconds": 8640
+          },
+          "cpuBoostAssumption": {
+            "extraDurationMsPerStart": 13000,
+            "multiplier": 2,
+            "extraVcpuSeconds": 28080,
+            "costedAtActiveCpuRate": true
+          },
+          "cpuVcpuSeconds": 218965.5,
+          "memoryGiBSeconds": 95442.75,
+          "requests": 2359665,
+          "costUsd": {
+            "cpuActive": 7.3572408,
+            "memoryActive": 0.334049625,
+            "cpuIdle": 0,
+            "memoryIdle": 0,
+            "requests": 0.9438660000000001,
+            "total": 8.635156425
+          }
+        },
+        "min1": {
+          "billing": "request-based",
+          "minInstances": 1,
+          "manualCount0": "disabled; excluded from available-service comparison",
+          "concurrency": 80,
+          "requestServiceTimeMeanMsAssumption": 100,
+          "activeWindowHoursPerDay": 4,
+          "requestsPerSecond": 5.4621875,
+          "offeredMeanConcurrency": 0.54621875,
+          "estimatedActiveInstances": 1,
+          "occupancyApproximation": "Poisson independent arrivals; 1-exp(-mean offered concurrency per instance)",
+          "occupancyFraction": 0.42086446837404157,
+          "activeRequestWindowInstanceSeconds": 181813.45033758596,
+          "minInstanceActiveBilledSeconds": 181933.45033758596,
+          "minInstanceIdleBilledSeconds": 2410066.6,
+          "activeBilledSeconds": 181939.5,
+          "activeBillingRoundingRangeSeconds": {
+            "lower": 181933.5,
+            "upperPriced": 181939.5,
+            "perRequestRoundingSlackSeconds": 0,
+            "startupShutdownRoundingSlackSeconds": 6,
+            "incrementSeconds": 0.1,
+            "note": "Priced upper bound adds at most one 100ms rounding interval per request and one each for startup/shutdown per assumed start. This does not model provider interval unions or overlapping requests; Poisson active-window occupancy remains an approximation, not exact invoice billing."
+          },
+          "startupShutdownAssumptions": {
+            "startsPerDay": 1,
+            "startupMsEach": 3000,
+            "shutdownMsEach": 1000,
+            "startupShutdownBilledSeconds": 120
+          },
+          "cpuBoostAssumption": {
+            "extraDurationMsPerStart": 13000,
+            "multiplier": 2,
+            "extraVcpuSeconds": 390,
+            "costedAtActiveCpuRate": true
+          },
+          "cpuVcpuSeconds": 182329.5,
+          "memoryGiBSeconds": 90969.75,
+          "requests": 2359665,
+          "costUsd": {
+            "cpuActive": 6.1262712,
+            "memoryActive": 0.318394125,
+            "cpuIdle": 8.4352331,
+            "memoryIdle": 4.21761655,
+            "requests": 0.9438660000000001,
+            "total": 20.041380975
+          }
+        }
+      },
+      "sensitivity": {
+        "cloudRunServiceTimeMultipliers": [
+          {
+            "multiplier": 0.5,
+            "serviceTimeMs": 50,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 230299.2,
+              "costUsd": 10.02843072
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2488636.2,
+              "costUsd": 21.84714567
+            }
+          },
+          {
+            "multiplier": 5,
+            "serviceTimeMs": 500,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 412928.10000000003,
+              "costUsd": 16.484362335
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2188024,
+              "costUsd": 26.724863235
+            }
+          },
+          {
+            "multiplier": 10,
+            "serviceTimeMs": 1000,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 439238.5,
+              "costUsd": 17.414434975
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2161713.6,
+              "costUsd": 27.516806275
+            }
+          }
+        ],
+        "activeWindowHoursPerDay": [
+          {
+            "activeWindowHoursPerDay": 2,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 152626.1,
+              "costUsd": 7.282686634999999
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2448326,
+              "costUsd": 18.889773035
+            }
+          },
+          {
+            "activeWindowHoursPerDay": 4,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 190885.5,
+              "costUsd": 8.635156425
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2410066.6,
+              "costUsd": 20.041380975
+            }
+          },
+          {
+            "activeWindowHoursPerDay": 8,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 215559.80000000002,
+              "costUsd": 9.50739293
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2385392.3000000003,
+              "costUsd": 20.784077405
+            }
+          }
+        ],
+        "note": "Sensitivity recalculates mean request occupancy, active-instance approximation, and designated min=1 idle. Active-window width is the reuse/burst assumption; no provider traces are inferred."
+      },
+      "firestore": {
+        "observedSdkDocumentSnapshots": 248279850,
+        "estimatedBillableDocumentReads": 248279850,
+        "estimatedCandidateMissingPointReads": 4806270,
+        "emptyQueries": 0,
+        "queryCount": 2302020,
+        "indexEntryReads": "NOT_MEASURED",
+        "readsUnknown": false,
+        "writes": 521640,
+        "deletes": 0,
+        "storage": {
+          "matureStartingGiB": 4.7567300498485565,
+          "acquiredCohortAverageGiB": 0.1255776733160019,
+          "retentionDaysAssumption": 30,
+          "matureStorageCost": 0.9148550407961011,
+          "acquiredStorageCost": 0.024152173077017072,
+          "storageCost": 0.9390072138731183
+        },
+        "costUsd": {
+          "reads": 96.82914149999999,
+          "writes": 0.6103188,
+          "deletes": 0,
+          "storage": 0.9390072138731183,
+          "total": 98.3784675138731
+        }
+      },
+      "network": {
+        "packageDelivery": "directGcs",
+        "cloudRunAppResponseGiB": 246.00813154131174,
+        "packageObjectGiB": 0.25178952142596245,
+        "directGcsPackageEgressGiB": 0.25178952142596245,
+        "responseBytesContainsAppDescriptorOrJsonOnly": true,
+        "inboundRequestBytesExcluded": true,
+        "pricingMethod": "current signed-URL flow: app descriptor/JSON egress and direct GCS payload egress are separate SKUs; GCS GET operation remains separate",
+        "costUsd": {
+          "cloudRunEgress": 29.520975784957407,
+          "packageEgress": 0.03021474257111549
+        }
+      },
+      "cloudStorage": {
+        "retainedPackageGiB": 0.1,
+        "classAOperations": 0,
+        "classBOperations": 3780,
+        "costUsd": {
+          "storage": 0.001972584,
+          "operations": 0.0015119999999999999,
+          "egress": 0.03021474257111549,
+          "total": 0.03369932657111549
+        }
+      },
+      "identityPlatform": {
+        "monthlyActiveUsers": 450,
+        "costUsd": 0
+      },
+      "artifactRegistry": {
+        "storedGiB": 0.4,
+        "costUsd": 0.039451968
+      },
+      "secretManager": {
+        "activeVersions": 3,
+        "accesses": 3000,
+        "costUsd": 0.18653472000000001
+      },
+      "pitr": {
+        "retainedGiBAssumption": 4.882307723164558,
+        "quantityBasis": "explicit profile input; configured state is not refreshed by this model",
+        "matureStartingGiB": 4.7567300498485565,
+        "acquiredCohortAverageGiB": 0.1255776733160019,
+        "costUsd": 0.9390072138731183,
+        "costUsdBreakdown": {
+          "matureFixed": 0.9148550407961011,
+          "acquiredCohort": 0.024152173077017072
+        }
+      },
+      "storageRetentionSensitivity": [
+        {
+          "retentionDays": 30,
+          "hypotheticalOnly": false,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 0,
+          "averageRecordsPerAccount": 10264,
+          "databaseGiB": 4.882307723164558,
+          "firestoreStorageCostUsd": 0.9390072138731183,
+          "pitrCostUsd": 0.9390072138731183,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        },
+        {
+          "retentionDays": 90,
+          "hypotheticalOnly": true,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 2,
+          "averageRecordsPerAccount": 11320,
+          "databaseGiB": 5.384618416428566,
+          "firestoreStorageCostUsd": 1.0356159061811865,
+          "pitrCostUsd": 1.0356159061811865,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        },
+        {
+          "retentionDays": 365,
+          "hypotheticalOnly": true,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 11.166666666666666,
+          "averageRecordsPerAccount": 16160,
+          "databaseGiB": 7.686875760555267,
+          "firestoreStorageCostUsd": 1.4784057459264994,
+          "pitrCostUsd": 1.4784057459264994,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        }
+      ],
+      "fixedAndMarginal": {
+        "fixedAssumptionsUsd": {
+          "min1Idle": 12.65284965,
+          "matureFirestoreStorage": 0.9148550407961011,
+          "retainedPackageStorage": 0.001972584,
+          "identityPlatform": 0,
+          "artifactRegistry": 0.039451968,
+          "secretManager": 0.18653472000000001,
+          "maturePitrStorage": 0.9148550407961011
+        },
+        "usageComponentAtScenarioUsd": {
+          "min0": 135.67562359868253,
+          "min1": 134.42899849868255
+        },
+        "note": "Usage component is an attribution at the scenario point; only marginalCostPer1000SessionsUsd below is a finite difference. Fixed daily startup/shutdown assumptions are held constant in that finite difference."
+      },
+      "totalCostUsd": {
+        "min0": 136.8184379114786,
+        "min1": 148.22466246147863
+      },
+      "monthlyCostPer1000SessionsUsd": {
+        "min0": 11.401536492623217,
+        "min1": 12.35205520512322
+      },
+      "averageVariableCostPer1000SessionsUsd": {
+        "min0": 11.306301966556878,
+        "min1": 11.202416541556879
+      },
+      "scope": "MODELED: explicit scenario inputs and official list prices; not invoice or provider measurement",
+      "marginalCostPer1000SessionsUsd": {
+        "addedSessions": 1000,
+        "method": "finite difference: totalCost(profile plus 1,000 monthly sessions) - totalCost(profile); DAU, account mix, MAU, mature history, package quota, registry, secrets and daily starts held fixed; session-derived traffic/completions/history growth scale with sessions; reconnects/day stays fixed.",
+        "min0": 11.052624612544435,
+        "min1": 10.994338062544415,
+        "comparisonScenario": "dau-100-peak+1000 monthly sessions"
+      }
+    },
+    {
+      "scenario": "dau-1000-peak",
+      "kind": "peak",
+      "durationDays": 30,
+      "dau": 1000,
+      "accountShare": 0.9,
+      "sessionsPerDauDay": 4,
+      "sessionDurationMinutes": 20,
+      "averageConcurrentUsers24h": 55.55555555555556,
+      "concurrentUsersInActiveWindow": 333.3333333333333,
+      "foregroundReturnsPerSession": 2,
+      "answersPerSession": 20,
+      "packageDownloadsPerAccountMonth": 8,
+      "completionsPerDauDay": 4,
+      "premiumRefreshesPerSession": 0.5,
+      "monthlyActiveAccountsAssumption": 4500,
+      "historyAccountsStoredAssumption": 4500,
+      "historyRetentionDaysAssumption": 30,
+      "pitrGiBAssumption": 48.823077231645584,
+      "retryAttemptsPerRequestAssumption": 0.05,
+      "monthlySessions": 120000,
+      "dailyTriggerRates": {
+        "session": 4,
+        "foreground": 8,
+        "answer": 80,
+        "completion": 4,
+        "premiumRefresh": 2,
+        "packageDownload": 0.26666666666666666,
+        "reconnect": 1,
+        "historyPage": 0
+      },
+      "packageQuotaBasis": "monthlyActiveAccounts × packageDownloadsPerAccountMonth; package delivery observations are account-only",
+      "flowCoverage": {
+        "selectedFlowIds": [
+          "account_session_base",
+          "history_10000_session",
+          "account_completion_sync_22records",
+          "history_10000_completion",
+          "account_foreground",
+          "account_reconnect",
+          "account_extra_entitlement_refresh",
+          "account_answer_local",
+          "account_completion_local",
+          "guest_session_local",
+          "guest_foreground_local",
+          "guest_reconnect_local",
+          "guest_answer_local",
+          "guest_completion_local",
+          "account_package_download"
+        ],
+        "includedFlowIds": [
+          "account_session_base",
+          "account_foreground",
+          "account_reconnect",
+          "account_extra_entitlement_refresh",
+          "account_answer_local",
+          "account_completion_local",
+          "guest_session_local",
+          "guest_foreground_local",
+          "guest_reconnect_local",
+          "guest_answer_local",
+          "guest_completion_local",
+          "account_package_download",
+          "history_10000_session",
+          "history_10000_completion",
+          "account_completion_sync_22records"
+        ],
+        "excludedFlowIds": [
+          "account_completion_sync_base",
+          "history_0_session",
+          "history_0_completion",
+          "history_100_session",
+          "history_100_completion",
+          "history_1000_session",
+          "history_1000_completion",
+          "account_completion_sync_12records"
+        ],
+        "missingBillableReadEstimate": false,
+        "measurementsArePerEventOccurrenceAfterSampleNormalization": true
+      },
+      "flowRequests": [
+        {
+          "id": "account_session_base",
+          "event": "session",
+          "audience": "account",
+          "occurrences": 108000,
+          "requests": 226800,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/cold_start_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5 + .agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_retry_account_data_sync_current#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_foreground",
+          "event": "foreground",
+          "audience": "account",
+          "occurrences": 216000,
+          "requests": 453600,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 21.42699999999968,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/background_foreground_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_reconnect",
+          "event": "reconnect",
+          "audience": "account",
+          "occurrences": 27000,
+          "requests": 28350,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 25.088999999999942,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/reconnect_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_extra_entitlement_refresh",
+          "event": "premiumRefresh",
+          "audience": "account",
+          "occurrences": 54000,
+          "requests": 56700,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 19.887792000001355,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_entitlements_refresh#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_answer_local",
+          "event": "answer",
+          "audience": "account",
+          "occurrences": 2160000,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_local_answer_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_completion_local",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 108000,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_local_completion_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_session_local",
+          "event": "session",
+          "audience": "guest",
+          "occurrences": 11999.999999999996,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/cold_start_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_foreground_local",
+          "event": "foreground",
+          "audience": "guest",
+          "occurrences": 23999.999999999993,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/background_foreground_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_reconnect_local",
+          "event": "reconnect",
+          "audience": "guest",
+          "occurrences": 2999.999999999999,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/reconnect_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_answer_local",
+          "event": "answer",
+          "audience": "guest",
+          "occurrences": 239999.99999999994,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/guest_local_answer_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_completion_local",
+          "event": "completion",
+          "audience": "guest",
+          "occurrences": 11999.999999999996,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/guest_local_completion_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_package_download",
+          "event": "packageDownload",
+          "audience": "account",
+          "occurrences": 36000,
+          "requests": 37800,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 41.015166999997746,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_content_package_download#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "history_10000_session",
+          "event": "session",
+          "audience": "account",
+          "occurrences": 108000,
+          "requests": 11340000,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 102.59050832999993,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_history_10000#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "history_10000_completion",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 108000,
+          "requests": 11340000,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 102.59050832999993,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_history_10000#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_completion_sync_22records",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 108000,
+          "requests": 113400,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_changed_sync_retry_success#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5 + .agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_retry_account_data_sync_current#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5; source shape from patternly-backend/src/modules/progress/store.ts FirestoreProgressStore.applyBatch",
+          "indexEntryReads": "NOT_MEASURED"
+        }
+      ],
+      "volumes": {
+        "requests": 23596650,
+        "firestoreReadsObserved": 2482798500,
+        "firestoreReadsBillableEstimate": 2482798500,
+        "firestoreWrites": 5216400,
+        "firestoreDeletes": 0,
+        "responseBytes": 2641492198800,
+        "requestBytesInboundExcludedFromEgress": 383178600,
+        "gcsDownloads": 37800,
+        "gcsDownloadBytes": 2703569400,
+        "localHttpServiceTimeMsSumDiagnostic": 2339861300.3933983,
+        "localHttpServiceTimeMsMaxDiagnostic": 168.8079170000001
+      },
+      "cloudRun": {
+        "min0": {
+          "billing": "request-based",
+          "minInstances": 0,
+          "manualCount0": "disabled; excluded from available-service comparison",
+          "concurrency": 80,
+          "requestServiceTimeMeanMsAssumption": 100,
+          "activeWindowHoursPerDay": 4,
+          "requestsPerSecond": 54.621875,
+          "offeredMeanConcurrency": 5.462187500000001,
+          "estimatedActiveInstances": 1,
+          "occupancyApproximation": "Poisson independent arrivals; 1-exp(-mean offered concurrency per instance)",
+          "occupancyFraction": 0.9957557387388288,
+          "activeRequestWindowInstanceSeconds": 430166.4791351741,
+          "minInstanceActiveBilledSeconds": 438806.4791351741,
+          "minInstanceIdleBilledSeconds": 0,
+          "activeBilledSeconds": 439238.5,
+          "activeBillingRoundingRangeSeconds": {
+            "lower": 438806.5,
+            "upperPriced": 439238.5,
+            "perRequestRoundingSlackSeconds": 0,
+            "startupShutdownRoundingSlackSeconds": 432,
+            "incrementSeconds": 0.1,
+            "note": "Priced upper bound adds at most one 100ms rounding interval per request and one each for startup/shutdown per assumed start. This does not model provider interval unions or overlapping requests; Poisson active-window occupancy remains an approximation, not exact invoice billing."
+          },
+          "startupShutdownAssumptions": {
+            "startsPerDay": 72,
+            "startupMsEach": 3000,
+            "shutdownMsEach": 1000,
+            "startupShutdownBilledSeconds": 8640
+          },
+          "cpuBoostAssumption": {
+            "extraDurationMsPerStart": 13000,
+            "multiplier": 2,
+            "extraVcpuSeconds": 28080,
+            "costedAtActiveCpuRate": true
+          },
+          "cpuVcpuSeconds": 467318.5,
+          "memoryGiBSeconds": 219619.25,
+          "requests": 23596650,
+          "costUsd": {
+            "cpuActive": 15.7019016,
+            "memoryActive": 0.768667375,
+            "cpuIdle": 0,
+            "memoryIdle": 0,
+            "requests": 9.43866,
+            "total": 25.909228974999998
+          }
+        },
+        "min1": {
+          "billing": "request-based",
+          "minInstances": 1,
+          "manualCount0": "disabled; excluded from available-service comparison",
+          "concurrency": 80,
+          "requestServiceTimeMeanMsAssumption": 100,
+          "activeWindowHoursPerDay": 4,
+          "requestsPerSecond": 54.621875,
+          "offeredMeanConcurrency": 5.462187500000001,
+          "estimatedActiveInstances": 1,
+          "occupancyApproximation": "Poisson independent arrivals; 1-exp(-mean offered concurrency per instance)",
+          "occupancyFraction": 0.9957557387388288,
+          "activeRequestWindowInstanceSeconds": 430166.4791351741,
+          "minInstanceActiveBilledSeconds": 430286.4791351741,
+          "minInstanceIdleBilledSeconds": 2161713.6,
+          "activeBilledSeconds": 430292.5,
+          "activeBillingRoundingRangeSeconds": {
+            "lower": 430286.5,
+            "upperPriced": 430292.5,
+            "perRequestRoundingSlackSeconds": 0,
+            "startupShutdownRoundingSlackSeconds": 6,
+            "incrementSeconds": 0.1,
+            "note": "Priced upper bound adds at most one 100ms rounding interval per request and one each for startup/shutdown per assumed start. This does not model provider interval unions or overlapping requests; Poisson active-window occupancy remains an approximation, not exact invoice billing."
+          },
+          "startupShutdownAssumptions": {
+            "startsPerDay": 1,
+            "startupMsEach": 3000,
+            "shutdownMsEach": 1000,
+            "startupShutdownBilledSeconds": 120
+          },
+          "cpuBoostAssumption": {
+            "extraDurationMsPerStart": 13000,
+            "multiplier": 2,
+            "extraVcpuSeconds": 390,
+            "costedAtActiveCpuRate": true
+          },
+          "cpuVcpuSeconds": 430682.5,
+          "memoryGiBSeconds": 215146.25,
+          "requests": 23596650,
+          "costUsd": {
+            "cpuActive": 14.470932,
+            "memoryActive": 0.753011875,
+            "cpuIdle": 7.5659976,
+            "memoryIdle": 3.7829988,
+            "requests": 9.43866,
+            "total": 36.011600275
+          }
+        }
+      },
+      "sensitivity": {
+        "cloudRunServiceTimeMultipliers": [
+          {
+            "multiplier": 0.5,
+            "serviceTimeMs": 50,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 1592760.6,
+              "costUsd": 66.68623521
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2188024,
+              "costUsd": 76.92673611
+            }
+          },
+          {
+            "multiplier": 5,
+            "serviceTimeMs": 500,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 441072,
+              "costUsd": 25.974043199999997
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2159880.1,
+              "costUsd": 36.066788625
+            }
+          },
+          {
+            "multiplier": 10,
+            "serviceTimeMs": 1000,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 441072,
+              "costUsd": 25.974043199999997
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2159880,
+              "costUsd": 36.0667881
+            }
+          }
+        ],
+        "activeWindowHoursPerDay": [
+          {
+            "activeWindowHoursPerDay": 2,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 225068.2,
+              "costUsd": 18.33830887
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2375883.9,
+              "costUsd": 29.565074244999998
+            }
+          },
+          {
+            "activeWindowHoursPerDay": 4,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 439238.5,
+              "costUsd": 25.909228974999998
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2161713.6,
+              "costUsd": 36.011600275
+            }
+          },
+          {
+            "activeWindowHoursPerDay": 8,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 816784.2000000001,
+              "costUsd": 39.25546947
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 1784167.9000000001,
+              "costUsd": 47.375725845
+            }
+          }
+        ],
+        "note": "Sensitivity recalculates mean request occupancy, active-instance approximation, and designated min=1 idle. Active-window width is the reuse/burst assumption; no provider traces are inferred."
+      },
+      "firestore": {
+        "observedSdkDocumentSnapshots": 2482798500,
+        "estimatedBillableDocumentReads": 2482798500,
+        "estimatedCandidateMissingPointReads": 48062700,
+        "emptyQueries": 0,
+        "queryCount": 23020200,
+        "indexEntryReads": "NOT_MEASURED",
+        "readsUnknown": false,
+        "writes": 5216400,
+        "deletes": 0,
+        "storage": {
+          "matureStartingGiB": 47.567300498485565,
+          "acquiredCohortAverageGiB": 1.255776733160019,
+          "retentionDaysAssumption": 30,
+          "matureStorageCost": 9.148550407961011,
+          "acquiredStorageCost": 0.24152173077017072,
+          "storageCost": 9.390072138731181
+        },
+        "costUsd": {
+          "reads": 968.291415,
+          "writes": 6.103188,
+          "deletes": 0,
+          "storage": 9.390072138731181,
+          "total": 983.7846751387312
+        }
+      },
+      "network": {
+        "packageDelivery": "directGcs",
+        "cloudRunAppResponseGiB": 2460.0813154131174,
+        "packageObjectGiB": 2.5178952142596245,
+        "directGcsPackageEgressGiB": 2.5178952142596245,
+        "responseBytesContainsAppDescriptorOrJsonOnly": true,
+        "inboundRequestBytesExcluded": true,
+        "pricingMethod": "current signed-URL flow: app descriptor/JSON egress and direct GCS payload egress are separate SKUs; GCS GET operation remains separate",
+        "costUsd": {
+          "cloudRunEgress": 280.8489446954429,
+          "packageEgress": 0.30214742571115494
+        }
+      },
+      "cloudStorage": {
+        "retainedPackageGiB": 0.1,
+        "classAOperations": 0,
+        "classBOperations": 37800,
+        "costUsd": {
+          "storage": 0.001972584,
+          "operations": 0.01512,
+          "egress": 0.30214742571115494,
+          "total": 0.31924000971115496
+        }
+      },
+      "identityPlatform": {
+        "monthlyActiveUsers": 4500,
+        "costUsd": 0
+      },
+      "artifactRegistry": {
+        "storedGiB": 0.4,
+        "costUsd": 0.039451968
+      },
+      "secretManager": {
+        "activeVersions": 3,
+        "accesses": 3000,
+        "costUsd": 0.18653472000000001
+      },
+      "pitr": {
+        "retainedGiBAssumption": 48.823077231645584,
+        "quantityBasis": "explicit profile input; configured state is not refreshed by this model",
+        "matureStartingGiB": 47.567300498485565,
+        "acquiredCohortAverageGiB": 1.255776733160019,
+        "costUsd": 9.390072138731183,
+        "costUsdBreakdown": {
+          "matureFixed": 9.148550407961011,
+          "acquiredCohort": 0.24152173077017072
+        }
+      },
+      "storageRetentionSensitivity": [
+        {
+          "retentionDays": 30,
+          "hypotheticalOnly": false,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 0,
+          "averageRecordsPerAccount": 10264,
+          "databaseGiB": 48.823077231645584,
+          "firestoreStorageCostUsd": 9.390072138731183,
+          "pitrCostUsd": 9.390072138731183,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        },
+        {
+          "retentionDays": 90,
+          "hypotheticalOnly": true,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 2,
+          "averageRecordsPerAccount": 11320,
+          "databaseGiB": 53.84618416428566,
+          "firestoreStorageCostUsd": 10.356159061811866,
+          "pitrCostUsd": 10.356159061811866,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        },
+        {
+          "retentionDays": 365,
+          "hypotheticalOnly": true,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 11.166666666666666,
+          "averageRecordsPerAccount": 16160,
+          "databaseGiB": 76.86875760555267,
+          "firestoreStorageCostUsd": 14.784057459264995,
+          "pitrCostUsd": 14.784057459264995,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        }
+      ],
+      "fixedAndMarginal": {
+        "fixedAssumptionsUsd": {
+          "min1Idle": 11.3489964,
+          "matureFirestoreStorage": 9.148550407961011,
+          "retainedPackageStorage": 0.001972584,
+          "identityPlatform": 0,
+          "artifactRegistry": 0.039451968,
+          "secretManager": 0.18653472000000001,
+          "maturePitrStorage": 9.148550407961011
+        },
+        "usageComponentAtScenarioUsd": {
+          "min0": 1281.9530875576945,
+          "min1": 1280.7064624576947
+        },
+        "note": "Usage component is an attribution at the scenario point; only marginalCostPer1000SessionsUsd below is a finite difference. Fixed daily startup/shutdown assumptions are held constant in that finite difference."
+      },
+      "totalCostUsd": {
+        "min0": 1291.3295972376554,
+        "min1": 1301.4319685376556
+      },
+      "monthlyCostPer1000SessionsUsd": {
+        "min0": 10.761079976980461,
+        "min1": 10.845266404480464
+      },
+      "averageVariableCostPer1000SessionsUsd": {
+        "min0": 10.68294239631412,
+        "min1": 10.672553853814122
+      },
+      "scope": "MODELED: explicit scenario inputs and official list prices; not invoice or provider measurement",
+      "marginalCostPer1000SessionsUsd": {
+        "addedSessions": 1000,
+        "method": "finite difference: totalCost(profile plus 1,000 monthly sessions) - totalCost(profile); DAU, account mix, MAU, mature history, package quota, registry, secrets and daily starts held fixed; session-derived traffic/completions/history growth scale with sessions; reconnects/day stays fixed.",
+        "min0": 10.458037734180607,
+        "min1": 10.457610384180498,
+        "comparisonScenario": "dau-1000-peak+1000 monthly sessions"
+      }
+    },
+    {
+      "scenario": "dau-10000-peak",
+      "kind": "peak",
+      "durationDays": 30,
+      "dau": 10000,
+      "accountShare": 0.9,
+      "sessionsPerDauDay": 4,
+      "sessionDurationMinutes": 20,
+      "averageConcurrentUsers24h": 555.5555555555555,
+      "concurrentUsersInActiveWindow": 3333.3333333333335,
+      "foregroundReturnsPerSession": 2,
+      "answersPerSession": 20,
+      "packageDownloadsPerAccountMonth": 8,
+      "completionsPerDauDay": 4,
+      "premiumRefreshesPerSession": 0.5,
+      "monthlyActiveAccountsAssumption": 45000,
+      "historyAccountsStoredAssumption": 45000,
+      "historyRetentionDaysAssumption": 30,
+      "pitrGiBAssumption": 488.23077231645584,
+      "retryAttemptsPerRequestAssumption": 0.05,
+      "monthlySessions": 1200000,
+      "dailyTriggerRates": {
+        "session": 4,
+        "foreground": 8,
+        "answer": 80,
+        "completion": 4,
+        "premiumRefresh": 2,
+        "packageDownload": 0.26666666666666666,
+        "reconnect": 1,
+        "historyPage": 0
+      },
+      "packageQuotaBasis": "monthlyActiveAccounts × packageDownloadsPerAccountMonth; package delivery observations are account-only",
+      "flowCoverage": {
+        "selectedFlowIds": [
+          "account_session_base",
+          "history_10000_session",
+          "account_completion_sync_22records",
+          "history_10000_completion",
+          "account_foreground",
+          "account_reconnect",
+          "account_extra_entitlement_refresh",
+          "account_answer_local",
+          "account_completion_local",
+          "guest_session_local",
+          "guest_foreground_local",
+          "guest_reconnect_local",
+          "guest_answer_local",
+          "guest_completion_local",
+          "account_package_download"
+        ],
+        "includedFlowIds": [
+          "account_session_base",
+          "account_foreground",
+          "account_reconnect",
+          "account_extra_entitlement_refresh",
+          "account_answer_local",
+          "account_completion_local",
+          "guest_session_local",
+          "guest_foreground_local",
+          "guest_reconnect_local",
+          "guest_answer_local",
+          "guest_completion_local",
+          "account_package_download",
+          "history_10000_session",
+          "history_10000_completion",
+          "account_completion_sync_22records"
+        ],
+        "excludedFlowIds": [
+          "account_completion_sync_base",
+          "history_0_session",
+          "history_0_completion",
+          "history_100_session",
+          "history_100_completion",
+          "history_1000_session",
+          "history_1000_completion",
+          "account_completion_sync_12records"
+        ],
+        "missingBillableReadEstimate": false,
+        "measurementsArePerEventOccurrenceAfterSampleNormalization": true
+      },
+      "flowRequests": [
+        {
+          "id": "account_session_base",
+          "event": "session",
+          "audience": "account",
+          "occurrences": 1080000,
+          "requests": 2268000,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/cold_start_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5 + .agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_retry_account_data_sync_current#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_foreground",
+          "event": "foreground",
+          "audience": "account",
+          "occurrences": 2160000,
+          "requests": 4536000,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 21.42699999999968,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/background_foreground_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_reconnect",
+          "event": "reconnect",
+          "audience": "account",
+          "occurrences": 270000,
+          "requests": 283500,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 25.088999999999942,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/reconnect_account#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_extra_entitlement_refresh",
+          "event": "premiumRefresh",
+          "audience": "account",
+          "occurrences": 540000,
+          "requests": 567000,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 19.887792000001355,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_entitlements_refresh#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_answer_local",
+          "event": "answer",
+          "audience": "account",
+          "occurrences": 21600000,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_local_answer_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_completion_local",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 1080000,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_local_completion_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_session_local",
+          "event": "session",
+          "audience": "guest",
+          "occurrences": 119999.99999999997,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/cold_start_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_foreground_local",
+          "event": "foreground",
+          "audience": "guest",
+          "occurrences": 239999.99999999994,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/background_foreground_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_reconnect_local",
+          "event": "reconnect",
+          "audience": "guest",
+          "occurrences": 29999.999999999993,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/reconnect_guest#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_answer_local",
+          "event": "answer",
+          "audience": "guest",
+          "occurrences": 2399999.9999999995,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/guest_local_answer_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "guest_completion_local",
+          "event": "completion",
+          "audience": "guest",
+          "occurrences": 119999.99999999997,
+          "requests": 0,
+          "cloudRunServiceTimeMsAssumption": 0,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/guest_local_completion_commit#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_package_download",
+          "event": "packageDownload",
+          "audience": "account",
+          "occurrences": 360000,
+          "requests": 378000,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 41.015166999997746,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_content_package_download#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "history_10000_session",
+          "event": "session",
+          "audience": "account",
+          "occurrences": 1080000,
+          "requests": 113400000,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 102.59050832999993,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_history_10000#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "history_10000_completion",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 1080000,
+          "requests": 113400000,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 102.59050832999993,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_history_10000#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5",
+          "indexEntryReads": "NOT_MEASURED"
+        },
+        {
+          "id": "account_completion_sync_22records",
+          "event": "completion",
+          "audience": "account",
+          "occurrences": 1080000,
+          "requests": 1134000,
+          "cloudRunServiceTimeMsAssumption": 100,
+          "localHttpServiceTimeMsDiagnostic": 0,
+          "evidenceRef": ".agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_changed_sync_retry_success#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5 + .agent/private/cost02-20261020/completion/client-matrix.json#/flowObservations/account_retry_account_data_sync_current#matrixSha256=b1b4abf1b6e2f8528418c1e3dfb1c618764776201c315181462a3dc2f11019e5; source shape from patternly-backend/src/modules/progress/store.ts FirestoreProgressStore.applyBatch",
+          "indexEntryReads": "NOT_MEASURED"
+        }
+      ],
+      "volumes": {
+        "requests": 235966500,
+        "firestoreReadsObserved": 24827985000,
+        "firestoreReadsBillableEstimate": 24827985000,
+        "firestoreWrites": 52164000,
+        "firestoreDeletes": 0,
+        "responseBytes": 26414921988000,
+        "requestBytesInboundExcludedFromEgress": 3831786000,
+        "gcsDownloads": 378000,
+        "gcsDownloadBytes": 27035694000,
+        "localHttpServiceTimeMsSumDiagnostic": 23398613003.933983,
+        "localHttpServiceTimeMsMaxDiagnostic": 168.8079170000001
+      },
+      "cloudRun": {
+        "min0": {
+          "billing": "request-based",
+          "minInstances": 0,
+          "manualCount0": "disabled; excluded from available-service comparison",
+          "concurrency": 80,
+          "requestServiceTimeMeanMsAssumption": 100,
+          "activeWindowHoursPerDay": 4,
+          "requestsPerSecond": 546.21875,
+          "offeredMeanConcurrency": 54.621875,
+          "estimatedActiveInstances": 1,
+          "occupancyApproximation": "Poisson independent arrivals; 1-exp(-mean offered concurrency per instance)",
+          "occupancyFraction": 1,
+          "activeRequestWindowInstanceSeconds": 432000,
+          "minInstanceActiveBilledSeconds": 440640,
+          "minInstanceIdleBilledSeconds": 0,
+          "activeBilledSeconds": 441072,
+          "activeBillingRoundingRangeSeconds": {
+            "lower": 440640,
+            "upperPriced": 441072,
+            "perRequestRoundingSlackSeconds": 0,
+            "startupShutdownRoundingSlackSeconds": 432,
+            "incrementSeconds": 0.1,
+            "note": "Priced upper bound adds at most one 100ms rounding interval per request and one each for startup/shutdown per assumed start. This does not model provider interval unions or overlapping requests; Poisson active-window occupancy remains an approximation, not exact invoice billing."
+          },
+          "startupShutdownAssumptions": {
+            "startsPerDay": 72,
+            "startupMsEach": 3000,
+            "shutdownMsEach": 1000,
+            "startupShutdownBilledSeconds": 8640
+          },
+          "cpuBoostAssumption": {
+            "extraDurationMsPerStart": 13000,
+            "multiplier": 2,
+            "extraVcpuSeconds": 28080,
+            "costedAtActiveCpuRate": true
+          },
+          "cpuVcpuSeconds": 469152,
+          "memoryGiBSeconds": 220536,
+          "requests": 235966500,
+          "costUsd": {
+            "cpuActive": 15.7635072,
+            "memoryActive": 0.771876,
+            "cpuIdle": 0,
+            "memoryIdle": 0,
+            "requests": 94.3866,
+            "total": 110.9219832
+          }
+        },
+        "min1": {
+          "billing": "request-based",
+          "minInstances": 1,
+          "manualCount0": "disabled; excluded from available-service comparison",
+          "concurrency": 80,
+          "requestServiceTimeMeanMsAssumption": 100,
+          "activeWindowHoursPerDay": 4,
+          "requestsPerSecond": 546.21875,
+          "offeredMeanConcurrency": 54.621875,
+          "estimatedActiveInstances": 1,
+          "occupancyApproximation": "Poisson independent arrivals; 1-exp(-mean offered concurrency per instance)",
+          "occupancyFraction": 1,
+          "activeRequestWindowInstanceSeconds": 432000,
+          "minInstanceActiveBilledSeconds": 432120,
+          "minInstanceIdleBilledSeconds": 2159880,
+          "activeBilledSeconds": 432126,
+          "activeBillingRoundingRangeSeconds": {
+            "lower": 432120,
+            "upperPriced": 432126,
+            "perRequestRoundingSlackSeconds": 0,
+            "startupShutdownRoundingSlackSeconds": 6,
+            "incrementSeconds": 0.1,
+            "note": "Priced upper bound adds at most one 100ms rounding interval per request and one each for startup/shutdown per assumed start. This does not model provider interval unions or overlapping requests; Poisson active-window occupancy remains an approximation, not exact invoice billing."
+          },
+          "startupShutdownAssumptions": {
+            "startsPerDay": 1,
+            "startupMsEach": 3000,
+            "shutdownMsEach": 1000,
+            "startupShutdownBilledSeconds": 120
+          },
+          "cpuBoostAssumption": {
+            "extraDurationMsPerStart": 13000,
+            "multiplier": 2,
+            "extraVcpuSeconds": 390,
+            "costedAtActiveCpuRate": true
+          },
+          "cpuVcpuSeconds": 432516,
+          "memoryGiBSeconds": 216063,
+          "requests": 235966500,
+          "costUsd": {
+            "cpuActive": 14.5325376,
+            "memoryActive": 0.7562205,
+            "cpuIdle": 7.5595799999999995,
+            "memoryIdle": 3.7797899999999998,
+            "requests": 94.3866,
+            "total": 121.0147281
+          }
+        }
+      },
+      "sensitivity": {
+        "cloudRunServiceTimeMultipliers": [
+          {
+            "multiplier": 0.5,
+            "serviceTimeMs": 50,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 12239397,
+              "costUsd": 527.9927719499999
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2159880.1,
+              "costUsd": 538.085517375
+            }
+          },
+          {
+            "multiplier": 5,
+            "serviceTimeMs": 500,
+            "min0": {
+              "estimatedActiveInstances": 4,
+              "activeBilledSeconds": 1737072,
+              "costUsd": 156.7355832
+            },
+            "min1": {
+              "estimatedActiveInstances": 4,
+              "minInstanceIdleBilledSeconds": 2159880,
+              "costUsd": 166.8283281
+            }
+          },
+          {
+            "multiplier": 10,
+            "serviceTimeMs": 1000,
+            "min0": {
+              "estimatedActiveInstances": 7,
+              "activeBilledSeconds": 3033072,
+              "costUsd": 202.54918320000002
+            },
+            "min1": {
+              "estimatedActiveInstances": 7,
+              "minInstanceIdleBilledSeconds": 2159880,
+              "costUsd": 212.64192809999997
+            }
+          }
+        ],
+        "activeWindowHoursPerDay": [
+          {
+            "activeWindowHoursPerDay": 2,
+            "min0": {
+              "estimatedActiveInstances": 2,
+              "activeBilledSeconds": 441072,
+              "costUsd": 110.9219832
+            },
+            "min1": {
+              "estimatedActiveInstances": 2,
+              "minInstanceIdleBilledSeconds": 2375880,
+              "costUsd": 122.1487281
+            }
+          },
+          {
+            "activeWindowHoursPerDay": 4,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 441072,
+              "costUsd": 110.9219832
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 2159880,
+              "costUsd": 121.0147281
+            }
+          },
+          {
+            "activeWindowHoursPerDay": 8,
+            "min0": {
+              "estimatedActiveInstances": 1,
+              "activeBilledSeconds": 873072,
+              "costUsd": 126.19318319999999
+            },
+            "min1": {
+              "estimatedActiveInstances": 1,
+              "minInstanceIdleBilledSeconds": 1727880.1,
+              "costUsd": 134.017928625
+            }
+          }
+        ],
+        "note": "Sensitivity recalculates mean request occupancy, active-instance approximation, and designated min=1 idle. Active-window width is the reuse/burst assumption; no provider traces are inferred."
+      },
+      "firestore": {
+        "observedSdkDocumentSnapshots": 24827985000,
+        "estimatedBillableDocumentReads": 24827985000,
+        "estimatedCandidateMissingPointReads": 480627000,
+        "emptyQueries": 0,
+        "queryCount": 230202000,
+        "indexEntryReads": "NOT_MEASURED",
+        "readsUnknown": false,
+        "writes": 52164000,
+        "deletes": 0,
+        "storage": {
+          "matureStartingGiB": 475.67300498485565,
+          "acquiredCohortAverageGiB": 12.55776733160019,
+          "retentionDaysAssumption": 30,
+          "matureStorageCost": 91.48550407961012,
+          "acquiredStorageCost": 2.415217307701707,
+          "storageCost": 93.90072138731183
+        },
+        "costUsd": {
+          "reads": 9682.91415,
+          "writes": 61.03188,
+          "deletes": 0,
+          "storage": 93.90072138731183,
+          "total": 9837.846751387313
+        }
+      },
+      "network": {
+        "packageDelivery": "directGcs",
+        "cloudRunAppResponseGiB": 24600.813154131174,
+        "packageObjectGiB": 25.178952142596245,
+        "directGcsPackageEgressGiB": 25.178952142596245,
+        "responseBytesContainsAppDescriptorOrJsonOnly": true,
+        "inboundRequestBytesExcluded": true,
+        "pricingMethod": "current signed-URL flow: app descriptor/JSON egress and direct GCS payload egress are separate SKUs; GCS GET operation remains separate",
+        "costUsd": {
+          "cloudRunEgress": 2357.3091181011496,
+          "packageEgress": 3.0214742571115494
+        }
+      },
+      "cloudStorage": {
+        "retainedPackageGiB": 0.1,
+        "classAOperations": 0,
+        "classBOperations": 378000,
+        "costUsd": {
+          "storage": 0.001972584,
+          "operations": 0.1512,
+          "egress": 3.0214742571115494,
+          "total": 3.1746468411115494
+        }
+      },
+      "identityPlatform": {
+        "monthlyActiveUsers": 45000,
+        "costUsd": 0
+      },
+      "artifactRegistry": {
+        "storedGiB": 0.4,
+        "costUsd": 0.039451968
+      },
+      "secretManager": {
+        "activeVersions": 3,
+        "accesses": 3000,
+        "costUsd": 0.18653472000000001
+      },
+      "pitr": {
+        "retainedGiBAssumption": 488.23077231645584,
+        "quantityBasis": "explicit profile input; configured state is not refreshed by this model",
+        "matureStartingGiB": 475.67300498485565,
+        "acquiredCohortAverageGiB": 12.55776733160019,
+        "costUsd": 93.90072138731182,
+        "costUsdBreakdown": {
+          "matureFixed": 91.48550407961012,
+          "acquiredCohort": 2.415217307701707
+        }
+      },
+      "storageRetentionSensitivity": [
+        {
+          "retentionDays": 30,
+          "hypotheticalOnly": false,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 0,
+          "averageRecordsPerAccount": 10264,
+          "databaseGiB": 488.23077231645584,
+          "firestoreStorageCostUsd": 93.90072138731182,
+          "pitrCostUsd": 93.90072138731182,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        },
+        {
+          "retentionDays": 90,
+          "hypotheticalOnly": true,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 2,
+          "averageRecordsPerAccount": 11320,
+          "databaseGiB": 538.4618416428566,
+          "firestoreStorageCostUsd": 103.56159061811866,
+          "pitrCostUsd": 103.56159061811866,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        },
+        {
+          "retentionDays": 365,
+          "hypotheticalOnly": true,
+          "expiryWithinModeled30Days": false,
+          "extraHistoricalMonths": 11.166666666666666,
+          "averageRecordsPerAccount": 16160,
+          "databaseGiB": 768.6875760555267,
+          "firestoreStorageCostUsd": 147.84057459264994,
+          "pitrCostUsd": 147.84057459264994,
+          "note": "Cost sensitivity only; no deletion/TTL/policy change is performed or recommended."
+        }
+      ],
+      "fixedAndMarginal": {
+        "fixedAssumptionsUsd": {
+          "min1Idle": 11.339369999999999,
+          "matureFirestoreStorage": 91.48550407961012,
+          "retainedPackageStorage": 0.001972584,
+          "identityPlatform": 0,
+          "artifactRegistry": 0.039451968,
+          "secretManager": 0.18653472000000001,
+          "maturePitrStorage": 91.48550407961012
+        },
+        "usageComponentAtScenarioUsd": {
+          "min0": 12220.180240173666,
+          "min1": 12218.933615073665
+        },
+        "note": "Usage component is an attribution at the scenario point; only marginalCostPer1000SessionsUsd below is a finite difference. Fixed daily startup/shutdown assumptions are held constant in that finite difference."
+      },
+      "totalCostUsd": {
+        "min0": 12311.893703525275,
+        "min1": 12321.986448425276
+      },
+      "monthlyCostPer1000SessionsUsd": {
+        "min0": 10.259911419604396,
+        "min1": 10.268322040354397
+      },
+      "averageVariableCostPer1000SessionsUsd": {
+        "min0": 10.183483533478055,
+        "min1": 10.182444679228055
+      },
+      "scope": "MODELED: explicit scenario inputs and official list prices; not invoice or provider measurement",
+      "marginalCostPer1000SessionsUsd": {
+        "addedSessions": 1000,
+        "method": "finite difference: totalCost(profile plus 1,000 monthly sessions) - totalCost(profile); DAU, account mix, MAU, mature history, package quota, registry, secrets and daily starts held fixed; session-derived traffic/completions/history growth scale with sessions; reconnects/day stays fixed.",
+        "min0": 9.942656248269486,
+        "min1": 9.942656248269486,
+        "comparisonScenario": "dau-10000-peak+1000 monthly sessions"
+      }
+    }
+  ],
+  "limitations": [
+    "Traffic, audience mix, CCU shape, session/event rates, retry rate, package downloads, history maturity and retention are scenario assumptions unless their evidenceRef points to measured observations.",
+    "Local HTTP service time is diagnostic only. Cloud Run service time requires a separately supplied cloudRunServiceTimeMsAssumption per measured app request flow; client-side Auth SDK RPC and local JS cold mount are not Cloud Run app request service time.",
+    "Cloud Run instance occupancy is a Poisson approximation with supplied active window and concurrency; actual autoscaling, queues, startup, shutdown, min instance routing, CPU and billing need provider-side measurements.",
+    "Startup/shutdown and CPU boost amounts and frequencies are explicit inputs, not measured defaults. Local emulator latency and CPU are not substituted for Cloud Run values.",
+    "Firestore SDK snapshots, candidate missing point reads, empty-query counts and billed-read estimates are separate. Index entry reads are NOT_MEASURED; query shape, rules and document returns can change billable reads.",
+    "Firestore daily operation quota defaults off because other same-project usage is unknown. Cloud Run, Registry and Secret Manager shared free tiers are also not applied; outputs are gross list-price estimates. No FX conversion, VAT, tax, negotiated discounts, billing export, authenticated inventory or provider measurement is included.",
+    "Retention storage distinguishes matured starting history from a uniformly acquired 30-day cohort; shorter expiry is rejected, and 90/365-day cases are storage-only sensitivities. Firestore PITR is priced from an explicit assumed GiB quantity, not a refreshed provider configuration; backup storage, Cloud Build, logs, monitoring, SMS, support and other unprovided SKUs are excluded. HistoryRecordBytes is payload only and omits physical Firestore metadata/index overhead."
+  ]
+}

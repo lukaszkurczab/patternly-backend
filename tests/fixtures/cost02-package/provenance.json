@@ -1,0 +1,18 @@
+{
+  "schema": "cost02-historical-package-fixture-v1",
+  "sourcePath": "patternly-content/dist/premium-nodes/aws-certified-solutions-architect-associate/identity_federation_and_root_access/current",
+  "sourceOutputFingerprint": "d7a7b46a19355f3f5e2b",
+  "contentReleaseId": "patternly-local-d7a7b46a19355f3f5e2b",
+  "contentVersion": "aws-certified-solutions-architect-associate-authoring-v2026.10.11-saa-fixes-v1-bizq03-planning-v2",
+  "trackId": "aws-certified-solutions-architect-associate",
+  "nodeId": "identity_federation_and_root_access",
+  "artifactSha256": "8be817fbc6a2c2f8f7a6e13bc5be32ee6eadb36c153872428312e9ad715eb8a3",
+  "artifactSizeBytes": 349520,
+  "packageSha256": "11c968dc14f01643f20528325d5346691bf327b4bd5b1b9a628bc53dbac05cf0",
+  "compressedSizeBytes": 71523,
+  "packagePath": "packages/aws-certified-solutions-architect-associate/identity_federation_and_root_access/11c968dc14f01643f20528325d5346691bf327b4bd5b1b9a628bc53dbac05cf0.gzip",
+  "approvalStatus": "NOT_APPROVED",
+  "currentAppCompatibility": "NOT_ESTABLISHED",
+  "deploymentStatus": "NOT_DEPLOYABLE_EVIDENCE",
+  "retentionReason": "Versioned representative gzip size for COST-02 package-download cost comparison; preserve historical bytes so a clean checkout can reproduce the same measurement without ignored dist output."
+}

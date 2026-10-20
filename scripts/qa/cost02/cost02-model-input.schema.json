@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cost02-model-input-v1",
+  "title": "COST-02 30-day scale and cost model input",
+  "type": "object",
+  "required": ["schema", "durationDays", "assumptions", "flowObservations", "profiles", "sharedUsage"],
+  "properties": {
+    "schema": { "const": "cost02-model-input-v1" },
+    "pricingFile": { "type": "string" },
+    "durationDays": { "type": "number", "exclusiveMinimum": 0, "maximum": 31 },
+    "assumptions": {
+      "type": "object",
+      "anyOf": [
+        { "required": ["generatedAtUtc", "sourceMatrixSha256", "sourceInputKind", "sourceInputSha256"] },
+        { "required": ["exampleOnly", "description"], "properties": { "exampleOnly": { "const": true } } }
+      ],
+      "properties": {
+        "generatedAtUtc": { "type": "string", "format": "date-time" },
+        "sourceMatrixSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "sourceInputKind": { "enum": ["matrix-json", "runner-log-single-matrix-line"] },
+        "sourceInputSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "flowObservations": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "event", "audience", "evidenceRef"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "event": { "enum": ["session", "foreground", "answer", "completion", "premiumRefresh", "packageDownload", "reconnect", "historyPage"] },
+          "audience": { "enum": ["account", "guest", "both"] },
+          "evidenceRef": { "type": "string", "minLength": 1 },
+          "cloudRunServiceTimeMsAssumption": { "type": "number", "exclusiveMinimum": 0 },
+          "basis": { "enum": ["perEventOccurrence", "sampleTotal"] },
+          "sampleCount": { "type": "number", "minimum": 1 },
+          "requests": { "type": "number", "minimum": 0 },
+          "firestoreReadsObserved": { "type": "number", "minimum": 0 },
+          "firestoreReadsBillableEstimate": { "type": ["number", "null"], "minimum": 0 },
+          "missingPointReads": { "type": "number", "minimum": 0 },
+          "queryCount": { "type": "number", "minimum": 0 },
+          "emptyQueryCount": { "type": "number", "minimum": 0 },
+          "indexEntryReads": { "type": ["number", "string"] },
+          "firestoreWrites": { "type": "number", "minimum": 0 },
+          "firestoreDeletes": { "type": "number", "minimum": 0 },
+          "responseBytes": { "type": "number", "minimum": 0, "description": "App response bytes (descriptor/JSON) only; signed-URL package payload belongs in gcsDownloadBytes." },
+          "requestBytes": { "type": "number", "minimum": 0 },
+          "gcsDownloads": { "type": "number", "minimum": 0 },
+          "gcsDownloadBytes": { "type": "number", "minimum": 0 },
+          "gcsClassAOperations": { "type": "number", "minimum": 0 },
+          "gcsClassBOperations": { "type": "number", "minimum": 0 },
+          "httpServiceTimeMsSum": { "type": "number", "minimum": 0 },
+          "httpServiceTimeMsMax": { "type": ["number", "null"], "minimum": 0 },
+          "metrics": {
+            "type": "object",
+            "properties": {
+              "requests": { "type": "number", "minimum": 0 },
+              "firestoreReadsObserved": { "type": "number", "minimum": 0 },
+              "firestoreReadsBillableEstimate": { "type": ["number", "null"], "minimum": 0 },
+              "missingPointReads": { "type": "number", "minimum": 0 },
+              "queryCount": { "type": "number", "minimum": 0 },
+              "emptyQueryCount": { "type": "number", "minimum": 0 },
+              "firestoreWrites": { "type": "number", "minimum": 0 },
+              "firestoreDeletes": { "type": "number", "minimum": 0 },
+              "requestBytes": { "type": "number", "minimum": 0 },
+              "responseBytes": { "type": "number", "minimum": 0 },
+              "gcsDownloads": { "type": "number", "minimum": 0 },
+              "gcsDownloadBytes": { "type": "number", "minimum": 0 },
+              "gcsClassAOperations": { "type": "number", "minimum": 0 },
+              "gcsClassBOperations": { "type": "number", "minimum": 0 },
+              "httpServiceTimeMsSum": { "type": "number", "minimum": 0 },
+              "httpServiceTimeMsMax": { "type": ["number", "null"], "minimum": 0 },
+              "indexEntryReads": { "type": ["number", "string"] }
+            },
+            "required": ["requests", "firestoreReadsObserved", "firestoreReadsBillableEstimate", "firestoreWrites", "firestoreDeletes", "responseBytes", "requestBytes", "gcsDownloads", "gcsDownloadBytes"]
+          }
+        },
+        "oneOf": [
+          { "required": ["basis"], "properties": { "basis": { "const": "perEventOccurrence" } } },
+          { "required": ["sampleCount", "basis"], "properties": { "basis": { "const": "sampleTotal" } } },
+          { "required": ["sampleCount"], "not": { "required": ["basis"] } }
+        ]
+      }
+    },
+    "profiles": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "kind", "flowIds", "dau", "accountShare", "sessionsPerDauDay", "sessionDurationMinutes", "foregroundReturnsPerSession", "answersPerSession", "completionsPerDauDay", "premiumRefreshesPerSession", "reconnectsPerDauDay", "historyPagesPerSession", "packageDelivery", "monthlyActiveAccounts", "retryAttemptsPerRequest", "packageDownloadsPerAccountMonth", "packageBytes", "retainedPackageGiB", "historyAccountsStored", "historyRecordsPerAccountAtStart", "historyRecordBytes", "historyRecordsAddedPerAccountMonth", "historyRetentionDays", "pitrGiB", "activeWindowHoursPerDay", "min0ColdStartsPerDay", "min1ColdStartsPerDay", "startupMs", "shutdownMs", "extraCpuBoostMsPerStart", "cpuBoostMultiplier", "concurrency", "cpuVcpu", "memoryGiB"],
+        "properties": {
+          "name": { "type": "string" }, "kind": { "enum": ["moderate", "peak"] }, "flowIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } }, "packageDelivery": { "enum": ["directGcs", "none"] },
+          "dau": { "type": "number", "minimum": 0 }, "accountShare": { "type": "number", "minimum": 0, "maximum": 1 },
+          "sessionsPerDauDay": { "type": "number", "minimum": 0 }, "sessionDurationMinutes": { "type": "number", "minimum": 0 },
+          "foregroundReturnsPerSession": { "type": "number", "minimum": 0 }, "answersPerSession": { "type": "number", "minimum": 0 },
+          "completionsPerDauDay": { "type": "number", "minimum": 0 }, "premiumRefreshesPerSession": { "type": "number", "minimum": 0 },
+          "reconnectsPerDauDay": { "type": "number", "minimum": 0 }, "historyPagesPerSession": { "type": "number", "minimum": 0, "description": "Only multiplies observations whose event is historyPage. A whole measured history sweep maps to event=session and is counted once per session." },
+          "monthlyActiveAccounts": { "type": "number", "minimum": 0 }, "retryAttemptsPerRequest": { "type": "number", "minimum": 0 },
+          "packageDownloadsPerAccountMonth": { "type": "number", "minimum": 0, "description": "Monthly package downloads per account member; audience comes from selected packageDownload observations." }, "packageBytes": { "type": "number", "minimum": 0 },
+          "retainedPackageGiB": { "type": "number", "minimum": 0 }, "historyAccountsStored": { "type": "number", "minimum": 0 }, "historyRecordsPerAccountAtStart": { "type": "number", "minimum": 0 },
+          "historyRecordBytes": { "type": "number", "minimum": 0 }, "historyRecordsAddedPerAccountMonth": { "type": "number", "minimum": 0 },
+          "historyRetentionDays": { "type": "number", "minimum": 30, "description": "Cost horizon only; expiration under 30 days is not assumed." }, "pitrGiB": { "type": "number", "minimum": 0, "description": "Explicit assumed PITR storage volume; not live provider configuration." }, "activeWindowHoursPerDay": { "type": "number", "minimum": 0 },
+          "min0ColdStartsPerDay": { "type": "number", "minimum": 0 }, "min1ColdStartsPerDay": { "type": "number", "minimum": 0 },
+          "startupMs": { "type": "number", "minimum": 0 }, "shutdownMs": { "type": "number", "minimum": 0 },
+          "extraCpuBoostMsPerStart": { "type": "number", "minimum": 0 }, "cpuBoostMultiplier": { "type": "number", "minimum": 1 },
+          "concurrency": { "type": "number", "minimum": 1 }, "cpuVcpu": { "type": "number", "minimum": 0.08 }, "memoryGiB": { "type": "number", "minimum": 0.5 }
+        }
+      }
+    },
+    "sharedUsage": {
+      "type": "object",
+      "required": ["applyFirestoreDailyFreeQuota", "firestoreReadsIncludedDaily", "firestoreWritesIncludedDaily", "firestoreDeletesIncludedDaily", "artifactRegistryStoredGiB", "secretManagerActiveVersions", "secretManagerAccesses"],
+      "properties": {
+        "applyFirestoreDailyFreeQuota": { "type": "boolean" },
+        "firestoreReadsIncludedDaily": { "type": "number", "minimum": 0 },
+        "firestoreWritesIncludedDaily": { "type": "number", "minimum": 0 },
+        "firestoreDeletesIncludedDaily": { "type": "number", "minimum": 0 },
+        "artifactRegistryStoredGiB": { "type": "number", "minimum": 0 },
+        "secretManagerActiveVersions": { "type": "number", "minimum": 0 },
+        "secretManagerAccesses": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}
