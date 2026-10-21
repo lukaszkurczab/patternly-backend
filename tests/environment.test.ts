@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { loadEnvironment } from "../src/config/environment.js";
-import { createFirestoreStores } from "../src/infrastructure/firestore/stores.js";
 import { SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID, SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID, SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID } from "../src/config/sandboxPromotionalAccess.js";
 
 const production = {
@@ -122,39 +121,16 @@ test("operator OIDC configuration is optional, all-or-none, pinned to safe HTTPS
   }
 });
 
-test("recovery cipher configuration remains independent from fixed terminal retention", () => {
-  const configured = loadEnvironment(production);
-  assert.equal(configured.recoveryOperationKeysJson, undefined);
-  assert.equal(Object.hasOwn(configured, "recoveryOperationTerminalRetentionMs"), false);
-  assert.equal(configured.recoveryOperationRateLimitMax, 30);
-  assert.equal(configured.recoveryOperationRateLimitWindowSeconds, 60);
-
-  const explicit = loadEnvironment({
+test("legacy Recovery Codes environment keys do not configure backend runtime", () => {
+  const configured = loadEnvironment({
     ...production,
-    RECOVERY_OPERATION_KEYS_JSON: JSON.stringify({ version: 1, keys: [{ version: "v1", status: "active", keyBase64: Buffer.alloc(32, 17).toString("base64") }] }),
-    RECOVERY_OPERATION_RATE_LIMIT_MAX: "120",
-    RECOVERY_OPERATION_RATE_LIMIT_WINDOW_SECONDS: "60",
+    RECOVERY_OPERATION_KEYS_JSON: "stale-legacy-value",
+    RECOVERY_OPERATION_RATE_LIMIT_MAX: "not-a-number",
+    RECOVERY_OPERATION_RATE_LIMIT_WINDOW_SECONDS: "not-a-number",
   });
-  assert.ok(explicit.recoveryOperationKeysJson);
-  assert.equal(Object.hasOwn(explicit, "recoveryOperationTerminalRetentionMs"), false);
-  assert.equal(explicit.recoveryOperationRateLimitMax, 120);
-
-  for (const [field, value] of [["RECOVERY_OPERATION_RATE_LIMIT_MAX", "601"], ["RECOVERY_OPERATION_RATE_LIMIT_WINDOW_SECONDS", "3601"]] as const) {
-    assert.throws(() => loadEnvironment({ ...production, [field]: value }));
+  for (const key of ["recoveryOperationKeysJson", "recoveryOperationRateLimitMax", "recoveryOperationRateLimitWindowSeconds"]) {
+    assert.equal(Object.hasOwn(configured, key), false);
   }
-});
-
-test("store wiring rejects recovery key reuse against the privacy encryption key, including retained keys", () => {
-  const privacyKey = Buffer.alloc(32, 17).toString("base64");
-  const environment = loadEnvironment({
-    ...production,
-    PRIVACY_RESPONSE_KEY_BASE64: privacyKey,
-    RECOVERY_OPERATION_KEYS_JSON: JSON.stringify({ version: 1, keys: [
-      { version: "v2", status: "active", keyBase64: Buffer.alloc(32, 18).toString("base64") },
-      { version: "v1", status: "decrypt_only", keyBase64: privacyKey },
-    ] }),
-  });
-  assert.throws(() => createFirestoreStores({ app: null, db: null } as never, environment, {} as never), { message: "recovery_operation_key_reuse_forbidden" });
 });
 
 

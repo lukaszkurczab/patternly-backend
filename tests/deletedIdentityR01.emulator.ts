@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import test from "node:test";
 import { getAuth } from "firebase-admin/auth";
 import { Timestamp } from "firebase-admin/firestore";
@@ -81,28 +81,17 @@ test("deleted Firebase UID is rejected while the same email can immediately regi
   });
   await context.db.collection("revenueCatTransactions").doc(`r01-${randomUUID()}`).set({ ownerAccountId: original.userId, status: "bound" });
 
-  const issueRecovery = await context.app.inject({
-    method: "POST",
-    url: "/v1/account/recovery-codes",
-    headers: { authorization: `Bearer ${original.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
-    payload: { operationId: randomUUID() },
-  });
-  assert.equal(issueRecovery.statusCode, 200);
-  const oldRecoveryCode = issueRecovery.json().codes?.[0];
-  assert.equal(typeof oldRecoveryCode, "string");
-  const oldRecoveryCodeHash = createHash("sha256").update(oldRecoveryCode, "utf8").digest("hex");
-  const recoveryIndexRef = context.db.collection(COLLECTIONS.recoveryCodeIndex).doc(oldRecoveryCodeHash);
-  const issueAcknowledgement = await context.app.inject({
-    method: "POST",
-    url: "/v1/account/recovery-codes/issue/saved-ack",
-    headers: { authorization: `Bearer ${original.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
-    payload: { operationId: issueRecovery.json().operationId },
-  });
-  assert.equal(issueAcknowledgement.statusCode, 200);
-  const recoveryIndexBeforeDeletion = (await recoveryIndexRef.get()).data();
-  assert.ok(recoveryIndexBeforeDeletion);
-  const recoverySetBeforeDeletion = (await originalUserRef.collection("security").doc("recoveryCodes").get()).data();
-  assert.ok(recoverySetBeforeDeletion);
+  // Legacy records are seeded directly; Recovery Codes has no active issue/consume API.
+  const legacyIndexRef = context.db.collection(COLLECTIONS.recoveryCodeIndex).doc("legacy-owned-code-index");
+  await legacyIndexRef.set({ userId: original.userId, generationId: "legacy-generation", usedAt: null });
+  const legacyOperationRef = context.db.collection(COLLECTIONS.accountRecoveryOperations).doc("legacy-owned-operation");
+  await legacyOperationRef.set({ operationId: "legacy-owned-operation", userId: original.userId, kind: "recovery", status: "result_available" });
+  const legacyResultRef = context.db.collection(COLLECTIONS.accountRecoveryOperationResults).doc("legacy-owned-operation");
+  await legacyResultRef.set({ operationId: "legacy-owned-operation", userId: original.userId, kind: "recovery", envelope: { ciphertext: "historical" } });
+  const recoverySetRef = originalUserRef.collection("security").doc("recoveryCodes");
+  await recoverySetRef.set({ hashes: ["legacy-hash"] });
+  const preDeleteRecoverySet = (await recoverySetRef.get()).data();
+  assert.ok(preDeleteRecoverySet);
   const preDeleteUser = (await originalUserRef.get()).data();
   assert.ok(preDeleteUser);
   const oldIdentityRef = context.db.collection(COLLECTIONS.identityMappings).doc(identityDocumentId("firebase", original.localId));
@@ -130,35 +119,36 @@ test("deleted Firebase UID is rejected while the same email can immediately regi
   });
   assert.equal(oldTokenRequest.statusCode, 401, "the backend verifier rejects the same old token");
 
-  const recoveryReplay = await context.app.inject({
-    method: "POST",
-    url: "/v1/public/recovery-codes/consume",
-    headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
-    payload: { operationId: randomUUID(), code: oldRecoveryCode },
-  });
-  assert.equal(recoveryReplay.statusCode, 200);
-  assert.equal(recoveryReplay.json().status, "expired_or_invalid", "a deleted account's old recovery code cannot mint a replacement session");
   assert.equal((await context.db.collection(COLLECTIONS.users).doc(original.userId).get()).exists, false);
+  assert.equal((await legacyIndexRef.get()).exists, false, "account erasure removes legacy code indexes by owner");
+  assert.equal((await legacyOperationRef.get()).exists, false, "account erasure removes legacy operation records by owner");
+  assert.equal((await legacyResultRef.get()).exists, false, "account erasure removes legacy operation results by owner");
+  assert.equal((await recoverySetRef.get()).exists, false, "account erasure removes the legacy per-user code set");
 
-  // A recovery snapshot fixture is restored while the current deletion marker is preserved.
-  // This tests the backend's tombstone guard; it is not a Firestore PITR/restore drill.
+  // Simulate restoring the old user-tree snapshot while retaining the deletion marker.
+  // This is a local fixture, not a Firestore PITR/restore drill; route absence is covered separately.
   await originalUserRef.set(preDeleteUser);
-  await originalUserRef.collection("security").doc("recoveryCodes").set(recoverySetBeforeDeletion);
+  await recoverySetRef.set(preDeleteRecoverySet);
   await oldIdentityRef.set(preDeleteIdentity);
-  await recoveryIndexRef.set(recoveryIndexBeforeDeletion);
-  const customTokensBeforeRestoredRecovery = context.customTokenSubjects.length;
-  const restoredRecoveryReplay = await context.app.inject({
-    method: "POST",
-    url: "/v1/public/recovery-codes/consume",
-    headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
-    payload: { operationId: randomUUID(), code: oldRecoveryCode },
+  await legacyIndexRef.set({ userId: original.userId, generationId: "legacy-generation", usedAt: null });
+  await legacyOperationRef.set({ operationId: "legacy-owned-operation", userId: original.userId, kind: "recovery", status: "result_available" });
+  await legacyResultRef.set({ operationId: "legacy-owned-operation", userId: original.userId, kind: "recovery", envelope: { ciphertext: "historical" } });
+  const oldTokenAfterRestore = await context.app.inject({
+    method: "GET", url: "/v1/me",
+    headers: { authorization: `Bearer ${original.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
   });
-  assert.equal(restoredRecoveryReplay.statusCode, 200);
-  assert.equal(restoredRecoveryReplay.json().status, "expired_or_invalid", "an active tombstone blocks a restored old recovery snapshot");
-  assert.equal(context.customTokenSubjects.length, customTokensBeforeRestoredRecovery, "restored recovery does not mint a custom Firebase token");
+  assert.equal(oldTokenAfterRestore.statusCode, 401, "active deletion tombstone continues to reject a restored account snapshot");
+  const restoredLegacyEndpoint = await context.app.inject({
+    method: "POST", url: "/v1/public/recovery-codes/consume",
+    headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN },
+    payload: { operationId: randomUUID(), code: "ABCD-EFGH-JKLM-NPQR" },
+  });
+  assert.equal(restoredLegacyEndpoint.statusCode, 404, "restoring the old user tree and all legacy records cannot restore the removed consume capability");
   await context.db.recursiveDelete(originalUserRef);
   await oldIdentityRef.delete();
-  await recoveryIndexRef.delete();
+  await legacyIndexRef.delete();
+  await legacyOperationRef.delete();
+  await legacyResultRef.delete();
 
   const replacementAuth = await createAuthUser(email);
   createdUids.add(replacementAuth.localId);

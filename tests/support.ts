@@ -36,8 +36,6 @@ export const testEnvironment: Environment = loadEnvironment({
   REPORT_RATE_LIMIT_MAX: "2",
   REPORT_RATE_LIMIT_WINDOW_SECONDS: "3600",
   PRIVACY_RESPONSE_KEY_BASE64: Buffer.alloc(32, 11).toString("base64"),
-  // Isolated recovery cipher fixture; operation retention is a fixed store policy.
-  RECOVERY_OPERATION_KEYS_JSON: JSON.stringify({ version: 1, keys: [{ version: "test-recovery-v1", status: "active", keyBase64: Buffer.alloc(32, 17).toString("base64") }] }),
   PRIVACY_AUDIT_HMAC_SECRET: "test-only-privacy-audit-hmac-secret-0123456789",
   REVENUECAT_WEBHOOK_SECRET: "Bearer test-revenuecat-secret",
   REVENUECAT_PROJECT_ID: "projtest",

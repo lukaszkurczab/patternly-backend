@@ -52,7 +52,7 @@ async function makeAccount(): Promise<Readonly<{ userId: string; firebaseUid: st
 }
 
 function makeStore(fixture: Awaited<ReturnType<typeof makeAccount>>, client: { readonly projectId: string; deleteCustomer(appUserId: string): Promise<{ status: "accepted" | "absent" }> } | null, projectId = REVENUECAT_PROJECT_ID) {
-  return new FirestoreAccountLifecycleStore(db, accountAuth, fixture.ring, null, { projectId, client });
+  return new FirestoreAccountLifecycleStore(db, accountAuth, fixture.ring, { projectId, client });
 }
 
 async function cleanup(): Promise<void> {

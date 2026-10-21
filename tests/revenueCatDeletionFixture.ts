@@ -10,6 +10,6 @@ export const absentRevenueCatCustomerFixture: RevenueCatDeletionRuntime = Object
 
 export class FixtureAccountLifecycleStore extends FirestoreAccountLifecycleStore {
   public constructor(...args: ConstructorParameters<typeof FirestoreAccountLifecycleStore>) {
-    super(args[0], args[1], args[2], args[3], args[4] ?? absentRevenueCatCustomerFixture);
+    super(args[0], args[1], args[2], args[3] ?? absentRevenueCatCustomerFixture);
   }
 }

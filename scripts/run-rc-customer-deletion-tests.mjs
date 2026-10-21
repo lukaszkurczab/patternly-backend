@@ -9,7 +9,7 @@ const exitCode = await runIsolatedEmulatorTests({
   backendRoot,
   projectId: PROJECT_ID,
   command: related
-    ? "node --import tsx --test --test-concurrency=1 tests/firestore.emulator.test.ts tests/revenuecatClient.test.ts tests/revenuecatSafetyRegression.test.ts tests/recoveryRouteGuards.test.ts"
+    ? "node --import tsx --test --test-concurrency=1 tests/firestore.emulator.test.ts tests/revenuecatClient.test.ts tests/revenuecatSafetyRegression.test.ts tests/removedRecoveryRoutes.test.ts"
     : "node --import tsx --test --test-concurrency=1 tests/rcCustomerDeletion.emulator.ts",
   environment: {
     RC_CUSTOMER_DELETION_EMULATOR_TESTS: "1",

@@ -7,19 +7,12 @@ import { asRecord, asTimestamp, now } from "../../infrastructure/firestore/value
 import type {
   AccountDeletionResult,
   CompletedDeletion,
-  RecoveryCodeIssueResult,
-  RecoveryConsumeResult,
-  RecoveryOperationAcknowledgement,
-  RecoveryOperationProgress,
-  RecoveryOperationRuntime,
 } from "./contracts.js";
 import type { PseudonymKeyRing } from "../../infrastructure/security/pseudonymKeyRing.js";
 import { ACCOUNT_DELETION_TOMBSTONE_RETENTION_MS, LEGACY_ACCOUNT_DELETION_TOMBSTONE_RETENTION_MS, assertFirestoreAccountErasureComplete, deletedIdentityLogicalExpiryMs, eraseFirestoreAccountData } from "./firestoreAccountErasure.js";
 import { assertExpectedAuthorizationGeneration, storedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
 import { RETENTION_POLICY } from "../retention/policy.js";
 import { addUtcCalendarMonths } from "../../infrastructure/time/utcCalendar.js";
-import { RecoveryOperationCipher } from "./recoveryOperationCipher.js";
-import type { RecoveryOperationCipherContext, RecoveryOperationCipherEnvelope } from "./recoveryOperationCipher.js";
 
 import type { RevenueCatCustomerDeletionClient } from "../../infrastructure/revenuecat/customerDeletion.js";
 
@@ -37,16 +30,11 @@ function revenueCatDeletionCheckpoint(data: Record<string, unknown>): RevenueCat
   return Object.freeze({ projectId: checkpoint.projectId, status: checkpoint.status as RevenueCatDeletionCheckpoint["status"] });
 }
 
-const RECOVERY_CODE_COUNT = 10;
 const SECURITY_OPERATION_LEASE_MS = 2 * 60 * 1000;
-const RECOVERY_RESULT_TTL_MS = 55 * 60 * 1000;
-const RECOVERY_OPERATION_TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-const RECOVERY_OPERATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const SESSION_REVOCATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const SESSION_REVOCATION_FIRST_USE_MS = 29 * 24 * 60 * 60 * 1000;
 const SESSION_REVOCATION_FUTURE_SKEW_MS = 5 * 60 * 1000;
 const SESSION_REVOCATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const RECOVERY_CODE_PATTERN = /^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){3}$/u;
 
 type SessionRevocationResult = Readonly<{ status: "revoked"; operationId: string; customToken: string }>;
 type DeletionProof = Readonly<{ status: "deleted"; operationId: string; proofId: string }>;
@@ -71,13 +59,6 @@ type StoredDeletionOperation = Readonly<{
 const DELETION_PHASES: readonly DeletionPhase[] = Object.freeze(["prepared", "sessions_revoking", "auth_deleting", "revenuecat_deleting", "firestore_deleting", "remote_deleted", "complete"]);
 
 export interface AccountLifecycleStore {
-  claimRecoveryRequestRateLimit(requesterHash: string, max: number, windowSeconds: number): Promise<void>;
-  issueRecoveryCodes(userId: string, expectedAuthorizationGeneration: number, operationId: string, reauthenticatedAtSeconds: number): Promise<RecoveryCodeIssueResult>;
-  readRecoveryCodeIssueStatus(operationId: string, userId: string, expectedAuthorizationGeneration: number): Promise<RecoveryCodeIssueResult | null>;
-  acknowledgeRecoveryCodeIssue(operationId: string, userId: string, expectedAuthorizationGeneration: number): Promise<RecoveryOperationAcknowledgement>;
-  consumeRecoveryCode(operationId: string, code: string): Promise<RecoveryConsumeResult>;
-  readRecoveryOperationStatus(operationId: string, code: string): Promise<RecoveryConsumeResult | RecoveryOperationProgress | null>;
-  acknowledgeRecovery(operationId: string, userId: string, expectedAuthorizationGeneration: number): Promise<RecoveryOperationAcknowledgement>;
   revokeSessions(userId: string, expectedAuthorizationGeneration: number, operationId: string): Promise<SessionRevocationResult>;
   deleteAccount(userId: string, expectedAuthorizationGeneration: number, operationId: string, operationSecret: string): Promise<AccountDeletionResult>;
   completeDeletion(operationId: string, proofId: string): Promise<CompletedDeletion>;
@@ -106,14 +87,6 @@ function deletionLogicalExpiry(data: Record<string, unknown>, expiryField: strin
   return Math.min(storedExpiry, policyExpiry);
 }
 
-function recoveryCode(): string {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const bytes = randomBytes(16);
-  let raw = "";
-  for (const byte of bytes) raw += alphabet[byte % alphabet.length];
-  return `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}`;
-}
-
 function operationRef(db: Firestore, operationId: string): DocumentReference {
   return db.collection(COLLECTIONS.accountDeletionOperations).doc(operationId);
 }
@@ -124,18 +97,6 @@ function recoveryOperationRef(db: Firestore, operationId: string): DocumentRefer
 
 function recoveryOperationResultRef(db: Firestore, operationId: string): DocumentReference {
   return db.collection(COLLECTIONS.accountRecoveryOperationResults).doc(operationId);
-}
-
-function isRecoveryOperationId(value: unknown): value is string {
-  return typeof value === "string" && RECOVERY_OPERATION_ID_PATTERN.test(value);
-}
-
-function isRecoveryCode(value: unknown): value is string {
-  return typeof value === "string" && RECOVERY_CODE_PATTERN.test(value);
-}
-
-function isPositiveSafeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 function timestampMillis(value: unknown): number {
@@ -172,20 +133,6 @@ function assertSessionRevocationFirstUse(operationId: string, nowMs: number): vo
   const issuedAt = Number.parseInt(operationId.replaceAll("-", "").slice(0, 12), 16);
   if (operationId[14] !== "7" || issuedAt < nowMs - SESSION_REVOCATION_FIRST_USE_MS
     || issuedAt > nowMs + SESSION_REVOCATION_FUTURE_SKEW_MS) throw new Error("session_revocation_operation_expired");
-}
-
-function recoveryProgress(operationId: string, status: RecoveryOperationProgress["status"], authorizationGeneration?: number): RecoveryOperationProgress {
-  return Object.freeze({ operationId, status, ...(isPositiveSafeInteger(authorizationGeneration) ? { authorizationGeneration } : {}) });
-}
-
-function recoveryCipherContext(userId: string, operationId: string, kind: "recovery" | "reissue", generation: number): RecoveryOperationCipherContext {
-  return Object.freeze({ userId, operationId, kind, generation });
-}
-
-function recoveryOperationStatus(value: unknown): RecoveryOperationProgress["status"] | "result_available" {
-  const status = asRecord(value, "recovery_operation").status;
-  if (status === "in_progress" || status === "result_available" || status === "acknowledged" || status === "delivery_unconfirmed" || status === "superseded" || status === "expired_or_invalid" || status === "provider_retryable") return status;
-  throw new Error("recovery_operation_invalid");
 }
 
 function stringArray(value: unknown): readonly string[] {
@@ -290,621 +237,16 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
     private readonly db: Firestore,
     private readonly auth: FirebaseAdminAuth,
     private readonly pseudonymKeyRing: PseudonymKeyRing,
-    private readonly recoveryRuntime: RecoveryOperationRuntime | null = null,
     private readonly revenueCatRuntime: RevenueCatDeletionRuntime | null = null,
   ) {}
 
-  public async claimRecoveryRequestRateLimit(requesterHash: string, max: number, windowSeconds: number): Promise<void> {
-    if (typeof requesterHash !== "string" || !/^[a-f0-9]{64}$/u.test(requesterHash)
-      || !Number.isSafeInteger(max) || max < 1 || max > 600
-      || !Number.isSafeInteger(windowSeconds) || windowSeconds < 1 || windowSeconds > 3_600) {
-      throw new Error("recovery_rate_limit_invalid");
-    }
-    const current = now();
-    const windowMs = windowSeconds * 1_000;
-    const windowStartMs = Math.floor(current.toMillis() / windowMs) * windowMs;
-    const bucketId = sha256(`recovery-request:${requesterHash}:${windowStartMs}`);
-    const bucketRef = this.db.collection(COLLECTIONS.rateLimitBuckets).doc(bucketId);
-    await this.db.runTransaction(async (transaction) => {
-      const snapshot = await transaction.get(bucketRef);
-      const existing = snapshot.exists ? asRecord(snapshot.data(), "recovery_rate_limit") : null;
-      const expiresAt = Timestamp.fromMillis(windowStartMs + windowMs * 2);
-      if (!existing) {
-        transaction.set(bucketRef, { purpose: "recovery_request", requesterHash, windowStartMs, count: 1, updatedAt: current, expiresAt });
-        return;
-      }
-      if (existing.purpose !== "recovery_request" || existing.requesterHash !== requesterHash
-        || existing.windowStartMs !== windowStartMs || !Number.isSafeInteger(existing.count) || (existing.count as number) < 1) {
-        throw new Error("recovery_rate_limit_invalid");
-      }
-      const count = existing.count as number;
-      if (count >= max) throw new Error("recovery_rate_limited");
-      transaction.set(bucketRef, { count: count + 1, updatedAt: current, expiresAt }, { merge: true });
-    });
-  }
-
-  private requireRecoveryRuntime(): Readonly<{ cipher: RecoveryOperationCipher }> {
-    const runtime = this.recoveryRuntime;
-    if (!runtime || !(runtime.cipher instanceof RecoveryOperationCipher)) throw new Error("recovery_operations_unavailable");
-    return Object.freeze({ cipher: runtime.cipher });
-  }
-
-  private recoveryTerminalFields(status: "acknowledged" | "superseded", terminalAt = now()): Readonly<{ status: "acknowledged" | "superseded"; terminalAt: Timestamp; updatedAt: Timestamp; expiresAt: Timestamp }> {
+  /** Retire an old Recovery Codes operation when revoke/delete takes ownership of its user slot. */
+  private legacyRecoveryTerminalFields(terminalAt = now()): Readonly<{ status: "superseded"; terminalAt: Timestamp; updatedAt: Timestamp; expiresAt: Timestamp }> {
     return Object.freeze({
-      status,
+      status: "superseded",
       terminalAt,
       updatedAt: terminalAt,
-      expiresAt: Timestamp.fromMillis(terminalAt.toMillis() + RECOVERY_OPERATION_TERMINAL_RETENTION_MS),
-    });
-  }
-
-  public async issueRecoveryCodes(
-    userId: string,
-    expectedAuthorizationGeneration: number,
-    operationId: string,
-    reauthenticatedAtSeconds: number,
-  ): Promise<RecoveryCodeIssueResult> {
-    const { cipher } = this.requireRecoveryRuntime();
-    if (typeof userId !== "string" || userId.length === 0 || !isPositiveSafeInteger(expectedAuthorizationGeneration)
-      || !isRecoveryOperationId(operationId) || !Number.isSafeInteger(reauthenticatedAtSeconds) || reauthenticatedAtSeconds <= 0) {
-      throw new Error("invalid_recovery_operation_request");
-    }
-    const nowMs = Date.now();
-    const retryDeadlineMs = reauthenticatedAtSeconds * 1_000 + 300_000;
-    if (reauthenticatedAtSeconds > Math.floor(nowMs / 1_000) + 30 || retryDeadlineMs <= nowMs) throw new Error("recent_reauthentication_required");
-
-    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
-    const operationRef = recoveryOperationRef(this.db, operationId);
-    const resultRef = recoveryOperationResultRef(this.db, operationId);
-    const generationId = randomUUID();
-    const codes = Object.freeze(Array.from({ length: RECOVERY_CODE_COUNT }, recoveryCode));
-    const encryptedCandidate = cipher.encrypt(JSON.stringify({ generationId, codes }), recoveryCipherContext(userId, operationId, "reissue", expectedAuthorizationGeneration));
-    const candidateResultExpiry = Timestamp.fromMillis(Math.min(nowMs + RECOVERY_RESULT_TTL_MS, retryDeadlineMs));
-    const createdAt = Timestamp.fromMillis(nowMs);
-    const claim = await this.db.runTransaction(async (transaction) => {
-      const [user, operation, slotResult, recoverySet] = await transaction.getAll(
-        userRef,
-        operationRef,
-        resultRef,
-        userRef.collection("security").doc("recoveryCodes"),
-      );
-      const existingCodes = await transaction.get(this.db.collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", userId));
-      if (!user?.exists) throw new Error("account_deleted");
-      const userData = asRecord(user.data(), "user");
-      assertExpectedAuthorizationGeneration(userData, expectedAuthorizationGeneration);
-      if (userData.authorizationState !== undefined && userData.authorizationState !== "active") throw new Error("account_deleted");
-
-      let orphanReissueRef: DocumentReference | null = null;
-      const codeDocuments = existingCodes?.docs ?? [];
-      if (codeDocuments.length > 0) {
-        const generationIds = [...new Set(codeDocuments.map((document) => {
-          const data = asRecord(document.data(), "recovery_code");
-          if (typeof data.generationId !== "string" || data.generationId.length === 0) throw new Error("recovery_operation_conflict");
-          return data.generationId;
-        }))];
-        const recoverySetData = recoverySet?.exists ? asRecord(recoverySet.data(), "recovery_codes") : null;
-        if (generationIds.length !== 1 || (recoverySetData && recoverySetData.generationId !== generationIds[0])) {
-          throw new Error("recovery_operation_conflict");
-        }
-        const priorIssueQuery = await transaction.get(this.db.collection(COLLECTIONS.accountRecoveryOperations)
-          .where("userId", "==", userId)
-          .where("kind", "==", "reissue")
-          .where("generationId", "==", generationIds[0]));
-        if (priorIssueQuery.size > 1) throw new Error("recovery_operation_conflict");
-        const priorIssue = priorIssueQuery.docs[0];
-        if (priorIssue) {
-          const priorIssueData = asRecord(priorIssue.data(), "recovery_operation");
-          if (priorIssueData.userId !== userId || priorIssueData.kind !== "reissue" || priorIssueData.generationId !== generationIds[0]) {
-            throw new Error("recovery_operation_conflict");
-          }
-          if (priorIssueData.status !== "acknowledged" && priorIssueData.status !== "superseded") orphanReissueRef = priorIssue.ref;
-        }
-      }
-
-      if (operation?.exists) {
-        const data = asRecord(operation.data(), "recovery_operation");
-        if (data.kind !== "reissue" || data.userId !== userId || data.expectedAuthorizationGeneration !== expectedAuthorizationGeneration) throw new Error("recovery_operation_conflict");
-        if (data.status === "acknowledged") return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "acknowledged", expectedAuthorizationGeneration) });
-        if (data.status === "superseded") return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "superseded", expectedAuthorizationGeneration) });
-        if (data.status === "delivery_unconfirmed" || timestampMillis(data.retryDeadline) <= nowMs || timestampMillis(data.resultExpiresAt) <= nowMs) {
-          if (data.status !== "delivery_unconfirmed" || data.expiresAt !== undefined) {
-            transaction.set(operationRef, { status: "delivery_unconfirmed", updatedAt: now(), expiresAt: FieldValue.delete() }, { merge: true });
-          }
-          if (slotResult?.exists) transaction.delete(resultRef);
-          const currentSlot = userData.securityOperation;
-          if (typeof currentSlot === "object" && currentSlot !== null && !Array.isArray(currentSlot)
-            && (currentSlot as Record<string, unknown>).kind === "recovery_reissue"
-            && (currentSlot as Record<string, unknown>).operationId === operationId) {
-            transaction.set(userRef, { securityOperation: FieldValue.delete() }, { merge: true });
-          }
-          return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "delivery_unconfirmed", expectedAuthorizationGeneration) });
-        }
-        if (!slotResult?.exists || data.status !== "result_available") return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "provider_retryable", expectedAuthorizationGeneration) });
-        return Object.freeze({ kind: "existing" as const, envelope: asRecord(slotResult.data(), "recovery_operation_result").envelope as RecoveryOperationCipherEnvelope });
-      }
-
-      const currentSlotValue = userData.securityOperation;
-      if (currentSlotValue !== undefined) {
-        if (typeof currentSlotValue !== "object" || currentSlotValue === null || Array.isArray(currentSlotValue)) throw new Error("security_operation_conflict");
-        const slot = currentSlotValue as Record<string, unknown>;
-        if ((slot.kind !== "recovery_reissue" && slot.kind !== "account_recovery") || typeof slot.operationId !== "string") throw new Error("operation_in_progress");
-        const priorOperationRef = recoveryOperationRef(this.db, slot.operationId);
-        const priorOperation = await transaction.get(priorOperationRef);
-        if (!priorOperation.exists) throw new Error("security_operation_conflict");
-        const priorData = asRecord(priorOperation.data(), "recovery_operation");
-        const priorResultRef = recoveryOperationResultRef(this.db, slot.operationId);
-        const priorResult = await transaction.get(priorResultRef);
-        const priorGeneration = priorData.kind === "recovery" ? priorData.resultingAuthorizationGeneration : priorData.expectedAuthorizationGeneration;
-        if (priorData.userId !== userId || priorGeneration !== expectedAuthorizationGeneration
-          || (priorData.kind !== "reissue" && priorData.kind !== "recovery")
-          || priorData.fence !== slot.fence
-          || slot.expectedAuthorizationGeneration !== expectedAuthorizationGeneration
-          || (slot.kind === "account_recovery" && priorData.kind !== "recovery")
-          || (slot.kind === "recovery_reissue" && priorData.kind !== "reissue")) throw new Error("security_operation_conflict");
-        // A failed legacy issue may have terminalized its result but retained
-        // this exact slot. Only a fresh reauthenticated issue may replace it.
-        const staleSupersededIssue = priorData.kind === "reissue" && priorData.status === "superseded"
-          && priorData.operationId === slot.operationId && !priorResult.exists;
-        if (!staleSupersededIssue) {
-          if (priorData.status !== "in_progress" && priorData.status !== "provider_retryable" && priorData.status !== "result_available") throw new Error("security_operation_conflict");
-          const priorDeadline = Math.min(
-            timestampMillis(priorData.resultExpiresAt),
-            timestampMillis(slot.leaseUntil),
-            priorData.kind === "reissue" ? timestampMillis(priorData.retryDeadline) : Number.POSITIVE_INFINITY,
-            priorResult?.exists ? timestampMillis(asRecord(priorResult.data(), "recovery_operation_result").expiresAt) : Number.POSITIVE_INFINITY,
-          );
-          if (priorDeadline > nowMs) throw new Error("operation_in_progress");
-          transaction.set(priorOperationRef, this.recoveryTerminalFields("superseded"), { merge: true });
-          if (priorResult.exists) transaction.delete(priorResultRef);
-        }
-      }
-
-      if (orphanReissueRef && orphanReissueRef.id !== (typeof currentSlotValue === "object" && currentSlotValue !== null && !Array.isArray(currentSlotValue)
-        ? (currentSlotValue as Record<string, unknown>).operationId
-        : undefined)) {
-        transaction.set(orphanReissueRef, this.recoveryTerminalFields("superseded"), { merge: true });
-      }
-
-      for (const document of codeDocuments) transaction.delete(document.ref);
-      for (const code of codes) {
-        transaction.create(this.db.collection(COLLECTIONS.recoveryCodeIndex).doc(sha256(code)), {
-          userId,
-          generationId,
-          usedAt: null,
-          createdAt,
-        });
-      }
-      const fence = randomUUID();
-      transaction.create(operationRef, {
-        operationId,
-        userId,
-        kind: "reissue",
-        status: "result_available",
-        expectedAuthorizationGeneration,
-        generationId,
-        reauthenticatedAtSeconds,
-        retryDeadline: Timestamp.fromMillis(retryDeadlineMs),
-        resultExpiresAt: candidateResultExpiry,
-        fence,
-        createdAt,
-        updatedAt: createdAt,
-      });
-      transaction.create(resultRef, {
-        operationId,
-        userId,
-        kind: "reissue",
-        authorizationGeneration: expectedAuthorizationGeneration,
-        envelope: encryptedCandidate,
-        expiresAt: candidateResultExpiry,
-        createdAt,
-      });
-      transaction.set(userRef.collection("security").doc("recoveryCodes"), { generationId, count: RECOVERY_CODE_COUNT, createdAt }, { merge: true });
-      transaction.set(userRef, {
-        securityOperation: Object.freeze({ kind: "recovery_reissue", operationId, expectedAuthorizationGeneration, fence, leaseUntil: candidateResultExpiry }),
-      }, { merge: true });
-      return Object.freeze({ kind: "created" as const, envelope: encryptedCandidate });
-    });
-    if (claim.kind === "status") return claim.result;
-    return await this.readRecoveryCodeIssueStatus(operationId, userId, expectedAuthorizationGeneration)
-      ?? recoveryProgress(operationId, "provider_retryable", expectedAuthorizationGeneration);
-  }
-
-  private decodeRecoveryIssueEnvelope(cipher: RecoveryOperationCipher, envelope: unknown, userId: string, operationId: string, generation: number): Readonly<{ generationId: string; codes: readonly string[] }> {
-    const plaintext = cipher.decrypt(envelope, recoveryCipherContext(userId, operationId, "reissue", generation));
-    let parsed: unknown;
-    try { parsed = JSON.parse(plaintext); } catch { throw new Error("recovery_operation_result_invalid"); }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("recovery_operation_result_invalid");
-    const record = parsed as Record<string, unknown>;
-    if (typeof record.generationId !== "string" || !Array.isArray(record.codes) || record.codes.length !== RECOVERY_CODE_COUNT || !record.codes.every(isRecoveryCode)) throw new Error("recovery_operation_result_invalid");
-    return Object.freeze({ generationId: record.generationId, codes: Object.freeze(record.codes.slice() as string[]) });
-  }
-
-  public async readRecoveryCodeIssueStatus(operationId: string, userId: string, expectedAuthorizationGeneration: number): Promise<RecoveryCodeIssueResult | null> {
-    const { cipher } = this.requireRecoveryRuntime();
-    if (!isRecoveryOperationId(operationId) || typeof userId !== "string" || userId.length === 0 || !isPositiveSafeInteger(expectedAuthorizationGeneration)) throw new Error("invalid_recovery_operation_request");
-    const operationRef = recoveryOperationRef(this.db, operationId);
-    const resultRef = recoveryOperationResultRef(this.db, operationId);
-    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
-    const read = await this.db.runTransaction(async (transaction) => {
-      const [operation, result, user] = await transaction.getAll(operationRef, resultRef, userRef);
-      if (!operation?.exists) return Object.freeze({ kind: "missing" as const });
-      const data = asRecord(operation.data(), "recovery_operation");
-      if (data.userId !== userId || data.kind !== "reissue") return Object.freeze({ kind: "missing" as const });
-      if (data.expectedAuthorizationGeneration !== expectedAuthorizationGeneration || !user?.exists) throw new Error("authorization_generation_conflict");
-      const userData = asRecord(user.data(), "user");
-      assertExpectedAuthorizationGeneration(userData, expectedAuthorizationGeneration);
-      const status = recoveryOperationStatus(data);
-      if (status !== "result_available") {
-        if (status === "delivery_unconfirmed" && data.expiresAt !== undefined) {
-          transaction.set(operationRef, { expiresAt: FieldValue.delete(), updatedAt: now() }, { merge: true });
-        }
-        return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, status, expectedAuthorizationGeneration) });
-      }
-      const slot = userData.securityOperation;
-      const ownsSlot = typeof slot === "object" && slot !== null && !Array.isArray(slot)
-        && (slot as Record<string, unknown>).kind === "recovery_reissue"
-        && (slot as Record<string, unknown>).operationId === operationId
-        && (slot as Record<string, unknown>).fence === data.fence
-        && storedAuthorizationGeneration(userData) === expectedAuthorizationGeneration;
-      if (!ownsSlot) {
-        transaction.set(operationRef, this.recoveryTerminalFields("superseded"), { merge: true });
-        if (result?.exists) transaction.delete(resultRef);
-        return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "superseded", expectedAuthorizationGeneration) });
-      }
-      if (timestampMillis(data.retryDeadline) <= Date.now() || timestampMillis(data.resultExpiresAt) <= Date.now()
-        || !result?.exists || timestampMillis(asRecord(result.data(), "recovery_operation_result").expiresAt) <= Date.now()) {
-        transaction.set(operationRef, { status: "delivery_unconfirmed", updatedAt: now(), expiresAt: FieldValue.delete() }, { merge: true });
-        if (result?.exists) transaction.delete(resultRef);
-        transaction.set(userRef, { securityOperation: FieldValue.delete(), updatedAt: now() }, { merge: true });
-        return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "delivery_unconfirmed", expectedAuthorizationGeneration) });
-      }
-      return Object.freeze({ kind: "result" as const, envelope: asRecord(result.data(), "recovery_operation_result").envelope });
-    });
-    if (read.kind === "missing") return null;
-    if (read.kind === "status") return read.result;
-    const decoded = this.decodeRecoveryIssueEnvelope(cipher, read.envelope, userId, operationId, expectedAuthorizationGeneration);
-    return Object.freeze({ operationId, status: "result_available", generationId: decoded.generationId, authorizationGeneration: expectedAuthorizationGeneration, codes: decoded.codes });
-  }
-
-  public async consumeRecoveryCode(operationId: string, code: string): Promise<RecoveryConsumeResult> {
-    const { cipher } = this.requireRecoveryRuntime();
-    if (!isRecoveryOperationId(operationId) || !isRecoveryCode(code)) throw new Error("recovery_code_invalid");
-    const proofHash = sha256(code);
-    const indexRef = this.db.collection(COLLECTIONS.recoveryCodeIndex).doc(proofHash);
-    const operationRef = recoveryOperationRef(this.db, operationId);
-    const resultRef = recoveryOperationResultRef(this.db, operationId);
-    const nowMs = Date.now();
-    const claimedAt = Timestamp.fromMillis(nowMs);
-    const candidateExpiry = Timestamp.fromMillis(nowMs + RECOVERY_RESULT_TTL_MS);
-    const claim = await this.db.runTransaction(async (transaction) => {
-      const operation = await transaction.get(operationRef);
-      const priorOperation = operation.exists ? asRecord(operation.data(), "recovery_operation") : null;
-      let index: FirebaseFirestore.DocumentSnapshot | null = null;
-      let userId: string;
-      if (priorOperation) {
-        if (priorOperation.kind !== "recovery" || priorOperation.proofHash !== proofHash || typeof priorOperation.userId !== "string") throw new Error("recovery_operation_conflict");
-        userId = priorOperation.userId;
-      } else {
-        index = await transaction.get(indexRef);
-        if (!index.exists) return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "expired_or_invalid") });
-        const indexData = asRecord(index.data(), "recovery_code");
-        if (typeof indexData.userId !== "string") return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "expired_or_invalid") });
-        userId = indexData.userId;
-      }
-      const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
-      const [user, result] = await transaction.getAll(userRef, resultRef);
-      if (!user?.exists) return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "expired_or_invalid") });
-      const userData = asRecord(user.data(), "user");
-      if (priorOperation) {
-        if (priorOperation.userId !== userId) throw new Error("recovery_operation_conflict");
-        const status = recoveryOperationStatus(priorOperation);
-        const resultGeneration = priorOperation.resultingAuthorizationGeneration;
-        if (!isPositiveSafeInteger(resultGeneration)) throw new Error("recovery_operation_invalid");
-        if (status === "acknowledged" || status === "superseded" || status === "expired_or_invalid") return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, status, resultGeneration) });
-        const slot = userData.securityOperation;
-        const ownsSlot = typeof slot === "object" && slot !== null && !Array.isArray(slot)
-          && (slot as Record<string, unknown>).kind === "account_recovery"
-          && (slot as Record<string, unknown>).operationId === operationId
-          && (slot as Record<string, unknown>).fence === priorOperation.fence;
-        if (!ownsSlot || userData.authorizationGeneration !== resultGeneration) {
-          if (result?.exists) transaction.delete(resultRef);
-          transaction.set(operationRef, this.recoveryTerminalFields("superseded"), { merge: true });
-          return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "superseded", resultGeneration) });
-        }
-        if (status === "result_available" && result?.exists && timestampMillis(priorOperation.resultExpiresAt) > nowMs
-          && timestampMillis(asRecord(result.data(), "recovery_operation_result").expiresAt) > nowMs) {
-          return Object.freeze({ kind: "existing" as const, userId, generation: resultGeneration, envelope: asRecord(result.data(), "recovery_operation_result").envelope, resultStatus: status });
-        }
-        if (status === "result_available" && result?.exists) transaction.delete(resultRef);
-        const fence = randomUUID();
-        const leaseUntil = Timestamp.fromMillis(nowMs + RECOVERY_RESULT_TTL_MS);
-        transaction.set(operationRef, { status: "in_progress", fence, resultExpiresAt: leaseUntil, updatedAt: claimedAt }, { merge: true });
-        transaction.set(userRef, { authorizationState: userData.authorizationState === "rotating" ? "rotating" : "active", securityOperation: Object.freeze({ kind: "account_recovery", operationId, expectedAuthorizationGeneration: resultGeneration, fence, leaseUntil }) }, { merge: true });
-        return Object.freeze({ kind: "mint" as const, userId, firebaseUid: String(priorOperation.firebaseUid), generation: resultGeneration, fence });
-      }
-
-      const indexData = index ? asRecord(index.data(), "recovery_code") : null;
-      if (!indexData || indexData.usedAt !== null) return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "expired_or_invalid") });
-      if (userData.deletedAt !== undefined) return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "expired_or_invalid") });
-      const generation = userData.authorizationGeneration === undefined ? 1 : userData.authorizationGeneration;
-      if (!isPositiveSafeInteger(generation) || generation >= Number.MAX_SAFE_INTEGER) return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "expired_or_invalid") });
-      const currentSlotValue = userData.securityOperation;
-      let priorSlotOperation: FirebaseFirestore.DocumentSnapshot | null = null;
-      let priorSlotResult: FirebaseFirestore.DocumentSnapshot | null = null;
-      let priorSlotRef: DocumentReference | null = null;
-      let priorResultRef: DocumentReference | null = null;
-      if (currentSlotValue !== undefined) {
-        if (typeof currentSlotValue !== "object" || currentSlotValue === null || Array.isArray(currentSlotValue)) throw new Error("security_operation_conflict");
-        const slot = currentSlotValue as Record<string, unknown>;
-        if (slot.kind !== "account_recovery" && slot.kind !== "recovery_reissue") throw new Error("operation_in_progress");
-        if (typeof slot.operationId !== "string") throw new Error("security_operation_conflict");
-        priorSlotRef = recoveryOperationRef(this.db, slot.operationId);
-        priorResultRef = recoveryOperationResultRef(this.db, slot.operationId);
-        priorSlotOperation = await transaction.get(priorSlotRef);
-        priorSlotResult = await transaction.get(priorResultRef);
-        if (!priorSlotOperation.exists) throw new Error("security_operation_conflict");
-        const priorData = asRecord(priorSlotOperation.data(), "recovery_operation");
-        if (priorData.userId !== userId || priorData.fence !== slot.fence
-          || (priorData.kind === "recovery" && priorData.resultingAuthorizationGeneration !== generation)
-          || (priorData.kind === "reissue" && priorData.expectedAuthorizationGeneration !== generation)
-          || (priorData.kind !== "recovery" && priorData.kind !== "reissue")) throw new Error("security_operation_conflict");
-        const deadline = Math.min(
-          timestampMillis(priorData.resultExpiresAt),
-          timestampMillis(slot.leaseUntil),
-          priorData.kind === "reissue" ? timestampMillis(priorData.retryDeadline) : Number.POSITIVE_INFINITY,
-          priorSlotResult?.exists ? timestampMillis(asRecord(priorSlotResult.data(), "recovery_operation_result").expiresAt) : Number.POSITIVE_INFINITY,
-        );
-        if (deadline > nowMs) throw new Error("operation_in_progress");
-        if (priorData.status !== "in_progress" && priorData.status !== "provider_retryable" && priorData.status !== "result_available") {
-          return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "expired_or_invalid", generation) });
-        }
-        // Defer writes until identity and tombstone reads complete.
-      }
-      const state = userData.authorizationState;
-      if (state !== undefined && state !== "active") {
-        const prior = priorSlotOperation?.exists ? asRecord(priorSlotOperation.data(), "recovery_operation") : null;
-        const slot = typeof currentSlotValue === "object" && currentSlotValue !== null && !Array.isArray(currentSlotValue)
-          ? currentSlotValue as Record<string, unknown> : null;
-        const recoverableRotation = state === "rotating" && slot?.kind === "account_recovery"
-          && prior?.kind === "recovery" && prior.userId === userId
-          && prior.resultingAuthorizationGeneration === generation && prior.fence === slot.fence
-          && timestampMillis(prior.resultExpiresAt) <= nowMs && timestampMillis(slot.leaseUntil) <= nowMs;
-        if (!recoverableRotation) return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "expired_or_invalid") });
-      }
-
-      const identities = await transaction.get(this.db.collection(COLLECTIONS.identityMappings).where("userId", "==", userId));
-      const subjects = [...new Set(identities.docs
-        .map((document) => asRecord(document.data(), "identity_mapping"))
-        .filter((identity) => identity.provider === "firebase" && typeof identity.subject === "string")
-        .map((identity) => identity.subject as string))];
-      if (subjects.length !== 1 || !subjects[0]) return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "expired_or_invalid") });
-      const firebaseUid = subjects[0];
-      const tombstoneCandidates = this.pseudonymKeyRing.candidates("firebase", firebaseUid);
-      const tombstoneRefs = tombstoneCandidates.map(({ documentId }) => this.db.collection(COLLECTIONS.deletedIdentities).doc(documentId));
-      const tombstones = await transaction.getAll(...tombstoneRefs);
-      if (tombstones.some((tombstone, index) => tombstone.exists && !isExpiredIdentityTombstone(tombstone.data(), tombstoneCandidates[index]!))) return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "expired_or_invalid") });
-      const resultGeneration = generation + 1;
-      const fence = randomUUID();
-      const authTimeBarrier = Math.ceil(nowMs / 1_000);
-      const leaseUntil = candidateExpiry;
-      if (priorSlotOperation && priorSlotRef && priorResultRef) {
-        transaction.set(priorSlotRef, this.recoveryTerminalFields("superseded"), { merge: true });
-        if (priorSlotResult?.exists) transaction.delete(priorResultRef);
-      }
-      transaction.update(indexRef, { usedAt: claimedAt });
-      transaction.create(operationRef, {
-        operationId,
-        userId,
-        kind: "recovery",
-        proofHash,
-        firebaseUid,
-        expectedAuthorizationGeneration: generation,
-        resultingAuthorizationGeneration: resultGeneration,
-        status: "in_progress",
-        authTimeBarrier,
-        fence,
-        resultExpiresAt: candidateExpiry,
-        createdAt: claimedAt,
-        updatedAt: claimedAt,
-      });
-      transaction.set(userRef, {
-        authorizationState: "rotating",
-        authorizationGeneration: resultGeneration,
-        authorizationRotatedAtSeconds: authTimeBarrier,
-        securityOperation: Object.freeze({ kind: "account_recovery", operationId, expectedAuthorizationGeneration: resultGeneration, fence, leaseUntil }),
-        updatedAt: claimedAt,
-      }, { merge: true });
-      return Object.freeze({ kind: "mint" as const, userId, firebaseUid, generation: resultGeneration, fence });
-    });
-    if (claim.kind === "status") return claim.result;
-    if (claim.kind === "existing") return await this.readRecoveryOperationStatus(operationId, code)
-      ?? recoveryProgress(operationId, "superseded", claim.generation);
-
-    let customToken: string;
-    try {
-      customToken = await this.auth.createCustomToken(claim.firebaseUid, { authorizationGeneration: claim.generation });
-    } catch {
-      await this.markRecoveryProviderRetryable(operationId, claim.userId, claim.generation, claim.fence);
-      return recoveryProgress(operationId, "provider_retryable", claim.generation);
-    }
-    const envelope = cipher.encrypt(JSON.stringify({ customToken }), recoveryCipherContext(claim.userId, operationId, "recovery", claim.generation));
-    const resultExpiry = Timestamp.fromMillis(Date.now() + RECOVERY_RESULT_TTL_MS);
-    const committed = await this.persistRecoveryResult(operationId, claim.userId, claim.generation, claim.fence, envelope, resultExpiry);
-    if (!committed) return await this.readRecoveryOperationStatus(operationId, code) ?? recoveryProgress(operationId, "superseded", claim.generation);
-    return await this.readRecoveryOperationStatus(operationId, code) ?? recoveryProgress(operationId, "superseded", claim.generation);
-  }
-
-  private decodeRecoveryConsumeEnvelope(
-    cipher: RecoveryOperationCipher,
-    envelope: unknown,
-    userId: string,
-    firebaseUid: string,
-    operationId: string,
-    generation: number,
-  ): RecoveryConsumeResult {
-    const plaintext = cipher.decrypt(envelope, recoveryCipherContext(userId, operationId, "recovery", generation));
-    let parsed: unknown;
-    try { parsed = JSON.parse(plaintext); } catch { throw new Error("recovery_operation_result_invalid"); }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed) || typeof (parsed as Record<string, unknown>).customToken !== "string") throw new Error("recovery_operation_result_invalid");
-    if (typeof firebaseUid !== "string" || firebaseUid.length === 0) throw new Error("recovery_operation_result_invalid");
-    return Object.freeze({ operationId, status: "result_available", firebaseUid, authorizationGeneration: generation, customToken: (parsed as Record<string, unknown>).customToken as string });
-  }
-
-  private async markRecoveryProviderRetryable(operationId: string, userId: string, generation: number, fence: string): Promise<void> {
-    const operationRef = recoveryOperationRef(this.db, operationId);
-    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
-    await this.db.runTransaction(async (transaction) => {
-      const [operation, user] = await transaction.getAll(operationRef, userRef);
-      if (!operation?.exists || !user?.exists) return;
-      const data = asRecord(operation.data(), "recovery_operation");
-      const userData = asRecord(user.data(), "user");
-      const slot = userData.securityOperation;
-      if (data.kind !== "recovery" || data.userId !== userId || data.resultingAuthorizationGeneration !== generation || data.fence !== fence
-        || typeof slot !== "object" || slot === null || Array.isArray(slot)
-        || (slot as Record<string, unknown>).kind !== "account_recovery"
-        || (slot as Record<string, unknown>).operationId !== operationId
-        || (slot as Record<string, unknown>).fence !== fence) return;
-      transaction.set(operationRef, { status: "provider_retryable", updatedAt: now() }, { merge: true });
-    });
-  }
-
-  private async persistRecoveryResult(
-    operationId: string,
-    userId: string,
-    generation: number,
-    fence: string,
-    envelope: RecoveryOperationCipherEnvelope,
-    expiresAt: Timestamp,
-  ): Promise<boolean> {
-    const operationRef = recoveryOperationRef(this.db, operationId);
-    const resultRef = recoveryOperationResultRef(this.db, operationId);
-    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
-    const updatedAt = now();
-    return this.db.runTransaction(async (transaction) => {
-      const [operation, result, user] = await transaction.getAll(operationRef, resultRef, userRef);
-      if (!operation?.exists || !user?.exists) return false;
-      if (result?.exists) return false;
-      const data = asRecord(operation.data(), "recovery_operation");
-      const userData = asRecord(user.data(), "user");
-      const slot = userData.securityOperation;
-      if (data.kind !== "recovery" || data.userId !== userId || data.resultingAuthorizationGeneration !== generation || data.fence !== fence
-        || data.status !== "in_progress" || userData.authorizationGeneration !== generation
-        || (userData.authorizationState !== "rotating" && userData.authorizationState !== "active")
-        || typeof slot !== "object" || slot === null || Array.isArray(slot)
-        || (slot as Record<string, unknown>).kind !== "account_recovery"
-        || (slot as Record<string, unknown>).operationId !== operationId
-        || (slot as Record<string, unknown>).fence !== fence
-        || (slot as Record<string, unknown>).expectedAuthorizationGeneration !== generation) return false;
-      transaction.create(resultRef, { operationId, userId, kind: "recovery", authorizationGeneration: generation, envelope, expiresAt, createdAt: updatedAt });
-      transaction.set(operationRef, { status: "result_available", resultExpiresAt: expiresAt, updatedAt }, { merge: true });
-      transaction.set(userRef, {
-        authorizationState: "active",
-        securityOperation: Object.freeze({ kind: "account_recovery", operationId, expectedAuthorizationGeneration: generation, fence, leaseUntil: expiresAt }),
-        updatedAt,
-      }, { merge: true });
-      return true;
-    });
-  }
-
-  public async readRecoveryOperationStatus(operationId: string, code: string): Promise<RecoveryConsumeResult | RecoveryOperationProgress | null> {
-    const { cipher } = this.requireRecoveryRuntime();
-    if (!isRecoveryOperationId(operationId) || !isRecoveryCode(code)) throw new Error("recovery_code_invalid");
-    const proofHash = sha256(code);
-    const operationRef = recoveryOperationRef(this.db, operationId);
-    const resultRef = recoveryOperationResultRef(this.db, operationId);
-    const operationSnapshot = await operationRef.get();
-    if (!operationSnapshot.exists) return null;
-    const initial = asRecord(operationSnapshot.data(), "recovery_operation");
-    if (initial.kind !== "recovery" || initial.proofHash !== proofHash || typeof initial.userId !== "string") {
-      return recoveryProgress(operationId, "expired_or_invalid");
-    }
-    const userRef = this.db.collection(COLLECTIONS.users).doc(initial.userId);
-    const read = await this.db.runTransaction(async (transaction) => {
-      const [operation, result, user] = await transaction.getAll(operationRef, resultRef, userRef);
-      if (!operation?.exists || !user?.exists) return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "expired_or_invalid") });
-      const data = asRecord(operation.data(), "recovery_operation");
-      const userData = asRecord(user.data(), "user");
-      const status = recoveryOperationStatus(data);
-      const generation = data.resultingAuthorizationGeneration;
-      if (data.kind !== "recovery" || data.userId !== initial.userId || data.proofHash !== proofHash || !isPositiveSafeInteger(generation)) {
-        return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "expired_or_invalid") });
-      }
-      if (status === "acknowledged" || status === "superseded" || status === "expired_or_invalid") return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, status, generation) });
-      const slot = userData.securityOperation;
-      const ownsSlot = typeof slot === "object" && slot !== null && !Array.isArray(slot)
-        && (slot as Record<string, unknown>).kind === "account_recovery"
-        && (slot as Record<string, unknown>).operationId === operationId
-        && (slot as Record<string, unknown>).fence === data.fence
-        && userData.authorizationGeneration === generation;
-      if (!ownsSlot) {
-        if (result?.exists) transaction.delete(resultRef);
-        transaction.set(operationRef, this.recoveryTerminalFields("superseded"), { merge: true });
-        return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "superseded", generation) });
-      }
-      if (status === "result_available") {
-        if (!result?.exists || timestampMillis(data.resultExpiresAt) <= Date.now() || timestampMillis(asRecord(result.data(), "recovery_operation_result").expiresAt) <= Date.now()) {
-          if (result?.exists) transaction.delete(resultRef);
-          transaction.set(operationRef, { status: "provider_retryable", updatedAt: now() }, { merge: true });
-          return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, "provider_retryable", generation) });
-        }
-        return Object.freeze({ kind: "result" as const, userId: initial.userId as string, firebaseUid: String(data.firebaseUid), generation, envelope: asRecord(result.data(), "recovery_operation_result").envelope });
-      }
-      return Object.freeze({ kind: "status" as const, result: recoveryProgress(operationId, status, generation) });
-    });
-    if (read.kind === "status") return read.result;
-    return this.decodeRecoveryConsumeEnvelope(cipher, read.envelope, read.userId, read.firebaseUid, operationId, read.generation);
-  }
-
-  public async acknowledgeRecovery(operationId: string, userId: string, expectedAuthorizationGeneration: number): Promise<RecoveryOperationAcknowledgement> {
-    return this.acknowledgeRecoveryOperation("recovery", operationId, userId, expectedAuthorizationGeneration);
-  }
-
-  public async acknowledgeRecoveryCodeIssue(operationId: string, userId: string, expectedAuthorizationGeneration: number): Promise<RecoveryOperationAcknowledgement> {
-    return this.acknowledgeRecoveryOperation("reissue", operationId, userId, expectedAuthorizationGeneration);
-  }
-
-  private async acknowledgeRecoveryOperation(
-    kind: "recovery" | "reissue",
-    operationId: string,
-    userId: string,
-    expectedAuthorizationGeneration: number,
-  ): Promise<RecoveryOperationAcknowledgement> {
-    if (!isRecoveryOperationId(operationId) || typeof userId !== "string" || userId.length === 0 || !isPositiveSafeInteger(expectedAuthorizationGeneration)) throw new Error("invalid_recovery_operation_request");
-    const operationRef = recoveryOperationRef(this.db, operationId);
-    const resultRef = recoveryOperationResultRef(this.db, operationId);
-    const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
-    return this.db.runTransaction(async (transaction) => {
-      const [operation, result, user] = await transaction.getAll(operationRef, resultRef, userRef);
-      if (!operation?.exists || !user?.exists) throw new Error("recovery_operation_not_found");
-      const data = asRecord(operation.data(), "recovery_operation");
-      const userData = asRecord(user.data(), "user");
-      const generation = kind === "recovery" ? data.resultingAuthorizationGeneration : data.expectedAuthorizationGeneration;
-      if (data.kind !== kind || data.userId !== userId || generation !== expectedAuthorizationGeneration) throw new Error("recovery_operation_conflict");
-      assertExpectedAuthorizationGeneration(userData, expectedAuthorizationGeneration);
-      if (userData.authorizationState !== undefined && userData.authorizationState !== "active") throw new Error("account_deleted");
-      if (data.status === "acknowledged") return Object.freeze({ operationId, status: "acknowledged" as const, authorizationGeneration: expectedAuthorizationGeneration });
-      const acknowledgedAt = now();
-      const recoverableRecoveryStatus = kind === "recovery"
-        && (data.status === "result_available" || data.status === "provider_retryable" || data.status === "in_progress");
-      if (data.status !== "result_available" && !recoverableRecoveryStatus) throw new Error("recovery_operation_conflict");
-      const slot = userData.securityOperation;
-      if (typeof slot !== "object" || slot === null || Array.isArray(slot)
-        || (slot as Record<string, unknown>).operationId !== operationId
-        || (slot as Record<string, unknown>).fence !== data.fence
-        || (slot as Record<string, unknown>).expectedAuthorizationGeneration !== expectedAuthorizationGeneration
-        || (slot as Record<string, unknown>).kind !== (kind === "recovery" ? "account_recovery" : "recovery_reissue")) throw new Error("recovery_operation_conflict");
-      if (kind === "reissue" && (!result?.exists || timestampMillis(data.retryDeadline) <= acknowledgedAt.toMillis()
-        || timestampMillis(data.resultExpiresAt) <= acknowledgedAt.toMillis()
-        || timestampMillis(asRecord(result.data(), "recovery_operation_result").expiresAt) <= acknowledgedAt.toMillis())) {
-        throw new Error("recovery_operation_expired");
-      }
-      transaction.set(operationRef, {
-        ...this.recoveryTerminalFields("acknowledged", acknowledgedAt),
-        acknowledgedAt,
-      }, { merge: true });
-      if (result?.exists) transaction.delete(resultRef);
-      transaction.set(userRef, { securityOperation: FieldValue.delete(), updatedAt: acknowledgedAt }, { merge: true });
-      return Object.freeze({ operationId, status: "acknowledged" as const, authorizationGeneration: expectedAuthorizationGeneration });
+      expiresAt: Timestamp.fromMillis(terminalAt.toMillis() + 30 * 24 * 60 * 60 * 1000),
     });
   }
 
@@ -984,7 +326,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       if (subjects.length !== 1) throw new Error("session_revocation_identity_unavailable");
       if (expiredRecoveryOperation?.exists && expiredRecoveryOperationRef && expiredRecoveryResultRef) {
         transaction.set(expiredRecoveryOperationRef, {
-          ...this.recoveryTerminalFields("superseded"),
+          ...this.legacyRecoveryTerminalFields(),
         }, { merge: true });
         if (expiredRecoveryResult?.exists) transaction.delete(expiredRecoveryResultRef);
       }
@@ -1384,7 +726,7 @@ export class FirestoreAccountLifecycleStore implements AccountLifecycleStore {
       const leaseUntil = Timestamp.fromMillis(createdAt.toMillis() + SECURITY_OPERATION_LEASE_MS);
       if (recoverySlotOperation?.exists && recoverySlotOperationRef && recoverySlotResultRef) {
         transaction.set(recoverySlotOperationRef, {
-          ...this.recoveryTerminalFields("superseded"),
+          ...this.legacyRecoveryTerminalFields(),
         }, { merge: true });
         if (recoverySlotResult?.exists) transaction.delete(recoverySlotResultRef);
       }

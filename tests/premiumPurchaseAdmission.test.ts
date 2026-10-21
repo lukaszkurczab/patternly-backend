@@ -5,7 +5,7 @@ import type { RevenueCatEntitlementResult } from "../src/infrastructure/revenuec
 import { smokeEnvironment, smokeEndpoints, localAppCheckVerifier } from "../scripts/localSmoke.js";
 import { premiumSnapshotScope } from "./fixtures/premiumSnapshot.js";
 
-const keys = { appCheckToken: "a".repeat(64), storageKey: "b".repeat(64), hmacKey: "c".repeat(64), recoveryOperationKey: "d".repeat(64) };
+const keys = { appCheckToken: "a".repeat(64), storageKey: "b".repeat(64), hmacKey: "c".repeat(64) };
 const environment = smokeEnvironment({ FIREBASE_PROJECT_ID: smokeEndpoints.project, FIREBASE_AUTH_EMULATOR_HOST: smokeEndpoints.auth, FIRESTORE_EMULATOR_HOST: smokeEndpoints.firestore }, keys);
 const accountId = "00000000-0000-4000-8000-000000000001";
 const attemptId = "00000000-0000-4000-8000-000000000002";

@@ -9,9 +9,9 @@ const SAFE_CODES = new Set([
   "invalid_request", "version_conflict", "account_revision_conflict", "progress_fingerprint_mismatch", "mutation_id_reuse",
   "merge_preview_mismatch", "merge_resolution_incomplete", "merge_resolution_mismatch", "merge_conflict_requires_manual_resolution",
   "active_session_adoption_blocked", "journal_recovery_required", "firestore_not_ready", "authentication_required",
-  "recent_reauthentication_required", "recovery_code_invalid", "recovery_code_used", "account_deleted",
+  "recent_reauthentication_required", "account_deleted",
   "remote_deletion_pending", "session_revocation_failed", "session_revocation_operation_conflict",
-  "recovery_session_revocation_failed", "app_check_required", "app_check_invalid", "app_check_not_configured", "content_report_not_found",
+  "app_check_required", "app_check_invalid", "app_check_not_configured", "content_report_not_found",
   "content_report_transition_invalid", "data_export_rate_limited", "data_export_too_large", "internal_error", "unknown",
 ]);
 const SAFE_MESSAGES = new Set([

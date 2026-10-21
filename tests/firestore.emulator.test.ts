@@ -1451,95 +1451,6 @@ test("anonymous report rate limiting is transactionally enforced without storing
   assert.equal("rateLimitKey" in (buckets.docs[0]?.data() ?? {}), false);
 });
 
-test("recovery codes are server-hashed, acknowledged reissue replaces the set, and same-operation recovery replays once", async () => {
-  const auth = await createRegisteredAuthUser(context);
-  const tokensBeforeRecovery = context.customTokenSubjects.length;
-  const firstIssueOperationId = randomUUID();
-  const secondIssueOperationId = randomUUID();
-  const consumeOperationId = randomUUID();
-  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
-  const firstIssued = await context.app.inject({ method: "POST", url: "/v1/account/recovery-codes", headers, payload: { operationId: firstIssueOperationId } });
-  assert.equal(firstIssued.statusCode, 200);
-  const firstCodes = firstIssued.json().codes as string[];
-  const firstRecoveryCode = firstCodes[0]!;
-  assert.equal(firstCodes.length, 10);
-  assert.equal(new Set(firstCodes).size, 10);
-  for (const code of firstCodes) assert.match(code, /^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){3}$/u);
-  const firstStored = await firestore().collection("recoveryCodeIndex").get();
-  assert.equal(firstStored.size, 10);
-  for (const document of firstStored.docs) {
-    assert.match(document.id, /^[a-f0-9]{64}$/u);
-    assert.equal("code" in document.data(), false);
-    assert.equal("rawCode" in document.data(), false);
-  }
-
-  const firstSaved = await context.app.inject({ method: "POST", url: "/v1/account/recovery-codes/issue/saved-ack", headers, payload: { operationId: firstIssueOperationId } });
-  assert.equal(firstSaved.statusCode, 200);
-  assert.equal(firstSaved.json().status, "acknowledged");
-
-  const secondIssued = await context.app.inject({ method: "POST", url: "/v1/account/recovery-codes", headers, payload: { operationId: secondIssueOperationId } });
-  assert.equal(secondIssued.statusCode, 200);
-  const secondCodes = secondIssued.json().codes as string[];
-  const secondRecoveryCode = secondCodes[0]!;
-  assert.equal(secondCodes.length, 10);
-  assert.equal(new Set(secondCodes).size, 10);
-  assert.notDeepEqual(secondCodes, firstCodes);
-  const secondStored = await firestore().collection("recoveryCodeIndex").get();
-  assert.equal(secondStored.size, 10);
-  for (const document of secondStored.docs) {
-    assert.match(document.id, /^[a-f0-9]{64}$/u);
-    assert.equal("code" in document.data(), false);
-    assert.equal("rawCode" in document.data(), false);
-  }
-
-  const secondSaved = await context.app.inject({ method: "POST", url: "/v1/account/recovery-codes/issue/saved-ack", headers, payload: { operationId: secondIssueOperationId } });
-  assert.equal(secondSaved.statusCode, 200);
-  assert.equal(secondSaved.json().status, "acknowledged");
-
-  const userRef = firestore().collection(COLLECTIONS.users).doc(auth.userId);
-  await userRef.update({ authorizationState: "unknown" });
-  const inactive = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { operationId: consumeOperationId, code: secondRecoveryCode } });
-  assert.equal(inactive.statusCode, 200);
-  assert.deepEqual(inactive.json(), { operationId: consumeOperationId, status: "expired_or_invalid" });
-  await userRef.update({ authorizationState: "active", authorizationGeneration: 0 });
-  const malformedGeneration = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { operationId: consumeOperationId, code: secondRecoveryCode } });
-  assert.equal(malformedGeneration.statusCode, 200);
-  assert.deepEqual(malformedGeneration.json(), { operationId: consumeOperationId, status: "expired_or_invalid" });
-  await userRef.update({ authorizationGeneration: 1 });
-  const pseudonym = parsePseudonymKeyRing(testEnvironment.deletionPseudonymKeysJson).active("firebase", auth.localId);
-  const tombstoneRef = firestore().collection(COLLECTIONS.deletedIdentities).doc(pseudonym.documentId);
-  await tombstoneRef.set({ deletedAt: Timestamp.now(), expiresAt: Timestamp.fromMillis(Date.now() + 60_000) });
-  const tombstoned = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { operationId: consumeOperationId, code: secondRecoveryCode } });
-  assert.equal(tombstoned.statusCode, 200);
-  assert.deepEqual(tombstoned.json(), { operationId: consumeOperationId, status: "expired_or_invalid" });
-  await tombstoneRef.delete();
-  assert.equal((await firestore().collection(COLLECTIONS.recoveryCodeIndex).doc(createHash("sha256").update(secondRecoveryCode, "utf8").digest("hex")).get()).data()?.usedAt, null);
-
-  const previousSetOperationId = randomUUID();
-  const previousSet = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { operationId: previousSetOperationId, code: firstRecoveryCode } });
-  assert.equal(previousSet.statusCode, 200);
-  assert.deepEqual(previousSet.json(), { operationId: previousSetOperationId, status: "expired_or_invalid" });
-
-  const consumed = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { operationId: consumeOperationId, code: secondRecoveryCode } });
-  assert.equal(consumed.statusCode, 200);
-  assert.equal(consumed.json().customToken, "fixture-custom-token");
-  assert.equal(context.customTokenSubjects.length, tokensBeforeRecovery + 1);
-  assert.equal(context.customTokenSubjects.at(-1), auth.localId);
-  assert.deepEqual(context.customTokenClaims.at(-1), { authorizationGeneration: 2 });
-  assert.equal(consumed.json().status, "result_available");
-  assert.equal(consumed.json().firebaseUid, auth.localId);
-  assert.equal(context.revokedSubjects.includes(auth.localId), false);
-  const replay = await context.app.inject({ method: "POST", url: "/v1/public/recovery-codes/consume", headers: { "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { operationId: consumeOperationId, code: secondRecoveryCode } });
-  assert.equal(replay.statusCode, 200);
-  assert.deepEqual(replay.json(), consumed.json());
-  assert.equal(context.customTokenSubjects.length, tokensBeforeRecovery + 1);
-  assert.equal((await userRef.get()).get("authorizationGeneration"), 2);
-  const encryptedResult = await firestore().collection(COLLECTIONS.accountRecoveryOperationResults).doc(consumeOperationId).get();
-  assert.equal(encryptedResult.exists, true);
-  assert.equal(JSON.stringify(encryptedResult.data()).includes("fixture-custom-token"), false);
-  assert.equal(JSON.stringify(encryptedResult.data()).includes(secondRecoveryCode), false);
-});
-
 test("destructive deletion rejects an old authenticated session before touching Firestore", async () => {
   const auth = await createRegisteredAuthUser(context);
   const staleApp = buildApplication({
@@ -1644,92 +1555,6 @@ test("deletion supersedes an in-flight session revoke and the stale revoker cann
   assert.deepEqual(slotAfter, slotBefore);
 });
 
-test("recovery-code issue rejects a generation rotated after the request guard without changing the issued set", async () => {
-  const auth = await createRegisteredAuthUser(context);
-  const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
-  const initial = await context.app.inject({ method: "POST", url: "/v1/account/recovery-codes", headers, payload: { operationId: randomUUID() } });
-  assert.equal(initial.statusCode, 200);
-
-  const userRef = firestore().collection(COLLECTIONS.users).doc(auth.userId);
-  const metadataRef = userRef.collection("security").doc("recoveryCodes");
-  const index = firestore().collection(COLLECTIONS.recoveryCodeIndex);
-  const indexBefore = await index.where("userId", "==", auth.userId).get();
-  const metadataBefore = await metadataRef.get();
-  assert.equal(indexBefore.size, 10);
-  assert.equal(metadataBefore.exists, true);
-  const priorGenerationId = metadataBefore.data()?.generationId;
-
-  const originalLifecycle = context.stores.accountLifecycle;
-  let rotatedAfterGuard = false;
-  const accountLifecycle = new Proxy(originalLifecycle, {
-    get(target, property) {
-      const value = Reflect.get(target, property, target) as unknown;
-      if (property === "issueRecoveryCodes" && typeof value === "function") {
-        return async (...args: unknown[]) => {
-          if (!rotatedAfterGuard) {
-            rotatedAfterGuard = true;
-            await userRef.update({ authorizationGeneration: 2 });
-          }
-          return value.apply(target, args);
-        };
-      }
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-  const raceApp = buildApplication({
-    environment: testEnvironment,
-    firestore: null,
-    verifier: createFirebaseTokenVerifier(testEnvironment),
-    appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
-    stores: { ...context.stores, accountLifecycle },
-  });
-
-  const rejected = await raceApp.inject({ method: "POST", url: "/v1/account/recovery-codes", headers, payload: { operationId: randomUUID() } });
-  await raceApp.close();
-  assert.equal(rotatedAfterGuard, true);
-  assert.equal(rejected.statusCode, 409);
-  assert.deepEqual(rejected.json(), { error: { code: "authorization_generation_conflict" } });
-
-  const indexAfter = await index.where("userId", "==", auth.userId).get();
-  const metadataAfter = await metadataRef.get();
-  assert.equal(indexAfter.size, indexBefore.size);
-  assert.deepEqual(indexAfter.docs.map((document) => document.id).sort(), indexBefore.docs.map((document) => document.id).sort());
-  assert.ok(indexAfter.docs.every((document) => document.data().generationId === priorGenerationId));
-  assert.equal(metadataAfter.data()?.generationId, priorGenerationId);
-  assert.equal(metadataAfter.data()?.count, 10);
-
-  const inactiveAuth = await createRegisteredAuthUser(context);
-  const inactiveUserRef = firestore().collection(COLLECTIONS.users).doc(inactiveAuth.userId);
-  const inactiveLifecycle = new Proxy(originalLifecycle, {
-    get(target, property) {
-      const value = Reflect.get(target, property, target) as unknown;
-      if (property === "issueRecoveryCodes" && typeof value === "function") {
-        return async (...args: unknown[]) => {
-          await inactiveUserRef.update({ authorizationState: "deleting" });
-          return value.apply(target, args);
-        };
-      }
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-  const inactiveApp = buildApplication({
-    environment: testEnvironment,
-    firestore: null,
-    verifier: createFirebaseTokenVerifier(testEnvironment),
-    appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
-    stores: { ...context.stores, accountLifecycle: inactiveLifecycle },
-  });
-  const inactive = await inactiveApp.inject({
-    method: "POST", url: "/v1/account/recovery-codes",
-    headers: { authorization: `Bearer ${inactiveAuth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN }, payload: { operationId: randomUUID() },
-  });
-  await inactiveApp.close();
-  assert.equal(inactive.statusCode, 401);
-  assert.deepEqual(inactive.json(), { error: { code: "account_deleted" } });
-  assert.equal((await index.where("userId", "==", inactiveAuth.userId).get()).size, 0);
-  assert.equal((await inactiveUserRef.collection("security").doc("recoveryCodes").get()).exists, false);
-});
-
 test("account deletion removes owned Firestore documents, preserves a tombstone, and redacts report account contact fields", async () => {
   const auth = await createRegisteredAuthUser(context);
   const me = await context.app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN } });
@@ -1809,7 +1634,7 @@ test("account deletion persists subjects and phases, resumes through the bound s
   const linked = createContentReportSchema.parse(reportBody("af61e3f3-f23e-467c-b92a-9b8fd0514f25"));
   await context.stores.contentReports.create(userId, 1, linked, { rateLimitKey: "resume-deletion-client" });
   await firestore().collection(COLLECTIONS.contentReports).doc(linked.clientSubmissionId).update({ accountId: userId, contactEmail: "resume@example.com" });
-  await firestore().collection("recoveryCodeIndex").doc("resume-recovery-code").set({ userId, usedAt: null });
+  await firestore().collection(COLLECTIONS.recoveryCodeIndex).doc("resume-recovery-code").set({ userId, usedAt: null });
   await firestore().collection("sessionRevocationOperations").doc("resume-session-revocation").set({ userId, status: "revoked" });
   await firestore().collection("users").doc(userId).collection("drafts").doc("resume-draft").set({ value: "private" });
 
@@ -1833,7 +1658,7 @@ test("account deletion persists subjects and phases, resumes through the bound s
   assert.equal((await firestore().collection(COLLECTIONS.users).doc(userId).get()).get("authorizationGeneration"), 2);
   assert.equal("authSubjects" in (pendingOperation.data() ?? {}), false);
   assert.equal("subjectHashes" in (pendingOperation.data() ?? {}), false);
-  assert.equal((await firestore().collection("recoveryCodeIndex").where("userId", "==", userId).get()).size, 1);
+  assert.equal((await firestore().collection(COLLECTIONS.recoveryCodeIndex).where("userId", "==", userId).get()).size, 1);
   assert.equal((await firestore().collection("sessionRevocationOperations").where("userId", "==", userId).get()).size, 1);
   assert.equal((await firestore().collection("users").doc(userId).collection("drafts").get()).size, 1);
   const report = (await firestore().collection("contentReports").doc(linked.clientSubmissionId).get()).data();

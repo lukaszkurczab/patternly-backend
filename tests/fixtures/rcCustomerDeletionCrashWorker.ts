@@ -15,7 +15,7 @@ const app = initializeApp({ projectId: firebaseProjectId }, `rc-delete-crash-wor
 const db = getFirestore(app);
 const auth = createFirebaseAdminAuth(app);
 const never = new Promise<never>(() => undefined);
-const store = new FirestoreAccountLifecycleStore(db, auth, new PseudonymKeyRing([{ version: "rc_test_v1", status: "active", keyBase64: pseudonymKey }]), null, {
+const store = new FirestoreAccountLifecycleStore(db, auth, new PseudonymKeyRing([{ version: "rc_test_v1", status: "active", keyBase64: pseudonymKey }]), {
   projectId: revenueCatProjectId,
   client: {
     projectId: revenueCatProjectId,
