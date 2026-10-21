@@ -1,12 +1,14 @@
 import { attemptState } from "./progressFixtures.js";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
-import { Timestamp, type Firestore, type Transaction } from "firebase-admin/firestore";
+import { FieldValue, Timestamp, type Firestore, type Transaction } from "firebase-admin/firestore";
 
 import { buildApplication } from "../src/api/app.js";
 import { FirestoreProgressStore } from "../src/modules/progress/store.js";
 import { adoptionTransferRecordKey, createAdoptionSnapshotSeal, createAdoptionTransferChunkFingerprint } from "../src/modules/users/adoptionTransfer.js";
-import { createMergeRecordFingerprint, type GuestMergeRecord } from "../src/modules/users/merge.js";
+import { assertGoalPlanBundles, buildGuestMergePreview, mergeRecordKey, progressRecordToMergeRecord, createMergeRecordFingerprint, type GuestMergeConfirmation, type GuestMergeRecord } from "../src/modules/users/merge.js";
 import { createFirebaseTokenVerifier } from "../src/infrastructure/firebase/verifier.js";
 import { progressDocumentId } from "../src/infrastructure/firestore/paths.js";
 import { testEnvironment } from "./support.js";
@@ -373,7 +375,7 @@ test("apply resumes an expired same-session lease only while the pinned progress
     const operation = await transaction.get(operationRef);
     const metadata = await transaction.get(metadataRef);
     const operationData = operation.data()!;
-    transaction.update(operationRef, { state: "applying", targetGeneration: 1, applyCursor: 0, applyTotal: 1, applyAccountRevision: 0, applySourceGeneration: 0, applySourceRevision: 0 });
+    transaction.update(operationRef, { state: "applying", targetGeneration: 1, applyCursor: 0, applyTotal: 1, applyChangeCount: 1, applyAccountRevision: 1, applySourceGeneration: 0, applySourceRevision: 0 });
     transaction.set(targetRef, { userId: auth.userId, generation: 1, sourceSessionId: sessionId, state: "building", createdAt: operationData.createdAt, expiresAt: operationData.expiresAt });
     transaction.set(metadataRef, { ...metadata.data(), adoptionPromotionSessionId: sessionId, adoptionPromotionTargetGeneration: 1, adoptionPromotionSourceGeneration: 0, adoptionPromotionSourceRevision: 0, adoptionPromotionLeaseExpiresAt: Timestamp.fromMillis(Date.now() - 1) }, { merge: true });
   });
@@ -397,7 +399,7 @@ test("sync loses during an active transfer lease and wins after expiry without a
     const currentOperation = await transaction.get(operationRef);
     const currentMetadata = await transaction.get(metadataRef);
     const data = currentOperation.data()!;
-    transaction.update(operationRef, { state: "applying", targetGeneration, applyCursor: 0, applyTotal: 1, applyAccountRevision: 0, applySourceGeneration: 0, applySourceRevision: 0 });
+    transaction.update(operationRef, { state: "applying", targetGeneration, applyCursor: 0, applyTotal: 1, applyChangeCount: 1, applyAccountRevision: 1, applySourceGeneration: 0, applySourceRevision: 0 });
     transaction.set(targetGenerationRef, { userId: auth.userId, generation: targetGeneration, sourceSessionId: sessionId, state: "building", createdAt: data.createdAt, expiresAt: data.expiresAt });
     transaction.set(metadataRef, { ...currentMetadata.data(), adoptionPromotionSessionId: sessionId, adoptionPromotionTargetGeneration: targetGeneration, adoptionPromotionSourceGeneration: 0, adoptionPromotionSourceRevision: 0, adoptionPromotionLeaseExpiresAt: Timestamp.fromMillis(Date.now() + 60_000) }, { merge: true });
   });
@@ -980,5 +982,354 @@ function buildTransferWriteMeasuringApp(userId: string, chunks: Array<{ count: n
     verifier: createFirebaseTokenVerifier(testEnvironment),
     appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } },
     stores: { ...context.stores, progress },
+  });
+}
+
+
+// Exact pre-groupedKeys producer from 02cc4f9124514e2f0278555aa3c2c489642716e2.
+// Only the function name differs; the source checksum below binds this fixture to that producer.
+type AdoptionMaterialization = Readonly<{ records: readonly GuestMergeRecord[]; changes: readonly Readonly<{ record: GuestMergeRecord; remote: GuestMergeRecord | undefined; mutationId: string }>[] }>;
+function ensureFullIdentityUniqueness(records: readonly GuestMergeRecord[]): void {
+  const keys = new Set<string>();
+  for (const record of records) { const key = adoptionTransferRecordKey(record); if (keys.has(key)) throw new Error("adoption_transfer_duplicate_record_key"); keys.add(key); }
+}
+function adoptionMutationId(operationId: string, key: string, fingerprint: string): string {
+  return `adoption_${operationId.replaceAll("-", "")}_${createMergeRecordFingerprint({ recordId: key, recordType: "active_track", state: { fingerprint }, trackId: key }).slice(0, 24)}`;
+}
+function legacyAdoptionMaterialization(operationId: string, guestRecords: readonly GuestMergeRecord[], remoteRecords: readonly GuestMergeRecord[], confirmation: GuestMergeConfirmation): AdoptionMaterialization {
+  ensureFullIdentityUniqueness(guestRecords);
+  ensureFullIdentityUniqueness(remoteRecords);
+  const remoteByKey = new Map(remoteRecords.map((record) => [mergeRecordKey(record), record]));
+  const localByKey = new Map(guestRecords.map((record) => [mergeRecordKey(record), record]));
+  const resolved = new Map(remoteByKey);
+  const changes: Array<{ record: GuestMergeRecord; remote: GuestMergeRecord | undefined; mutationId: string }> = [];
+  const preview = buildGuestMergePreview({ accountUserId: "00000000-0000-4000-8000-000000000000", accountSnapshotVersion: 0, guestSnapshot: { guestSnapshotVersion: 0, guestUserId: "11111111-1111-4111-8111-111111111111", records: [...guestRecords], activeSession: false, pendingJournal: false }, remoteRecords });
+  for (const group of preview.preview.goalPlanConflictGroups) {
+    const choice = confirmation.groupChoices.find((candidate) => candidate.groupId === group.groupId);
+    if (!choice || choice.resolution === "keep_account") continue;
+    for (const recordType of ["goal", "learning_plan"] as const) {
+      const key = mergeRecordKey({ recordType, recordId: group.trackId, trackId: group.trackId });
+      const local = localByKey.get(key);
+      const remote = remoteByKey.get(key);
+      if (local && local.state.deleted !== true) queue(local, remote, key);
+      else if (remote && remote.state.deleted !== true) {
+        const tombstoneState = Object.freeze({ deleted: true });
+        const tombstone: GuestMergeRecord = Object.freeze({ fingerprint: createMergeRecordFingerprint({ recordId: group.trackId, recordType, state: tombstoneState, trackId: group.trackId }), recordId: group.trackId, recordType, state: tombstoneState, trackId: group.trackId, version: remote.version });
+        queue(tombstone, remote, key);
+      }
+    }
+  }
+  for (const record of guestRecords) {
+    const key = mergeRecordKey(record);
+    const remote = remoteByKey.get(key);
+    if (remote?.fingerprint === record.fingerprint) continue;
+    const resolution = confirmation.resolutions.find((candidate) => candidate.conflictId === key);
+    if (remote && resolution?.resolution === "keep_account") continue;
+    queue(record, remote, key);
+  }
+  assertGoalPlanBundles([...resolved.values()]);
+  return Object.freeze({ records: Object.freeze([...resolved.values()].sort((left, right) => mergeRecordKey(left).localeCompare(mergeRecordKey(right)))), changes: Object.freeze(changes) });
+
+  function queue(record: GuestMergeRecord, remote: GuestMergeRecord | undefined, key: string): void {
+    if (remote?.fingerprint === record.fingerprint) return;
+    const nextVersion = (remote?.version ?? 0) + 1;
+    const updated = Object.freeze({ ...record, version: nextVersion });
+    resolved.set(key, updated);
+    changes.push({ record: updated, remote, mutationId: adoptionMutationId(operationId, key, updated.fingerprint) });
+  }
+}
+
+
+test("legacy adoption fixture retains the exact pinned historical producer", () => {
+  const source = readFileSync(new URL(import.meta.url), "utf8");
+  const start = source.indexOf("function legacyAdoptionMaterialization(");
+  const end = source.indexOf("\ntest(\"legacy adoption fixture", start);
+  const historical = source.slice(start, end).trimEnd().replace("function legacyAdoptionMaterialization(", "function buildAdoptionMaterialization(");
+  assert.equal(createHash("sha256").update(historical).digest("hex"), "c7879fbafc3123cc2a25716eb38a329e513ae273364357ac1814c2ffcc3dafd8");
+});
+
+async function checkpointSnapshot(userId: string, sessionId: string) {
+  const operation = transferRefFor(userId, sessionId);
+  const user = firestore().collection("users").doc(userId);
+  const data = (await operation.get()).data()!;
+  const target = user.collection("progressGenerations").doc(String(data.targetGeneration));
+  return {
+    operation: data,
+    metadata: (await user.collection("syncMetadata").doc("account").get()).data(),
+    target: (await target.get()).data(),
+    rows: (await target.collection("records").get()).docs.map((row) => [row.id, row.data()]),
+    markers: (await operation.collection("markers").get()).docs.map((row) => [row.id, row.data()]),
+    source: await context.stores.progress.readSnapshot(userId),
+  };
+}
+
+async function seedLegacyCheckpoint(auth: Awaited<ReturnType<typeof createRegisteredAuthUser>>, sessionId: string, records: GuestMergeRecord[], cursor: number, groupChoices: Array<{groupId: string; resolution: "keep_guest" | "keep_account"}> = []) {
+  const prepared = await prepareConfirmedTransfer(auth, sessionId, records, groupChoices);
+  const active = await context.stores.progress.readSnapshot(auth.userId);
+  const materialization = legacyAdoptionMaterialization(sessionId, records, active.records.map(progressRecordToMergeRecord), prepared.confirmation);
+  const operation = transferRefFor(auth.userId, sessionId);
+  const user = firestore().collection("users").doc(auth.userId);
+  const metadata = user.collection("syncMetadata").doc("account");
+  const data = (await operation.get()).data()!;
+  const target = user.collection("progressGenerations").doc(String(data.targetGeneration));
+  const changed = new Map(materialization.changes.map((change) => [adoptionTransferRecordKey(change.record), change.mutationId]));
+  // The real Admin SDK transaction commits the historical prefix and cursor atomically.
+  await firestore().runTransaction(async (transaction) => {
+    await transaction.getAll(operation, metadata);
+    const updatedAt = Timestamp.now();
+    transaction.set(target, { userId: auth.userId, generation: data.targetGeneration, sourceSessionId: sessionId, state: "building", createdAt: data.createdAt, updatedAt, expiresAt: data.expiresAt });
+    for (const record of materialization.records.slice(0, cursor)) {
+      const key = adoptionTransferRecordKey(record);
+      const kind = record.recordType === "training_attempt" || record.recordType === "review_queue_entry" ? "item" : "node";
+      transaction.set(target.collection("records").doc(progressDocumentId({ kind, recordType: record.recordType, trackId: record.trackId, targetId: record.recordId })), {
+        kind, recordType: record.recordType, trackId: record.trackId, targetId: record.recordId, version: record.version, fingerprint: record.fingerprint, state: record.state,
+        lastMutationId: changed.get(key) ?? `adoption_carry_${sessionId.replaceAll("-", "")}_${createHash("sha256").update(key, "utf8").digest("hex").slice(0, 24)}`,
+        generation: data.targetGeneration, sourceSessionId: sessionId, updatedAt, expiresAt: data.expiresAt,
+      });
+    }
+    transaction.update(operation, { state: "applying", applyCursor: cursor, applyTotal: materialization.records.length, applyChangeCount: materialization.changes.length, applyAccountRevision: active.accountRevision + materialization.changes.length, applySourceGeneration: active.generation ?? 0, applySourceRevision: active.accountRevision, applyStartedAt: updatedAt, updatedAt });
+    transaction.set(metadata, { adoptionPromotionSessionId: sessionId, adoptionPromotionTargetGeneration: data.targetGeneration, adoptionPromotionSourceGeneration: active.generation ?? 0, adoptionPromotionSourceRevision: active.accountRevision, adoptionPromotionLeaseExpiresAt: Timestamp.fromMillis(Date.now() - 1), updatedAt }, { merge: true });
+  });
+  return { ...prepared, materialization, active, operation };
+}
+
+async function assertCheckpointDenied(auth: Awaited<ReturnType<typeof createRegisteredAuthUser>>, sessionId: string, prepared: Awaited<ReturnType<typeof prepareConfirmedTransfer>>, app = context.app) {
+  const before = await checkpointSnapshot(auth.userId, sessionId);
+  for (let repeat = 0; repeat < 2; repeat += 1) {
+    const response = await app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers: prepared.headers, payload: { canonicalVersion, deviceId, decisionFingerprint: prepared.confirm.json().decisionFingerprint } });
+    assert.equal(response.statusCode, 409, JSON.stringify(response.json()));
+    assert.deepEqual(response.json(), { error: { code: "adoption_transfer_apply_cursor_conflict" } });
+    assert.deepEqual(await checkpointSnapshot(auth.userId, sessionId), before);
+    const status = await context.app.inject({ method: "GET", url: `/v1/account-data/adoption/transfer/${sessionId}/status?deviceId=${deviceId}`, headers: prepared.headers });
+    assert.equal(status.json().state, before.operation.state);
+  }
+}
+
+for (const resolution of ["keep_account", "keep_guest"] as const) {
+  for (const cursor of [0, 200, 201]) {
+    test(`legacy incompatible ${resolution} checkpoint cursor ${cursor} is refused before writes`, async () => {
+      const auth = await createRegisteredAuthUser(context);
+      const track = "aws-certified-solutions-architect-associate";
+      await seedAccountGoalPlan(auth, goalPlanRecords(track, "2027-09-09"));
+      const records = [...goalPlanRecords(track, "2027-10-10"), ...Array.from({ length: 199 }, (_, i) => learningRecord(`old-${i}`, `old-track-${i}`))];
+      const sessionId = `legacy-${resolution}-${cursor}`;
+      const prepared = await seedLegacyCheckpoint(auth, sessionId, records, cursor, [{ groupId: `track:${track}`, resolution }]);
+      assert.equal(prepared.materialization.records.length, 201);
+      assert.equal(prepared.materialization.changes.length, resolution === "keep_account" ? 201 : 203);
+      assert.equal(prepared.materialization.records[0]!.fingerprint, records[0]!.fingerprint);
+      assert.equal(prepared.materialization.records[0]!.version, 2);
+      await assertCheckpointDenied(auth, sessionId, prepared);
+    });
+  }
+}
+
+async function assertCompletedCheckpoint(auth: Awaited<ReturnType<typeof createRegisteredAuthUser>>, sessionId: string, prepared: Awaited<ReturnType<typeof prepareConfirmedTransfer>>, expected: AdoptionMaterialization, sourceRevision: number) {
+  const payload = { canonicalVersion, deviceId, decisionFingerprint: prepared.confirm.json().decisionFingerprint };
+  const url = `/v1/account-data/adoption/transfer/${sessionId}/apply`;
+  const response = await context.app.inject({ method: "POST", url, headers: prepared.headers, payload });
+  assert.equal(response.statusCode, 200, JSON.stringify(response.json()));
+  const completed = await checkpointSnapshot(auth.userId, sessionId);
+  assert.equal(completed.operation.state, "complete");
+  assert.equal(completed.operation.applyCursor, expected.records.length);
+  assert.equal(completed.operation.applyChangeCount, expected.changes.length);
+  assert.equal(completed.source.accountRevision, sourceRevision + expected.changes.length);
+  assert.equal(completed.source.generation, completed.operation.targetGeneration);
+  assert.equal(completed.markers.length, 1);
+  const changed = new Map(expected.changes.map((change) => [adoptionTransferRecordKey(change.record), change.mutationId]));
+  const rows = completed.rows.map(([, row]) => row as Record<string, unknown>);
+  assert.equal(rows.length, expected.records.length);
+  for (const record of expected.records) {
+    const row = rows.find((candidate) => candidate.recordType === record.recordType && candidate.trackId === record.trackId && candidate.targetId === record.recordId)!;
+    assert.ok(row);
+    assert.deepEqual([row.fingerprint, row.version, row.state], [record.fingerprint, record.version, record.state]);
+    const key = adoptionTransferRecordKey(record);
+    assert.equal(row.lastMutationId, changed.get(key) ?? `adoption_carry_${sessionId.replaceAll("-", "")}_${createHash("sha256").update(key, "utf8").digest("hex").slice(0, 24)}`);
+  }
+  const replay = await context.app.inject({ method: "POST", url, headers: prepared.headers, payload });
+  assert.equal(replay.statusCode, 200);
+  assert.deepEqual(replay.json(), response.json());
+  assert.deepEqual(await checkpointSnapshot(auth.userId, sessionId), completed);
+}
+
+for (const cursor of [0, 200, 201]) {
+  test(`legacy compatible G0 checkpoint cursor ${cursor} resumes exactly`, async () => {
+    const auth = await createRegisteredAuthUser(context);
+    const sessionId = `compatible-${cursor}`;
+    const records = Array.from({ length: 201 }, (_, i) => learningRecord(`compatible-${i}`, `compatible-track-${i}`));
+    const prepared = await seedLegacyCheckpoint(auth, sessionId, records, cursor);
+    await assertCompletedCheckpoint(auth, sessionId, prepared, prepared.materialization, 0);
+  });
+}
+
+for (const resolution of ["keep_account", "keep_guest"] as const) {
+  for (const cursor of [0, 200, 201]) {
+    test(`current ${resolution} checkpoint cursor ${cursor} resumes exactly`, async () => {
+      const auth = await createRegisteredAuthUser(context);
+      const track = "aws-certified-solutions-architect-associate";
+      const active = await seedAccountGoalPlan(auth, goalPlanRecords(track, "2027-09-09"));
+      const guestPair = goalPlanRecords(track, "2027-10-10");
+      const ungrouped = Array.from({ length: 199 }, (_, i) => learningRecord(`current-${i}`, `current-track-${i}`));
+      const sessionId = `current-${resolution}-${cursor}`;
+      const prepared = await prepareConfirmedTransfer(auth, sessionId, [...guestPair, ...ungrouped], [{ groupId: `track:${track}`, resolution }]);
+      // Interrupt the real current producer at the requested transaction boundary.
+      const interrupted = buildTransferTransactionRotationApp(auth.userId, cursor === 0 ? 2 : cursor === 200 ? 3 : 4);
+      const response = await interrupted.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers: prepared.headers, payload: { canonicalVersion, deviceId } });
+      assert.equal(response.statusCode, 409);
+      assert.deepEqual(response.json(), { error: { code: "authorization_generation_conflict" } });
+      assert.equal((await preparedOperation(auth.userId, sessionId)).applyCursor, cursor);
+      await interrupted.close();
+      await firestore().collection("users").doc(auth.userId).update({ authorizationGeneration: 1 });
+      const grouped = resolution === "keep_account" ? active.records.map(progressRecordToMergeRecord) : guestPair.map((record) => ({ ...record, version: 2 }));
+      const records = [...grouped, ...ungrouped.map((record) => ({ ...record, version: 1 }))];
+      const changed = resolution === "keep_account" ? records.slice(grouped.length) : records;
+      const expected = { records, changes: changed.map((record) => ({ record, remote: undefined, mutationId: adoptionMutationId(sessionId, mergeRecordKey(record), record.fingerprint) })) };
+      await assertCompletedCheckpoint(auth, sessionId, prepared, expected, active.accountRevision);
+    });
+  }
+}
+async function preparedOperation(userId: string, sessionId: string) { return (await transferRefFor(userId, sessionId).get()).data()!; }
+
+// Persisted counters are a strict contract, including zero and missing values.
+test("applying checkpoints reject malformed and inconsistent counters without writes", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const sessionId = "malformed-checkpoint";
+  const prepared = await seedLegacyCheckpoint(auth, sessionId, [learningRecord("malformed-record", "malformed-track")], 0);
+  const original = await preparedOperation(auth.userId, sessionId);
+  const fields = ["applyTotal", "applyChangeCount", "applySourceGeneration", "applySourceRevision", "applyAccountRevision", "applyCursor"];
+  for (const field of fields) {
+    for (const value of [null, "0", -1, 0.5, Number.MAX_SAFE_INTEGER + 1, FieldValue.delete()]) {
+      await prepared.operation.update({ [field]: value });
+      await assertCheckpointDenied(auth, sessionId, prepared);
+      await prepared.operation.set(original);
+    }
+  }
+  for (const change of [
+    { applyTotal: 2 }, { applyChangeCount: 0 }, { applyAccountRevision: 0 }, { applyCursor: 2 },
+    // Self-consistent checkpoint values cannot replace the captured source identity.
+    { applySourceGeneration: 1 }, { applySourceRevision: 1, applyAccountRevision: 2 },
+  ]) {
+    await prepared.operation.update(change);
+    await assertCheckpointDenied(auth, sessionId, prepared);
+    await prepared.operation.set(original);
+  }
+});
+
+test("new adoption rejects source revision addition overflow before reservation", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  await firestore().collection("users").doc(auth.userId).collection("syncMetadata").doc("account").set({ accountRevision: Number.MAX_SAFE_INTEGER });
+  const sessionId = "new-revision-overflow";
+  const prepared = await prepareConfirmedTransfer(auth, sessionId, [learningRecord("overflow-record", "overflow-track")]);
+  await assertCheckpointDenied(auth, sessionId, prepared);
+  assert.equal((await preparedOperation(auth.userId, sessionId)).state, "preview_ready");
+});
+
+for (const boundary of ["lease", "chunk", "promotion"] as const) {
+  test(`checkpoint counter tamper at transactional ${boundary} reread refuses writes`, async () => {
+    const auth = await createRegisteredAuthUser(context);
+    const sessionId = `reread-${boundary}`;
+    const prepared = await seedLegacyCheckpoint(auth, sessionId, [learningRecord("reread-record", "reread-track")], 0);
+    let count = 0;
+    let snapshot: Awaited<ReturnType<typeof checkpointSnapshot>> | undefined;
+    const at = boundary === "lease" ? 1 : boundary === "chunk" ? 2 : 3;
+    const racedDb = new Proxy(firestore(), {
+      get(target, property) {
+        const value = Reflect.get(target, property, target) as unknown;
+        if (property !== "runTransaction" || typeof value !== "function") return typeof value === "function" ? value.bind(target) : value;
+        return async (...args: unknown[]) => {
+          count += 1;
+          if (count === at) {
+            await prepared.operation.update({ applyChangeCount: 2, applyAccountRevision: 2 });
+            snapshot = await checkpointSnapshot(auth.userId, sessionId);
+          }
+          // The hook changes stored data; all reads, retries and writes remain real SDK transactions.
+          return (value as (...callArgs: unknown[]) => Promise<unknown>).apply(target, args);
+        };
+      },
+    }) as Firestore;
+    const app = buildApplication({ environment: testEnvironment, firestore: null, verifier: createFirebaseTokenVerifier(testEnvironment), appCheckVerifier: { verify: async (token) => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } }, stores: { ...context.stores, progress: new FirestoreProgressStore(racedDb) } });
+    try {
+      const response = await app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers: prepared.headers, payload: { canonicalVersion, deviceId } });
+      assert.equal(count, at);
+      assert.equal(response.statusCode, 409, JSON.stringify(response.json()));
+      assert.deepEqual(response.json(), { error: { code: "adoption_transfer_apply_cursor_conflict" } });
+      assert.ok(snapshot);
+      assert.deepEqual(await checkpointSnapshot(auth.userId, sessionId), snapshot);
+      await assertCheckpointDenied(auth, sessionId, prepared);
+    } finally { await app.close(); }
+  });
+}
+
+for (const fence of ["target_owner", "foreign_lease"] as const) {
+  test(`compatible checkpoint preserves ${fence} fence`, async () => {
+    const auth = await createRegisteredAuthUser(context);
+    const sessionId = `checkpoint-${fence}`;
+    const prepared = await seedLegacyCheckpoint(auth, sessionId, [learningRecord("fence-record", "fence-track")], 0);
+    const user = firestore().collection("users").doc(auth.userId);
+    if (fence === "target_owner") await user.collection("progressGenerations").doc("1").update({ sourceSessionId: "foreign-session" });
+    else await user.collection("syncMetadata").doc("account").update({ adoptionPromotionSessionId: "foreign-session", adoptionPromotionLeaseExpiresAt: Timestamp.fromMillis(Date.now() + 60_000) });
+    const before = await checkpointSnapshot(auth.userId, sessionId);
+    const response = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers: prepared.headers, payload: { canonicalVersion, deviceId } });
+    assert.equal(response.statusCode, 409, JSON.stringify(response.json()));
+    assert.deepEqual(response.json(), { error: { code: "adoption_transfer_generation_conflict" } });
+    assert.deepEqual(await checkpointSnapshot(auth.userId, sessionId), before);
+  });
+}
+
+test("empty new adoption completes once and replays exact stored bytes", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const sessionId = "empty-new-complete";
+  const prepared = await prepareConfirmedTransfer(auth, sessionId, []);
+  await assertCompletedCheckpoint(auth, sessionId, prepared, { records: [], changes: [] }, 0);
+});
+
+test("completed historical adoption replays committed history without reinterpretation", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const sessionId = "completed-historical-replay";
+  const track = "aws-certified-solutions-architect-associate";
+  await seedAccountGoalPlan(auth, goalPlanRecords(track, "2027-09-09"));
+  const prepared = await seedLegacyCheckpoint(auth, sessionId, goalPlanRecords(track, "2027-10-10"), 2, [{ groupId: `track:${track}`, resolution: "keep_account" }]);
+  const user = firestore().collection("users").doc(auth.userId);
+  const metadata = user.collection("syncMetadata").doc("account");
+  const old = await preparedOperation(auth.userId, sessionId);
+  const target = user.collection("progressGenerations").doc(String(old.targetGeneration));
+  // Model the old producer's already committed promotion, not a resumable operation.
+  await firestore().runTransaction(async (transaction) => {
+    await transaction.getAll(prepared.operation, metadata, target);
+    const committedAt = Timestamp.now();
+    transaction.set(metadata, { generation: old.targetGeneration, activeGeneration: old.targetGeneration, accountRevision: old.applyAccountRevision, adoptionPromotionSessionId: FieldValue.delete(), adoptionPromotionTargetGeneration: FieldValue.delete(), adoptionPromotionSourceGeneration: FieldValue.delete(), adoptionPromotionSourceRevision: FieldValue.delete(), adoptionPromotionLeaseExpiresAt: FieldValue.delete(), updatedAt: committedAt }, { merge: true });
+    transaction.set(target, { state: "active", updatedAt: committedAt, expiresAt: FieldValue.delete() }, { merge: true });
+    transaction.set(prepared.operation.collection("markers").doc(String(old.targetGeneration)), { sessionId, targetGeneration: old.targetGeneration, accountRevision: old.applyAccountRevision, committedAt, expiresAt: old.expiresAt });
+    transaction.update(prepared.operation, { state: "complete", generation: old.targetGeneration, activeGeneration: old.targetGeneration, accountRevision: old.applyAccountRevision, committedAt, updatedAt: committedAt });
+  });
+  const before = await checkpointSnapshot(auth.userId, sessionId);
+  assert.equal(before.source.accountRevision, 4); // The pre-fix result is history, not recalculated as keep_account.
+  assert.deepEqual(before.source.records.map((record) => record.fingerprint).sort(), prepared.materialization.records.map((record) => record.fingerprint).sort());
+  for (let repeat = 0; repeat < 2; repeat += 1) {
+    const replay = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers: prepared.headers, payload: { canonicalVersion, deviceId } });
+    assert.equal(replay.statusCode, 200, JSON.stringify(replay.json()));
+    assert.equal(replay.json().state, "complete");
+    assert.equal(replay.json().accountRevision, 4);
+    assert.deepEqual(await checkpointSnapshot(auth.userId, sessionId), before);
+  }
+});
+
+for (const fence of ["source_generation", "source_revision", "device", "decision", "expected_generation"] as const) {
+  test(`compatible checkpoint preserves ${fence} request or source fence`, async () => {
+    const auth = await createRegisteredAuthUser(context);
+    const sessionId = `fence-${fence}`;
+    const prepared = await seedLegacyCheckpoint(auth, sessionId, [learningRecord("source-fence-record", "source-fence-track")], 0);
+    const metadata = firestore().collection("users").doc(auth.userId).collection("syncMetadata").doc("account");
+    if (fence === "source_generation") await metadata.update({ generation: 2 });
+    if (fence === "source_revision") await metadata.update({ accountRevision: 1 });
+    const before = await checkpointSnapshot(auth.userId, sessionId);
+    const response = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers: prepared.headers, payload: {
+      canonicalVersion, deviceId: fence === "device" ? "cccccccc-cccc-4ccc-8ccc-cccccccccccc" : deviceId,
+      decisionFingerprint: fence === "decision" ? "f".repeat(64) : prepared.confirm.json().decisionFingerprint,
+      ...(fence === "expected_generation" ? { expectedGeneration: 1 } : {}),
+    } });
+    const code = fence.startsWith("source_") ? "adoption_transfer_preview_stale" : fence === "device" ? "adoption_transfer_device_mismatch" : fence === "decision" ? "adoption_transfer_decision_mismatch" : "adoption_transfer_generation_conflict";
+    assert.equal(response.statusCode, 409, JSON.stringify(response.json()));
+    assert.deepEqual(response.json(), { error: { code } });
+    assert.deepEqual(await checkpointSnapshot(auth.userId, sessionId), before);
   });
 }

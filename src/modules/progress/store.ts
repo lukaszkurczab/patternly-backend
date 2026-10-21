@@ -298,6 +298,24 @@ function buildAdoptionMaterialization(operationId: string, guestRecords: readonl
   }
 }
 
+// A resumed prefix is safe only for the exact materialization built from this captured source.
+function assertAdoptionApplyCheckpoint(data: Record<string, unknown>, materialization: AdoptionMaterialization, sourceGeneration: number, sourceRevision: number): Readonly<{ cursor: number; total: number; accountRevision: number }> {
+  function counter(field: string): number {
+    const value = data[field];
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error("adoption_transfer_apply_cursor_conflict");
+    return value;
+  }
+  const total = counter("applyTotal");
+  const count = counter("applyChangeCount");
+  const generation = counter("applySourceGeneration");
+  const revision = counter("applySourceRevision");
+  const accountRevision = counter("applyAccountRevision");
+  const cursor = counter("applyCursor");
+  const expectedRevision = sourceRevision + materialization.changes.length;
+  if (total !== materialization.records.length || count !== materialization.changes.length || generation !== sourceGeneration || revision !== sourceRevision || !Number.isSafeInteger(expectedRevision) || accountRevision !== expectedRevision || cursor > total) throw new Error("adoption_transfer_apply_cursor_conflict");
+  return { cursor, total, accountRevision };
+}
+
 function operationRef(db: Firestore, userId: string, operationId: string): DocumentReference { return db.collection(COLLECTIONS.users).doc(userId).collection("syncOperations").doc(operationId); }
 function syncBatchRef(db: Firestore, userId: string, metadata: SyncBatchMetadata): DocumentReference { return db.collection(COLLECTIONS.users).doc(userId).collection("syncBatches").doc(createHash("sha256").update(`${metadata.sessionId}:${metadata.batchId}`, "utf8").digest("hex")); }
 function syncBatchFingerprint(metadata: SyncBatchMetadata, expectedAccountRevision: number, mutations: readonly ProgressMutation[]): string { return createHash("sha256").update(canonicalJson({ metadata, expectedAccountRevision, mutations }), "utf8").digest("hex"); }
@@ -838,6 +856,9 @@ export class FirestoreProgressStore implements ProgressStore {
     const domainConfirmation: GuestMergeConfirmation = { operationId: adoption.preview.operationId, previewFingerprint: String(operationData.previewFingerprint), resolutions: storedConfirmation.resolutions, groupChoices: storedConfirmation.groupChoices };
     validateGuestMergeConfirmation(adoption.preview, domainConfirmation);
     const materialization = buildAdoptionMaterialization(sessionId, guestSnapshot.records, active.records.map(progressRecordToMergeRecord), domainConfirmation);
+    const sourceGeneration = active.generation ?? 0;
+    const sourceRevision = active.accountRevision;
+    if (transfer.state === "applying") assertAdoptionApplyCheckpoint(operationData, materialization, sourceGeneration, sourceRevision);
     const targetGeneration = transfer.targetGeneration;
     const targetGenerationRef = progressGenerationRef(this.db, userId, targetGeneration);
 
@@ -851,8 +872,9 @@ export class FirestoreProgressStore implements ProgressStore {
       const metadata = metadataSnapshot?.data() as Record<string, unknown> | undefined;
       if (currentData.deviceId !== parsed.deviceId || currentData.decisionFingerprint !== operationData.decisionFingerprint) throw new Error("adoption_transfer_decision_mismatch");
       if (currentTransfer.state === "complete") return currentData;
-      const previewGeneration = Number(currentData.previewGeneration ?? currentTransfer.expectedGeneration);
-      const previewRevision = Number(currentData.previewAccountRevision);
+      const previewGeneration = currentData.previewGeneration ?? currentTransfer.expectedGeneration;
+      const previewRevision = currentData.previewAccountRevision;
+      if (typeof previewGeneration !== "number" || typeof previewRevision !== "number") throw new Error("adoption_transfer_apply_cursor_conflict");
       if (!Number.isSafeInteger(previewRevision) || previewRevision < 0) throw new Error("adoption_transfer_revision_invalid");
       if (currentTransfer.state === "preview_ready") {
         assertAdoptionApplySource(metadata, previewGeneration, previewRevision);
@@ -860,15 +882,14 @@ export class FirestoreProgressStore implements ProgressStore {
         const applying = beginAdoptionApply(Object.freeze({ ...currentTransfer, records: [], chunks: [], decisions: [], resultChunks: [] }), currentTransfer.expectedGeneration, parsed.idempotencyKey ?? currentTransfer.idempotencyKey);
         const startedAt = now();
         const update = { state: applying.state, targetGeneration, applyCursor: 0, applyTotal: materialization.records.length, applyAccountRevision: previewRevision + materialization.changes.length, applyChangeCount: materialization.changes.length, applySourceGeneration: previewGeneration, applySourceRevision: previewRevision, applyStartedAt: startedAt, updatedAt: startedAt };
+        assertAdoptionApplyCheckpoint(update, materialization, sourceGeneration, sourceRevision);
         transaction.set(targetGenerationRef, { userId, generation: targetGeneration, sourceSessionId: sessionId, state: "building", createdAt: currentData.createdAt ?? startedAt, updatedAt: startedAt, expiresAt: currentData.expiresAt }, { merge: true });
         transaction.set(metadataRef, { adoptionPromotionSessionId: sessionId, adoptionPromotionTargetGeneration: targetGeneration, adoptionPromotionSourceGeneration: previewGeneration, adoptionPromotionSourceRevision: previewRevision, adoptionPromotionLeaseExpiresAt: adoptionPromotionLease(), updatedAt: startedAt }, { merge: true });
         transaction.update(operation, update);
         return { ...currentData, ...update };
       }
       if (currentTransfer.state !== "applying") throw new Error("adoption_transfer_precondition_failed");
-      const sourceGeneration = Number(currentData.applySourceGeneration);
-      const sourceRevision = Number(currentData.applySourceRevision);
-      if (!Number.isSafeInteger(sourceGeneration) || !Number.isSafeInteger(sourceRevision)) throw new Error("adoption_transfer_revision_invalid");
+      assertAdoptionApplyCheckpoint(currentData, materialization, sourceGeneration, sourceRevision);
       assertAdoptionApplySource(metadata, sourceGeneration, sourceRevision);
       const metadataLeaseOwner = metadata?.adoptionPromotionSessionId;
       if (metadataLeaseOwner !== sessionId || Number(metadata?.adoptionPromotionTargetGeneration) !== targetGeneration) throw new Error("adoption_transfer_generation_conflict");
@@ -883,13 +904,12 @@ export class FirestoreProgressStore implements ProgressStore {
     });
     transfer = readStoredAdoptionTransfer(operationData);
     if (transfer.state === "complete") return adoptionStatusFromData(operationData);
-    const applyTotal = Number(operationData.applyTotal ?? materialization.records.length);
-    let cursor = Number(operationData.applyCursor ?? 0);
-    if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > applyTotal || applyTotal !== materialization.records.length) throw new Error("adoption_transfer_cursor_invalid");
-    const applyAccountRevision = Number(operationData.applyAccountRevision);
-    const applySourceGeneration = Number(operationData.applySourceGeneration);
-    const applySourceRevision = Number(operationData.applySourceRevision);
-    if (!Number.isSafeInteger(applyAccountRevision) || applyAccountRevision < 0 || !Number.isSafeInteger(applySourceGeneration) || !Number.isSafeInteger(applySourceRevision)) throw new Error("adoption_transfer_revision_invalid");
+    const checkpoint = assertAdoptionApplyCheckpoint(operationData, materialization, sourceGeneration, sourceRevision);
+    const applyTotal = checkpoint.total;
+    let cursor = checkpoint.cursor;
+    const applyAccountRevision = checkpoint.accountRevision;
+    const applySourceGeneration = sourceGeneration;
+    const applySourceRevision = sourceRevision;
     const changedMutationIds = new Map(materialization.changes.map((change) => [adoptionTransferRecordKey(change.record), change.mutationId]));
     while (cursor < materialization.records.length) {
       const chunk: Array<{ ref: DocumentReference; value: Record<string, unknown> }> = [];
@@ -914,8 +934,9 @@ export class FirestoreProgressStore implements ProgressStore {
         if (!current?.exists) throw new Error("adoption_transfer_not_found");
         const data = asRecord(current.data(), "adoption_transfer");
         const metadata = metadataSnapshot?.data() as Record<string, unknown> | undefined;
-        if (data.state !== "applying" || Number(data.applyCursor ?? 0) !== cursor || Number(data.applyTotal) !== applyTotal) throw new Error("adoption_transfer_apply_cursor_conflict");
-        if (Number(data.applySourceGeneration) !== applySourceGeneration || Number(data.applySourceRevision) !== applySourceRevision || Number(data.targetGeneration) !== targetGeneration) throw new Error("adoption_transfer_generation_conflict");
+        assertAdoptionApplyCheckpoint(data, materialization, sourceGeneration, sourceRevision);
+        if (data.state !== "applying" || data.applyCursor !== cursor || data.applyTotal !== applyTotal) throw new Error("adoption_transfer_apply_cursor_conflict");
+        if (data.applySourceGeneration !== applySourceGeneration || data.applySourceRevision !== applySourceRevision || Number(data.targetGeneration) !== targetGeneration) throw new Error("adoption_transfer_generation_conflict");
         assertAdoptionApplySource(metadata, applySourceGeneration, applySourceRevision);
         if (!adoptionApplyLeaseIsValid(metadata, sessionId) || Number(metadata?.adoptionPromotionTargetGeneration) !== targetGeneration || Number(metadata?.adoptionPromotionSourceGeneration) !== applySourceGeneration || Number(metadata?.adoptionPromotionSourceRevision) !== applySourceRevision) throw new Error("adoption_transfer_generation_conflict");
         if (!targetGenerationSnapshot?.exists) throw new Error("adoption_transfer_generation_conflict");
@@ -936,8 +957,9 @@ export class FirestoreProgressStore implements ProgressStore {
       const data = asRecord(current.data(), "adoption_transfer");
       if (data.state === "complete") return data;
       const metadata = metadataSnapshot?.data() as Record<string, unknown> | undefined;
-      if (data.state !== "applying" || Number(data.applyCursor ?? 0) !== Number(data.applyTotal ?? -1) || Number(data.applyTotal) !== applyTotal) throw new Error("adoption_transfer_apply_incomplete");
-      if (Number(data.applySourceGeneration) !== applySourceGeneration || Number(data.applySourceRevision) !== applySourceRevision || Number(data.targetGeneration) !== targetGeneration) throw new Error("adoption_transfer_generation_conflict");
+      assertAdoptionApplyCheckpoint(data, materialization, sourceGeneration, sourceRevision);
+      if (data.state !== "applying" || data.applyCursor !== data.applyTotal || data.applyTotal !== applyTotal) throw new Error("adoption_transfer_apply_incomplete");
+      if (data.applySourceGeneration !== applySourceGeneration || data.applySourceRevision !== applySourceRevision || Number(data.targetGeneration) !== targetGeneration) throw new Error("adoption_transfer_generation_conflict");
       assertAdoptionApplySource(metadata, applySourceGeneration, applySourceRevision);
       if (!adoptionApplyLeaseIsValid(metadata, sessionId) || Number(metadata?.adoptionPromotionTargetGeneration) !== targetGeneration || Number(metadata?.adoptionPromotionSourceGeneration) !== applySourceGeneration || Number(metadata?.adoptionPromotionSourceRevision) !== applySourceRevision) throw new Error("adoption_transfer_generation_conflict");
       if (!targetGenerationSnapshot?.exists) throw new Error("adoption_transfer_generation_conflict");
