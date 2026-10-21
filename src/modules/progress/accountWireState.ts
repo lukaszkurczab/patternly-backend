@@ -26,8 +26,14 @@ function shape(x: unknown, required: Readonly<Record<string, Guard>>, extra: Rea
 const dictionary = (guard: Guard): Guard => x => object(x) && Object.entries(x).every(([key, value]) => text(key) && guard(value));
 const ref: Guard = x => shape(x, { trackId: text, questionId: text, contentVersion: text, artifactSha256: sha });
 const stages = ["repair24", "repair7", "manual_requested", "retention7", "retention14", "retention28"] as const;
-const source: Guard = x => shape(x, { source: one("due_queue", "manual_request"), reviewEntryId: text, sourceAttemptId: text, dueAt: timestamp, policyVersion: text, stage: one(...stages, "legacy_active_unqualified") }, { manualRequestId: text });
-const occurrence: Guard = x => shape(x, { occurrenceId: text, item: ref }, { reviewSourceSnapshot: source });
+const legacyUnitProof: Guard = x => shape(x, { sourceItem: ref, nodeId: text, mentalUnitId: text });
+const source: Guard = x => shape(x, { source: one("due_queue", "manual_request"), reviewEntryId: text, sourceAttemptId: text, dueAt: timestamp, policyVersion: text, stage: one(...stages, "legacy_active_unqualified") }, { manualRequestId: text, legacyUnitProof });
+const occurrence: Guard = x => {
+  if (!shape(x, { occurrenceId: text, item: ref }, { reviewSourceSnapshot: source })) return false;
+  const snapshot = x.reviewSourceSnapshot as R | undefined;
+  const proof = snapshot?.legacyUnitProof as R | undefined;
+  return !proof || ["trackId", "contentVersion", "artifactSha256"].every(key => (proof.sourceItem as R)[key] === (x.item as R)[key]);
+};
 const branch: Guard = x => shape(x, { occurrence, optionOrder: strings });
 const slot: Guard = x => shape(x, { slotId: text, sourceOccurrenceId: text, ordinaryBranch: branch, resolutionRule: one("incorrect_or_partial_after_three_materialized_submissions") }, { reviewedVariantBranch: branch, exactSourceBranch: branch });
 const caseState: Guard = x => shape(x, { policyVersion: one("claude-case-evidence-v1"), caseId: text, caseVersion: text, priorExposedStepIds: strings, hintShownStepIds: strings, solutionExposedStepIds: strings });
@@ -110,9 +116,19 @@ export function isAccountWireState(recordType: string, recordId: string, trackId
       (!Object.hasOwn(evidence, "evidence") || trackId === "claude-certified-architect-professional-certification");
   }
   if (recordType === "review_queue_entry") return (state.sourceItem as R).trackId === trackId;
-  if (recordType === "training_session_summary") return (state.itemOrder as R[]).every(entry => {
-    const item = entry.item as R;
-    return item.trackId === trackId && item.contentVersion === state.contentVersion && item.artifactSha256 === state.artifactSha256;
-  });
+  if (recordType === "training_session_summary") {
+    const planPinsMatch = (state.itemOrder as R[]).every(entry => {
+      const item = entry.item as R;
+      return item.trackId === trackId && item.contentVersion === state.contentVersion && item.artifactSha256 === state.artifactSha256;
+    });
+    const branches = (state.conditionalReinsertSlots as R[]).flatMap(slot => [slot.ordinaryBranch, slot.reviewedVariantBranch, slot.exactSourceBranch].filter(object));
+    return planPinsMatch && branches.every(branch => {
+      const snapshot = (branch.occurrence as R).reviewSourceSnapshot as R | undefined;
+      const proof = snapshot?.legacyUnitProof as R | undefined;
+      if (!proof) return true;
+      const sourceItem = proof.sourceItem as R;
+      return sourceItem.trackId === trackId && sourceItem.contentVersion === state.contentVersion && sourceItem.artifactSha256 === state.artifactSha256;
+    });
+  }
   return true;
 }
