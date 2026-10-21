@@ -126,7 +126,7 @@ async function requestJson(
 
 function parseSearch(payload: unknown, projectId: string, stage: "search" | "verify_absence" = "search"): readonly string[] {
   if (!isRecord(payload) || payload.object !== "list" || !Array.isArray(payload.items)
-    || !Object.hasOwn(payload, "next_page") || payload.next_page !== null) return fail(stage, "invalid_response");
+    || (Object.hasOwn(payload, "next_page") && payload.next_page !== null)) return fail(stage, "invalid_response");
   const ids: string[] = [];
   for (const item of payload.items) {
     if (!isRecord(item) || item.object !== "customer" || typeof item.id !== "string" || item.id.length === 0 || item.project_id !== projectId) {
@@ -155,7 +155,7 @@ async function readAliases(
     const result = await requestJson(input.fetch, safe.toString(), input.apiKey, input.timeoutMs, "aliases", input.baseUrl);
     const page = result.payload;
     if (!isRecord(page) || page.object !== "list" || !Array.isArray(page.items)
-      || !Object.hasOwn(page, "next_page") || (page.next_page !== null && typeof page.next_page !== "string")) fail("aliases", "invalid_response");
+      || (Object.hasOwn(page, "next_page") && page.next_page !== null && typeof page.next_page !== "string")) fail("aliases", "invalid_response");
     for (const item of page.items) {
       if (!isRecord(item) || item.object !== "customer.alias" || typeof item.id !== "string" || item.id.length === 0) fail("aliases", "invalid_response");
       if (item.id === input.appUserId) containsTarget = true;

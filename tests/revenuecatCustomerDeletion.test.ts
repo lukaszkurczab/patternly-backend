@@ -16,16 +16,16 @@ function response(payload: unknown, status = 200, options: { redirected?: boolea
   return { ok: status >= 200 && status < 300, status, redirected: options.redirected ?? false, url: options.url ?? "", json: async () => payload } as Response;
 }
 
-function search(items: readonly Record<string, unknown>[], next_page: unknown = null): Record<string, unknown> {
-  return { object: "list", items, next_page };
+function search(items: readonly Record<string, unknown>[], next_page?: unknown): Record<string, unknown> {
+  return { object: "list", items, ...(next_page === undefined ? {} : { next_page }) };
 }
 
 function customer(id = customerId, project = projectId): Record<string, unknown> {
   return { object: "customer", id, project_id: project };
 }
 
-function aliasesPage(ids: readonly string[], next_page: unknown = null): Record<string, unknown> {
-  return { object: "list", items: ids.map((id) => ({ object: "customer.alias", id, created_at: 1 })), next_page };
+function aliasesPage(ids: readonly string[], next_page?: unknown): Record<string, unknown> {
+  return { object: "list", items: ids.map((id) => ({ object: "customer.alias", id, created_at: 1 })), ...(next_page === undefined ? {} : { next_page }) };
 }
 
 function makeFetch(options: {
@@ -178,4 +178,78 @@ test("does not allow live network traffic to fixture origins", async () => {
   assert.throws(() => createRevenueCatCustomerDeletionClient({ ...config, baseUrl }, {}), (error: unknown) => error instanceof RevenueCatCustomerDeletionError && error.stage === "configuration");
   assert.throws(() => createRevenueCatCustomerDeletionClient({ ...config, baseUrl }, { allowTestFixtures: true }), (error: unknown) => error instanceof RevenueCatCustomerDeletionError && error.stage === "configuration");
   assert.throws(() => createRevenueCatCustomerDeletionClient({ ...config, apiKey: " secret " }, { fetch: async () => response({}), allowTestFixtures: true }), (error: unknown) => error instanceof RevenueCatCustomerDeletionError && error.stage === "configuration");
+});
+
+
+test("keeps null as a compatible terminal value for search, aliases, and 404 verification", async () => {
+  let searches = 0;
+  const fixture = makeFetch({ onRequest: async (url, init) => {
+    if (url.includes("/aliases")) return response(aliasesPage([appUserId], null));
+    if (init?.method === "DELETE") return response({}, 404);
+    return response(search(++searches === 1 ? [customer()] : [], null));
+  } });
+  assert.deepEqual(await create(fixture.fetch).deleteCustomer(appUserId), { status: "absent" });
+  assert.equal(fixture.requests.length, 4);
+});
+
+test("rejects present malformed or active search pagination before the delete fence", async () => {
+  for (const next_page of [undefined, false, 0, {}, [], "", `${baseUrl}/v2/projects/${projectId}/customers?starting_after=next`]) {
+    const fixture = makeFetch({ onRequest: async () => response({ object: "list", items: [], next_page }) });
+    let fenced = false;
+    await assert.rejects(create(fixture.fetch).deleteCustomer(appUserId, async () => { fenced = true; }),
+      (error: unknown) => error instanceof RevenueCatCustomerDeletionError && error.stage === "search" && error.kind === "invalid_response");
+    assert.equal(fixture.requests.length, 1);
+    assert.equal(fenced, false);
+  }
+});
+
+test("rejects malformed alias pagination and a foreign alias on the terminal omitted-field page", async () => {
+  const path = `/v2/projects/${projectId}/customers/${customerId}/aliases`;
+  const second = `${baseUrl}${path}?starting_after=page2&limit=100`;
+  const unsafe = [undefined, false, 0, {}, [], "", "https://evil.example/page", `${baseUrl}/v2/projects/projOther/customers/${customerId}/aliases?starting_after=next`, `${baseUrl}${path}?foreign=next`, `${baseUrl}${path}#fragment`];
+  for (const next_page of unsafe) {
+    const fixture = makeFetch({ aliasPages: [{ object: "list", items: [{ object: "customer.alias", id: appUserId }], next_page }] });
+    let fenced = false;
+    await assert.rejects(create(fixture.fetch).deleteCustomer(appUserId, async () => { fenced = true; }),
+      (error: unknown) => error instanceof RevenueCatCustomerDeletionError && error.stage === "aliases" && error.kind === "invalid_response");
+    assert.equal(fenced, false);
+    assert.equal(fixture.requests.some(({ init }) => init?.method === "DELETE"), false);
+  }
+  const foreign = makeFetch({ aliasPages: [aliasesPage([appUserId], second), aliasesPage(["another-account"])] });
+  let fenced = false;
+  await assert.rejects(create(foreign.fetch).deleteCustomer(appUserId, async () => { fenced = true; }),
+    (error: unknown) => error instanceof RevenueCatCustomerDeletionError && error.stage === "aliases" && error.kind === "identity_conflict");
+  assert.equal(foreign.requests.length, 3);
+  assert.equal(fenced, false);
+  assert.equal(foreign.requests.some(({ init }) => init?.method === "DELETE"), false);
+});
+
+test("rejects alias loops and excessive pages before deletion", async () => {
+  const path = `${baseUrl}/v2/projects/${projectId}/customers/${customerId}/aliases`;
+  for (const loop of [true, false]) {
+    let page = 0;
+    const fixture = makeFetch({ onRequest: async (url) => {
+      if (!url.includes("/aliases")) return response(search([customer()]));
+      page++;
+      return response(aliasesPage([appUserId], `${path}?starting_after=${loop ? "loop" : page}&limit=100`));
+    } });
+    await assert.rejects(create(fixture.fetch).deleteCustomer(appUserId),
+      (error: unknown) => error instanceof RevenueCatCustomerDeletionError && error.stage === "aliases" && error.kind === "invalid_response");
+    assert.equal(page, loop ? 2 : 500);
+    assert.equal(fixture.requests.some(({ init }) => init?.method === "DELETE"), false);
+  }
+});
+
+test("never confirms absence after 404 from a malformed or incomplete verification page", async () => {
+  for (const payload of [{ object: "list", items: [], next_page: false }, search([], "?starting_after=next"), { items: [] }]) {
+    let searches = 0;
+    const fixture = makeFetch({ onRequest: async (url, init) => {
+      if (url.includes("/aliases")) return response(aliasesPage([appUserId]));
+      if (init?.method === "DELETE") return response({}, 404);
+      return response(++searches === 1 ? search([customer()]) : payload);
+    } });
+    await assert.rejects(create(fixture.fetch).deleteCustomer(appUserId),
+      (error: unknown) => error instanceof RevenueCatCustomerDeletionError && error.stage === "verify_absence" && error.kind === "invalid_response");
+    assert.equal(fixture.requests.filter(({ init }) => init?.method === "DELETE").length, 1);
+  }
 });

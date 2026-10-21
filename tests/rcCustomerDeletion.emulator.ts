@@ -7,6 +7,7 @@ import { deleteApp, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, getFirestore, Timestamp } from "firebase-admin/firestore";
 import { validateIsolatedEmulatorRuntime } from "../scripts/isolated-emulator-test-runner.mjs";
+import { createRevenueCatCustomerDeletionClient } from "../src/infrastructure/revenuecat/customerDeletion.js";
 import { COLLECTIONS } from "../src/infrastructure/firestore/paths.js";
 import { createFirebaseAdminAuth } from "../src/infrastructure/firebase/adminAuth.js";
 import { PseudonymKeyRing } from "../src/infrastructure/security/pseudonymKeyRing.js";
@@ -94,12 +95,30 @@ TEST_GROUP("RC-DELETE-01 RevenueCat customer deletion isolated emulator tests", 
   test("uses the backend AppUserID and bound project, then leaves only a minimal terminal receipt", async () => {
     const fixture = await makeAccount();
     let calls: string[] = [];
-    const client = { projectId: REVENUECAT_PROJECT_ID, deleteCustomer: async (id: string) => { calls.push(id); return { status: "accepted" as const }; } };
+    const requests: Array<{ url: URL; method: string | undefined }> = [];
+    const client = createRevenueCatCustomerDeletionClient({ baseUrl: "https://api.revenuecat.test", apiKey: "fixture-only", projectId: REVENUECAT_PROJECT_ID }, {
+      allowTestFixtures: true,
+      fetch: async (input, init) => {
+        const url = new URL(input);
+        requests.push({ url, method: init?.method });
+        if (init?.method === "DELETE") {
+          calls.push(decodeURIComponent(url.pathname.split("/").at(-1)!));
+          return new Response(JSON.stringify({ object: "customer", id: fixture.userId, deleted_at: 123 }), { status: 200 });
+        }
+        const items = url.pathname.endsWith("/aliases")
+          ? [{ object: "customer.alias", id: fixture.userId }]
+          : [{ object: "customer", id: fixture.userId, project_id: REVENUECAT_PROJECT_ID }];
+        return new Response(JSON.stringify({ object: "list", items }), { status: 200 });
+      },
+    });
     const store = makeStore(fixture, client);
     const pending = await store.deleteAccount(fixture.userId, 1, fixture.operationId, fixture.secret);
     owned.proofs.push(pending.proofId);
     assert.equal(pending.status, "remote_deleted");
     assert.deepEqual(calls, [fixture.userId]);
+    assert.equal(requests.length, 3);
+    assert.equal(requests[0]!.url.searchParams.get("search"), fixture.userId);
+    assert.ok(requests.every(({ url }) => url.pathname.startsWith(`/v2/projects/${REVENUECAT_PROJECT_ID}/customers`)));
     assert.notEqual(calls[0], fixture.firebaseUid);
     const operationRef = db.collection(COLLECTIONS.accountDeletionOperations).doc(fixture.operationId);
     const checkpoint = (await operationRef.get()).get("revenueCatDeletion");
@@ -141,6 +160,41 @@ TEST_GROUP("RC-DELETE-01 RevenueCat customer deletion isolated emulator tests", 
     assert.deepEqual(operation.revenueCatDeletion, { projectId: REVENUECAT_PROJECT_ID, status: "absent" });
     assert.equal(operation.userId, undefined);
     assert.equal((await db.collection(COLLECTIONS.users).doc(fixture.userId).get()).exists, false);
+  });
+
+  test("malformed adapter pagination remains pending and the same operation resumes from an omitted-field empty search", async () => {
+    const fixture = await makeAccount();
+    let malformed = true;
+    const searches: string[] = [];
+    const client = createRevenueCatCustomerDeletionClient({ baseUrl: "https://api.revenuecat.test", apiKey: "fixture-only", projectId: REVENUECAT_PROJECT_ID }, {
+      allowTestFixtures: true,
+      fetch: async (input, init) => {
+        assert.equal(init?.method, "GET", "neither malformed nor absent search may issue DELETE");
+        const url = new URL(input);
+        assert.equal(url.pathname, `/v2/projects/${REVENUECAT_PROJECT_ID}/customers`);
+        searches.push(url.searchParams.get("search")!);
+        return new Response(JSON.stringify({ object: "list", items: [], ...(malformed ? { next_page: false } : {}) }), { status: 200 });
+      },
+    });
+    const store = makeStore(fixture, client);
+    await assert.rejects(store.deleteAccount(fixture.userId, 1, fixture.operationId, fixture.secret), { message: "remote_deletion_pending" });
+    const operationRef = db.collection(COLLECTIONS.accountDeletionOperations).doc(fixture.operationId);
+    const pending = (await operationRef.get()).data()!;
+    assert.equal(pending.phase, "revenuecat_deleting");
+    assert.deepEqual(pending.revenueCatDeletion, { projectId: REVENUECAT_PROJECT_ID, status: "pending" });
+    assert.equal(pending.userId, fixture.userId);
+    assert.equal((await db.collection(COLLECTIONS.users).doc(fixture.userId).get()).exists, true);
+    malformed = false;
+    const result = await store.resumeDeletion(fixture.operationId, fixture.secret);
+    assert.equal(result?.status, "complete");
+    owned.proofs.push(result!.proofId!);
+    const terminal = (await operationRef.get()).data()!;
+    assert.deepEqual(terminal.revenueCatDeletion, { projectId: REVENUECAT_PROJECT_ID, status: "absent" });
+    assert.equal(terminal.userId, undefined);
+    assert.equal((await db.collection(COLLECTIONS.users).doc(fixture.userId).get()).exists, false);
+    assert.deepEqual(searches, [fixture.userId, fixture.userId]);
+    await store.resumeDeletion(fixture.operationId, fixture.secret);
+    assert.equal(searches.length, 2, "terminal retry must reuse the receipt");
   });
 
   test("provider errors before and after a modeled effect preserve account data until a receipt is persisted", async () => {
