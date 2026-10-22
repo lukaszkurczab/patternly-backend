@@ -4,12 +4,13 @@ import { attemptState } from "./progressFixtures.js";
 import assert from "node:assert/strict";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import test from "node:test";
+import { isDeepStrictEqual } from "node:util";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { buildApplication, type ApplicationDependencies } from "../src/api/app.js";
 import { loadEnvironment } from "../src/config/environment.js";
 import { createFirebaseTokenVerifier } from "../src/infrastructure/firebase/verifier.js";
-import { COLLECTIONS, identityDocumentId } from "../src/infrastructure/firestore/paths.js";
+import { COLLECTIONS, identityDocumentId, progressDocumentId } from "../src/infrastructure/firestore/paths.js";
 import { addUtcCalendarMonths } from "../src/infrastructure/time/utcCalendar.js";
 import { createContentReportSchema } from "../src/modules/content-reports/contracts.js";
 import { FixtureAccountLifecycleStore as FirestoreAccountLifecycleStore } from "./revenueCatDeletionFixture.js";
@@ -898,7 +899,34 @@ test("revoked Firebase verifier results fail closed at the backend boundary", as
   assert.deepEqual(response.json(), { error: { code: "authentication_required" } });
 });
 
-test("Firestore transaction preserves sync CAS and idempotency under concurrent retries", async () => {
+test("Firestore transaction preserves sync CAS and idempotency under concurrent retries", async (t) => {
+  const safeError = (error: unknown) => {
+    const value = error as { code?: unknown; message?: unknown } | null;
+    const code = typeof value?.code === "number" && Number.isInteger(value.code) && value.code >= 0 && value.code <= 16 ? value.code : null;
+    const message = typeof value?.message === "string" ? value.message : "";
+    const category = /transaction is invalid or closed/iu.test(message) ? "transaction_invalid_or_closed"
+      : /transaction lock timeout/iu.test(message) ? "transaction_lock_timeout"
+      : /transaction has expired/iu.test(message) ? "transaction_expired"
+      : code === 10 ? "aborted" : code === 4 ? "deadline_exceeded" : code === 14 ? "unavailable"
+      : ["mutation_id_reuse", "sync_batch_invalid", "progress_record_invalid", "progress_fingerprint_mismatch"].includes(message) ? message : "other";
+    return { code, category };
+  };
+  let calls = 0;
+  const escaped: Array<{ invocation: number; stage: string; code: number | null; category: string }> = [];
+  const progress = new Proxy(context.stores.progress, { get(target, property) {
+    if (property === "applyBatch") return async (...args: Parameters<typeof target.applyBatch>) => {
+      const invocation = ++calls;
+      try { return await target.applyBatch(...args); } catch (error) {
+        if (escaped.length < 2) escaped.push({ invocation, stage: "progress.applyBatch_rejection", ...safeError(error) });
+        throw error;
+      }
+    };
+    const value: unknown = Reflect.get(target, property, target);
+    return typeof value === "function" ? value.bind(target) : value;
+  } });
+  const diagnosticApp = buildAppWithOverrides({ progress });
+  t.after(() => diagnosticApp.close());
+  await diagnosticApp.ready();
   const auth = await createRegisteredAuthUser(context);
   const mutation = {
     mutationId: `mutation-${Date.now()}-0001`,
@@ -913,9 +941,42 @@ test("Firestore transaction preserves sync CAS and idempotency under concurrent 
   const headers = { authorization: `Bearer ${auth.idToken}`, "x-firebase-appcheck": TEST_APP_CHECK_TOKEN };
   const userId = (await context.app.inject({ method: "GET", url: "/v1/me", headers })).json().user.id as string;
   const [first, second] = await Promise.all([
-    context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(0, [mutation]) }),
-    context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(0, [mutation]) }),
+    diagnosticApp.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(0, [mutation]) }),
+    diagnosticApp.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(0, [mutation]) }),
   ]);
+  if (first.statusCode !== 200 || second.statusCode !== 200) {
+    // Read only after both requests settle, before assertions/afterEach erase evidence.
+    let readback: object;
+    try {
+      const userRef = firestore().collection("users").doc(userId);
+      const [metadata, record, receipt] = await firestore().getAll(
+        userRef.collection("syncMetadata").doc("account"),
+        userRef.collection("progress").doc(progressDocumentId(mutation)),
+        userRef.collection("syncMutations").doc(mutation.mutationId),
+      );
+      const batches = await userRef.collection("syncBatches").limit(2).get();
+      const matching = batches.docs.filter((document) => document.get("sessionId") === "emulator-sync-session" && document.get("batchId") === "batch-0");
+      const batch = matching.length === 1 ? matching[0]!.data() : undefined;
+      const current = record!.data();
+      const receiptData = receipt!.data();
+      const acknowledged = first.statusCode === 200 ? first.json() : second.statusCode === 200 ? second.json() : undefined;
+      const integer = (value: unknown) => Number.isSafeInteger(value) ? value : null;
+      const receiptTimestampsValid = receiptData?.createdAt instanceof Timestamp && receiptData.expiresAt instanceof Timestamp;
+      readback = {
+        accountRevision: integer(metadata!.get("accountRevision")),
+        recordExists: record!.exists, version: integer(current?.version),
+        recordBindingMatches: current?.kind === mutation.kind && current?.recordType === mutation.recordType && current?.trackId === mutation.trackId && current?.targetId === mutation.targetId && current?.fingerprint === mutation.fingerprint && current?.lastMutationId === mutation.mutationId,
+        stateMatches: isDeepStrictEqual(current?.state, mutation.state),
+        receiptExists: receipt!.exists, appliedVersion: integer(receiptData?.appliedVersion),
+        receiptBindingMatches: receiptData?.mutationId === mutation.mutationId && receiptData?.fingerprint === mutation.fingerprint && receiptData?.targetId === mutation.targetId && receiptData?.recordType === mutation.recordType && receiptData?.trackId === mutation.trackId,
+        receiptTimestampsValid, receiptTTLms: receiptTimestampsValid ? receiptData.expiresAt.toMillis() - receiptData.createdAt.toMillis() : null,
+        batchScanCount: batches.size, matchingBatchCount: matching.length,
+        batchExpectedRevisionMatches: batch?.expectedAccountRevision === 0,
+        batchResultMatchesAcknowledgement: acknowledged !== undefined && isDeepStrictEqual(batch?.result, acknowledged),
+      };
+    } catch (error) { readback = { stage: "post_pair_readback_unavailable", ...safeError(error) }; }
+    t.diagnostic(JSON.stringify({ stage: "concurrent_sync_failure", statuses: [first.statusCode, second.statusCode], calls, escaped, readback }));
+  }
   assert.equal(first.statusCode, 200, first.body);
   assert.equal(second.statusCode, 200, second.body);
   assert.equal(first.json().applied.length, 1);
@@ -926,14 +987,14 @@ test("Firestore transaction preserves sync CAS and idempotency under concurrent 
   assert.equal(persistedMutation.expiresAt.toMillis() - persistedMutation.createdAt.toMillis(), 30 * 24 * 60 * 60 * 1_000);
   const retryCreatedAt = persistedMutation.createdAt.toMillis();
   const retryExpiresAt = persistedMutation.expiresAt.toMillis();
-  const replay = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(0, [mutation]) });
+  const replay = await diagnosticApp.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(0, [mutation]) });
   assert.equal(replay.statusCode, 200);
   assert.equal(replay.json().applied.length, 1);
   const replayedMutation = (await firestore().collection("users").doc(userId).collection("syncMutations").doc(mutation.mutationId).get()).data();
   assert.equal(replayedMutation?.createdAt.toMillis(), retryCreatedAt);
   assert.equal(replayedMutation?.expiresAt.toMillis(), retryExpiresAt);
   const conflictState = attemptState("item-1", mutation.trackId, "mastered");
-  const conflict = await context.app.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(1, [{ ...mutation, mutationId: `${mutation.mutationId}-conflict`, expectedVersion: null, state: conflictState, fingerprint: createMergeRecordFingerprint({ recordId: "item-1", recordType: "training_attempt", state: conflictState, trackId: mutation.trackId }) }]) });
+  const conflict = await diagnosticApp.inject({ method: "POST", url: "/v1/progress/sync", headers, payload: canonicalSyncPayload(1, [{ ...mutation, mutationId: `${mutation.mutationId}-conflict`, expectedVersion: null, state: conflictState, fingerprint: createMergeRecordFingerprint({ recordId: "item-1", recordType: "training_attempt", state: conflictState, trackId: mutation.trackId }) }]) });
   assert.equal(conflict.statusCode, 409);
   assert.deepEqual(conflict.json(), { error: { code: "version_conflict" } });
   const latest = await context.stores.progress.readSnapshot(userId);
