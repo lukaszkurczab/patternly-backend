@@ -6,6 +6,7 @@ import test from "node:test";
 import { FieldValue, Timestamp, type Firestore, type Transaction } from "firebase-admin/firestore";
 
 import { buildApplication } from "../src/api/app.js";
+import { RetentionPurgeService } from "../src/modules/retention-purge/service.js";
 import { FirestoreProgressStore } from "../src/modules/progress/store.js";
 import { adoptionTransferRecordKey, createAdoptionSnapshotSeal, createAdoptionTransferChunkFingerprint } from "../src/modules/users/adoptionTransfer.js";
 import { assertGoalPlanBundles, buildGuestMergePreview, mergeRecordKey, progressRecordToMergeRecord, createMergeRecordFingerprint, type GuestMergeConfirmation, type GuestMergeRecord } from "../src/modules/users/merge.js";
@@ -130,6 +131,12 @@ test("canonical transfer persists chunks, applies one generation, and retries sa
   assert.equal(Object.hasOwn(operation!, "protocolVersion"), false);
   assert.equal(Object.hasOwn(operation!, "contentIdentitySchema"), false);
   assert.equal((await firestore().collection("users").doc(accountId).collection("progressGenerations").doc("1").collection("records").get()).size, records.length);
+  const target = firestore().collection("users").doc(accountId).collection("progressGenerations").doc("1");
+  assert.equal((await target.get()).get("expiresAt"), undefined);
+  for (const row of (await target.collection("records").get()).docs) assert.equal(row.get("expiresAt"), undefined, "permanent active progress must not match records TTL");
+  for (const row of (await firestore().collection("accounts").doc(accountId).collection("adoptionTransfers").doc(sessionId).collection("records").get()).docs) {
+    assert.equal((row.get("expiresAt") as Timestamp).toMillis(), (operation!.expiresAt as Timestamp).toMillis(), "temporary source retains original deadline");
+  }
 });
 
 async function assertStagedGoalPlanGroupChoice(resolution: "keep_account" | "keep_guest") {
@@ -155,6 +162,10 @@ async function assertStagedGoalPlanGroupChoice(resolution: "keep_account" | "kee
   const applying = (await transferRef.get()).data()!;
   assert.equal(applying.state, "applying");
   assert.equal(applying.applyCursor, 200);
+  const buildingRef = firestore().collection("users").doc(auth.userId).collection("progressGenerations").doc(String(applying.targetGeneration));
+  assert.equal((await buildingRef.get()).get("state"), "building");
+  assert.equal(((await buildingRef.get()).get("expiresAt") as Timestamp).toMillis(), (applying.expiresAt as Timestamp).toMillis());
+  for (const row of (await buildingRef.collection("records").get()).docs) assert.equal(row.get("expiresAt"), undefined, "building target rows rely on retained parent cleanup fence");
   const source = await context.stores.progress.readSnapshot(auth.userId);
   assert.equal(source.generation, 0);
   assert.equal(source.accountRevision, seed.accountRevision);
@@ -180,6 +191,7 @@ async function assertStagedGoalPlanGroupChoice(resolution: "keep_account" | "kee
   assert.equal(targetRows.length, expected.length);
   const byKey = new Map(expected.map((record) => [`${record.recordType}:${record.trackId}:${record.recordId}`, record]));
   for (const row of targetRows) {
+    assert.equal(row.expiresAt, undefined);
     const key = `${row.recordType}:${row.trackId}:${row.targetId}`;
     const record = byKey.get(key);
     assert.ok(record, `unexpected materialized record ${key}`);
@@ -1333,3 +1345,75 @@ for (const fence of ["source_generation", "source_revision", "device", "decision
     assert.deepEqual(await checkpointSnapshot(auth.userId, sessionId), before);
   });
 }
+
+function beforePromotionApp(callback: () => Promise<void>) {
+  const db = firestore();
+  let calls = 0;
+  const observed = new Proxy(db, { get(target, property) {
+    const value = Reflect.get(target, property, target);
+    if (property !== "runTransaction") return typeof value === "function" ? value.bind(target) : value;
+    return async (transactionCallback: Parameters<Firestore["runTransaction"]>[0]) => {
+      calls += 1;
+      if (calls === 3) await callback();
+      return target.runTransaction(transactionCallback);
+    };
+  } }) as Firestore;
+  return buildApplication({ environment: testEnvironment, firestore: null, verifier: createFirebaseTokenVerifier(testEnvironment), appCheckVerifier: { verify: async token => { if (token !== TEST_APP_CHECK_TOKEN) throw new Error("app_check_invalid"); } }, stores: { ...context.stores, progress: new FirestoreProgressStore(observed) } });
+}
+
+test("retention claim fences real adoption promotion and resume before any active-generation write", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const sessionId = "retention-wins-promotion";
+  const { headers, confirm } = await prepareConfirmedTransfer(auth, sessionId, [learningRecord("retention-row", trackId)]);
+  const payload = { canonicalVersion, deviceId, decisionFingerprint: confirm.json().decisionFingerprint };
+  const cutoff = new Date(Date.now() + 86400000 + 60000);
+  const app = beforePromotionApp(async () => {
+    const claim = await new RetentionPurgeService(firestore()).run({ execute: true, maxDeletes: 1, now: cutoff });
+    assert.equal(claim.adoptions.claimed, 1); assert.equal(claim.adoptions.recordsDeleted, 0); assert.equal(claim.remainingDue, true);
+  });
+  try {
+    const stopped = await app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers, payload });
+    assert.equal(stopped.statusCode, 409, stopped.body);
+    assert.equal(stopped.json().error.code, "adoption_transfer_generation_conflict");
+  } finally { await app.close(); }
+  const operation = (await transferRefFor(auth.userId, sessionId).get()).data()!;
+  const parent = firestore().collection("users").doc(auth.userId).collection("progressGenerations").doc(String(operation.targetGeneration));
+  assert.equal((await parent.get()).get("state"), "purging");
+  assert.equal((await context.stores.progress.readSnapshot(auth.userId)).generation, 0);
+  assert.equal((await parent.collection("records").get()).size, 1);
+  const retry = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers, payload });
+  assert.equal(retry.statusCode, 409); assert.equal(retry.json().error.code, "adoption_transfer_generation_conflict");
+  const purged = await new RetentionPurgeService(firestore()).run({ execute: true, now: cutoff });
+  assert.equal(purged.adoptions.recordsDeleted, 1); assert.equal(purged.adoptions.confirmed, 1);
+  assert.equal((await parent.get()).exists, false); assert.equal((await parent.collection("records").get()).empty, true);
+  assert.equal((await transferRefFor(auth.userId, sessionId).collection("records").get()).size, 1, "cleanup never deletes temporary snapshot owned by records TTL");
+});
+
+test("real adoption promotion winning cleanup claim preserves every active record", async () => {
+  const auth = await createRegisteredAuthUser(context);
+  const sessionId = "promotion-wins-retention";
+  const { headers, confirm } = await prepareConfirmedTransfer(auth, sessionId, [learningRecord("promoted-row", trackId)]);
+  const payload = { canonicalVersion, deviceId, decisionFingerprint: confirm.json().decisionFingerprint };
+  const interrupted = beforePromotionApp(async () => { throw new Error("controlled_stop_before_promotion"); });
+  try {
+    const stopped = await interrupted.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers, payload });
+    assert.equal(stopped.statusCode, 500);
+  } finally { await interrupted.close(); }
+  const db = firestore(); let promoted = false;
+  const racedDb = new Proxy(db, { get(target, property) {
+    const value = Reflect.get(target, property, target);
+    if (property !== "runTransaction") return typeof value === "function" ? value.bind(target) : value;
+    return async (callback: Parameters<Firestore["runTransaction"]>[0]) => {
+      if (!promoted) {
+        promoted = true;
+        const result = await context.app.inject({ method: "POST", url: `/v1/account-data/adoption/transfer/${sessionId}/apply`, headers, payload });
+        assert.equal(result.statusCode, 200, result.body); assert.equal(result.json().state, "complete");
+      }
+      return target.runTransaction(callback);
+    };
+  } }) as Firestore;
+  const result = await new RetentionPurgeService(racedDb).run({ execute: true, now: new Date(Date.now() + 86400000 + 60000) });
+  assert.equal(promoted, true); assert.equal(result.adoptions.claimed, 0); assert.equal(result.adoptions.recordsDeleted, 0); assert.equal(result.adoptions.confirmed, 0); assert.equal(result.complete, true);
+  const snapshot = await context.stores.progress.readSnapshot(auth.userId);
+  assert.equal(snapshot.generation, 1); assert.equal(snapshot.records.length, 1); assert.equal(snapshot.records[0]!.targetId, "promoted-row");
+});

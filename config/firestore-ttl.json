@@ -102,10 +102,6 @@
       "fieldPath": "expiresAt"
     },
     {
-      "collectionGroup": "progressGenerations",
-      "fieldPath": "expiresAt"
-    },
-    {
       "collectionGroup": "contentReports",
       "fieldPath": "expiresAt"
     },

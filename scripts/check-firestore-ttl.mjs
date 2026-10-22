@@ -28,7 +28,6 @@ const expectedPolicies = [
   { collectionGroup: "decisions", fieldPath: "expiresAt" },
   { collectionGroup: "results", fieldPath: "expiresAt" },
   { collectionGroup: "markers", fieldPath: "expiresAt" },
-  { collectionGroup: "progressGenerations", fieldPath: "expiresAt" },
   { collectionGroup: "contentReports", fieldPath: "expiresAt" },
   { collectionGroup: "deletionProofs", fieldPath: "expiresAt" },
   { collectionGroup: "accountDeletionOperations", fieldPath: "expiresAt" },

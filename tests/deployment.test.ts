@@ -69,7 +69,6 @@ test("Firestore export retention and history indexes are repository-deployable",
     { collectionGroup: "decisions", fieldPath: "expiresAt" },
     { collectionGroup: "results", fieldPath: "expiresAt" },
     { collectionGroup: "markers", fieldPath: "expiresAt" },
-    { collectionGroup: "progressGenerations", fieldPath: "expiresAt" },
     { collectionGroup: "contentReports", fieldPath: "expiresAt" },
     { collectionGroup: "deletionProofs", fieldPath: "expiresAt" },
     { collectionGroup: "accountDeletionOperations", fieldPath: "expiresAt" },
@@ -80,7 +79,7 @@ test("Firestore export retention and history indexes are repository-deployable",
     { collectionGroup: "deletedIdentities", fieldPath: "expiresAt" },
     { collectionGroup: "audit", fieldPath: "expiresAt" },
   ]);
-  assert.equal(ttl.policies.length, 35);
+  assert.equal(ttl.policies.length, 34);
   assert.ok(ttl.policies.some((policy) => policy.collectionGroup === "accountRecoveryOperations" && policy.fieldPath === "expiresAt"), "legacy recovery operation records retain their existing TTL policy");
   assert.ok(ttl.policies.some((policy) => policy.collectionGroup === "accountRecoveryOperationResults" && policy.fieldPath === "expiresAt"), "legacy recovery result records retain their existing TTL policy");
   const indexes = JSON.parse(await readFile(resolve(process.cwd(), "firestore.indexes.json"), "utf8")) as { indexes?: readonly { collectionGroup?: unknown; queryScope?: unknown; fields?: readonly { fieldPath?: unknown; order?: unknown }[] }[] };

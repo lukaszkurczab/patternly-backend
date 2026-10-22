@@ -918,8 +918,8 @@ export class FirestoreProgressStore implements ProgressStore {
       for (const record of materialization.records.slice(cursor, cursor + ADOPTION_TRANSFER_FIRESTORE_BATCH_SIZE)) {
         const key = adoptionTransferRecordKey(record);
         const mutationId = changedMutationIds.get(key) ?? `adoption_carry_${sessionId.replaceAll("-", "")}_${createHash("sha256").update(key, "utf8").digest("hex").slice(0, 24)}`;
-        const value = { kind: adoptionKind(record.recordType), recordType: record.recordType, trackId: record.trackId, targetId: record.recordId, version: record.version, fingerprint: record.fingerprint, state: record.state, lastMutationId: mutationId, generation: targetGeneration, sourceSessionId: sessionId, updatedAt: chunkUpdatedAt, expiresAt: operationData.expiresAt };
-        const bytes = canonicalJsonBytes({ ...value, updatedAt: chunkUpdatedAt.toDate().toISOString(), expiresAt: operationData.expiresAt instanceof Timestamp ? operationData.expiresAt.toDate().toISOString() : null }) + 512;
+        const value = { kind: adoptionKind(record.recordType), recordType: record.recordType, trackId: record.trackId, targetId: record.recordId, version: record.version, fingerprint: record.fingerprint, state: record.state, lastMutationId: mutationId, generation: targetGeneration, sourceSessionId: sessionId, updatedAt: chunkUpdatedAt };
+        const bytes = canonicalJsonBytes({ ...value, updatedAt: chunkUpdatedAt.toDate().toISOString() }) + 512;
         if (chunk.length > 0 && chunkBytes + bytes > ADOPTION_APPLY_MAX_TRANSACTION_BYTES) break;
         if (bytes > ADOPTION_APPLY_MAX_TRANSACTION_BYTES) throw new Error("adoption_transfer_record_too_large");
         chunk.push({ ref: progressCollectionRef(this.db, userId, targetGeneration).doc(progressDocumentId({ kind: adoptionKind(record.recordType), recordType: record.recordType as ProgressMutation["recordType"], targetId: record.recordId, trackId: record.trackId })), value });
