@@ -413,3 +413,82 @@ test("A21 HTTP retries an identical committed pair batch after the real ACK time
     f.close();
   }
 });
+
+test("A21 HTTP keep_account accepts a remotely deleted whole pair and preserves unrelated pending work", { timeout: 30_000 }, async () => {
+  const f = await accountPairFixture();
+  try {
+    const { createMergeRecordFingerprint } = await import("../../src/modules/users/merge.ts");
+    const { getActiveMutationJournal } = load("storage/repositories/mutationJournalRepository.ts");
+    const initialPair = f.initial.records.filter(pairRecord);
+    assert.equal(initialPair.length, 2);
+    assert.ok(initialPair.every(record => record.state.deleted !== true));
+    const tombstones = initialPair.map(record => {
+      const state = { deleted: true };
+      const identity = { recordId: record.targetId, recordType: record.recordType, trackId: record.trackId, state };
+      return { mutationId: `a21-delete-${randomUUID()}`, kind: record.kind, recordType: record.recordType, trackId: record.trackId,
+        targetId: record.targetId, expectedVersion: record.version, fingerprint: createMergeRecordFingerprint(identity), state };
+    });
+    const deleted = await f.api.syncProgress({ ...request(tombstones[0], f.initial.accountRevision), mutations: tombstones });
+    assert.equal(wire.at(-1).status, 200);
+    assert.equal(deleted.applied.length, 2);
+    assert.equal(deleted.accountRevision, f.initial.accountRevision + 2);
+    const remoteDeleted = await f.api.getProgress();
+    const remotePair = remoteDeleted.records.filter(pairRecord);
+    assert.equal(remotePair.length, 2);
+    assert.equal(remoteDeleted.accountRevision, f.initial.accountRevision + 2);
+    for (const record of remotePair) {
+      const initial = initialPair.find(entry => entry.targetId === record.targetId && entry.recordType === record.recordType);
+      const mutation = tombstones.find(entry => entry.recordType === record.recordType);
+      assert.ok(initial && mutation);
+      assert.deepEqual(record.state, { deleted: true });
+      assert.equal(record.version, initial.version + 1);
+      assert.equal(record.fingerprint, mutation.fingerprint);
+    }
+
+    await commitPair("2027-02-02");
+    await saveActiveTrackId(OTHER_TRACK);
+    const pending = await data.ensureAccountOutboxFromLocalDataset(admission);
+    const unrelatedPending = pending.outbox.filter(entry => !pairRecord(entry));
+    const unrelatedAcknowledged = Object.fromEntries(Object.entries(pending.acknowledged).filter(([, entry]) => !pairRecord(entry)));
+    assert.ok(unrelatedPending.length > 0);
+    assert.ok(Object.keys(unrelatedAcknowledged).length > 0);
+    const localBefore = await localPair();
+    assert.ok(localBefore.goal && localBefore.plan);
+    const serverBefore = await serverSyncRecords(f.auth.userId);
+    f.calls.length = 0;
+    const conflicted = await retryPendingAccountDataSync(f.api, f.auth.userId);
+    assert.equal(conflicted.syncConflict.code, "account_revision_conflict");
+    assert.equal(wire.at(-1).status, 409);
+    assert.deepEqual(f.calls, [{ path: "/v1/progress/sync", method: "POST" }]);
+    assert.deepEqual(await localPair(), localBefore);
+    assert.deepEqual((await data.getAccountSyncState(admission)).outbox, pending.outbox);
+    assert.deepEqual(await serverSyncRecords(f.auth.userId), serverBefore);
+
+    f.calls.length = 0;
+    const preview = await inspectAccountSyncConflict(f.api, f.auth.userId);
+    assert.equal(preview.kind, "pair_choice_required");
+    assert.deepEqual(preview.changedPairTrackIds, [PAIR_TRACK]);
+    await resolveAccountSyncConflict({ api: f.api, accountId: f.auth.userId, conflictId: preview.conflictId, resolution: "keep_account", trackId: PAIR_TRACK });
+    assert.deepEqual(f.calls, [{ path: "/v1/progress", method: "GET" }, { path: "/v1/progress", method: "GET" }]);
+    assert.deepEqual(await localPair(), { goal: null, plan: null });
+    const after = await data.getAccountSyncState(admission);
+    assert.equal(after.syncConflict, null);
+    assert.equal(after.status, "offlinePending");
+    assert.equal(after.outbox.filter(pairRecord).length, 0);
+    assert.deepEqual(after.outbox, unrelatedPending);
+    assert.deepEqual(Object.fromEntries(Object.entries(after.acknowledged).filter(([, entry]) => !pairRecord(entry))), unrelatedAcknowledged);
+    for (const remote of remotePair) {
+      assert.deepEqual(after.acknowledged[data.accountDataRecordKey({ ...remote, recordId: remote.targetId })], {
+        fingerprint: remote.fingerprint, recordId: remote.targetId, recordType: remote.recordType,
+        remoteVersion: remote.version, trackId: remote.trackId,
+      });
+    }
+    assert.equal(getActiveMutationJournal(admission), null);
+    assert.deepEqual(await serverSyncRecords(f.auth.userId), serverBefore);
+    assert.deepEqual((await f.api.getProgress()).records.filter(pairRecord), remotePair);
+    await f.reopen();
+    assert.deepEqual(await localPair(), { goal: null, plan: null });
+    assert.deepEqual(await data.getAccountSyncState(admission), after);
+    assert.equal(getActiveMutationJournal(admission), null);
+  } finally { f.close(); }
+});
