@@ -1,7 +1,7 @@
 import nodemailer, { type Transporter } from "nodemailer";
 import type { PrivacyRequestEmailSender } from "../../modules/privacy-requests/store.js";
 import type { SecurityIncidentEmailSender } from "../../modules/security-incidents/store.js";
-import type { LegalRequestEmailSender } from "../../modules/legal-requests/store.js";
+import { LegalRequestConfirmationRejectedError, type LegalRequestEmailSender } from "../../modules/legal-requests/store.js";
 import type { PurchaseReceiptDelivery } from "../../modules/billing/revenuecatWebhookStore.js";
 
 /** Only a definite provider refusal permits an automatic receipt retry. */
@@ -102,9 +102,23 @@ export function createSmtpLegalRequestEmailSender(
       const text = input.purpose === "received"
         ? `Przyjęliśmy Twoje zgłoszenie (${kind}).\n\nNumer sprawy: ${input.requestId}\n\nNie wysyłaj hasła ani kodów odzyskiwania w odpowiedzi. Zachowaj tę wiadomość jako potwierdzenie na trwałym nośniku.`
         : `Odpowiedź w sprawie ${input.requestId} (${kind}):\n\n${input.response ?? ""}\n\nZachowaj tę wiadomość jako odpowiedź na trwałym nośniku.`;
-      const result = await transport.sendMail({ from, to: input.recipient, ...(configuration.replyTo ? { replyTo: configuration.replyTo } : {}), subject, text });
-      const accepted = Array.isArray(result.accepted) ? result.accepted.map(String) : [];
-      if (!accepted.includes(input.recipient)) throw new Error("legal_request_email_rejected");
+      const message = { from, to: input.recipient, ...(configuration.replyTo ? { replyTo: configuration.replyTo } : {}), subject, text };
+      if (input.purpose === "answered") {
+        const result = await transport.sendMail(message);
+        const accepted = Array.isArray(result.accepted) ? result.accepted.map(String) : [];
+        if (!accepted.includes(input.recipient)) throw new Error("legal_request_email_rejected");
+        return;
+      }
+      let result;
+      try { result = await transport.sendMail(message); } catch (error) {
+        if (isDefiniteSmtpRefusal(error)) throw new LegalRequestConfirmationRejectedError();
+        throw new Error("legal_request_email_unknown");
+      }
+      const accepted = Array.isArray(result?.accepted) ? result.accepted.map(String).includes(input.recipient) : false;
+      const rejected = Array.isArray(result?.rejected) ? result.rejected.map(String).includes(input.recipient) : false;
+      if (accepted && !rejected) return;
+      if (rejected && !accepted) throw new LegalRequestConfirmationRejectedError();
+      throw new Error("legal_request_email_unknown");
     },
   });
 }
@@ -137,9 +151,7 @@ export function createSmtpPurchaseReceiptEmailSender(
       try {
         result = await transport.sendMail({ from, to: input.recipient, ...(configuration.replyTo ? { replyTo: configuration.replyTo } : {}), messageId: `<patternly-receipt-${input.receiptId}@${messageIdDomain}>`, subject, text });
       } catch (error) {
-        const smtp = error as { responseCode?: unknown; command?: unknown } | null;
-        if (smtp && typeof smtp.responseCode === "number" && smtp.responseCode >= 400 && smtp.responseCode < 600
-          && ["MAIL FROM", "RCPT TO", "DATA"].includes(String(smtp.command))) throw new PurchaseReceiptEmailRejectedError();
+        if (isDefiniteSmtpRefusal(error)) throw new PurchaseReceiptEmailRejectedError();
         // A disconnect/timeout can follow acceptance of DATA; do not infer refusal.
         throw new Error("purchase_receipt_email_unknown");
       }
@@ -151,6 +163,12 @@ export function createSmtpPurchaseReceiptEmailSender(
       }
     },
   });
+}
+
+function isDefiniteSmtpRefusal(error: unknown): boolean {
+  const smtp = error as { responseCode?: unknown; command?: unknown } | null;
+  return !!smtp && typeof smtp.responseCode === "number" && smtp.responseCode >= 400 && smtp.responseCode < 600
+    && ["MAIL FROM", "RCPT TO", "DATA"].includes(String(smtp.command));
 }
 
 function legalRequestKindLabel(kind: Parameters<LegalRequestEmailSender["send"]>[0]["kind"]): string {

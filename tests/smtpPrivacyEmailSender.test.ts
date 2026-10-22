@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSmtpPrivacyEmailSender, createSmtpPurchaseReceiptEmailSender } from "../src/infrastructure/email/smtpPrivacyEmailSender.js";
+import { createSmtpPrivacyEmailSender, createSmtpPurchaseReceiptEmailSender, createSmtpLegalRequestEmailSender } from "../src/infrastructure/email/smtpPrivacyEmailSender.js";
+import { LegalRequestConfirmationRejectedError } from "../src/modules/legal-requests/store.js";
 import { loadEnvironment } from "../src/config/environment.js";
 
 const configuration = Object.freeze({
@@ -81,4 +82,43 @@ test("SMTP runtime configuration is all-or-nothing and production requires it", 
   assert.throws(() => loadEnvironment({ ...base, SMTP_HOST: "smtp-relay.gmail.com" }), { message: "invalid_smtp_config" });
   const environment = loadEnvironment({ ...base, SMTP_HOST: configuration.host, SMTP_PORT: String(configuration.port), SMTP_USERNAME: configuration.username, SMTP_PASSWORD: configuration.password, SMTP_FROM_EMAIL: configuration.fromEmail, SMTP_FROM_NAME: configuration.fromName, SMTP_REPLY_TO: configuration.replyTo });
   assert.deepEqual(environment.smtp, configuration);
+});
+
+test("SMTP received legal notice distinguishes explicit refusal from uncertain or conflicting outcomes", async () => {
+  const recipient = "person@example.com";
+  const input = { recipient, purpose: "received", requestId: "lr_fixture", kind: "complaint" } as const;
+  const vectors = [
+    { result: { accepted: [recipient] }, outcome: "sent" },
+    { result: { rejected: [recipient] }, outcome: "failed" },
+    { result: { accepted: [recipient], rejected: [recipient] }, outcome: "unknown" },
+    { result: {}, outcome: "unknown" },
+    { result: { accepted: "invalid", rejected: [] }, outcome: "unknown" },
+    { error: new Error("550 rejected after DATA maybe"), outcome: "unknown" },
+    { error: Object.assign(new Error("disconnect"), { code: "ETIMEDOUT" }), outcome: "unknown" },
+    { error: { responseCode: "550", command: "DATA" }, outcome: "unknown" },
+    { error: { responseCode: 550, command: "CONN" }, outcome: "unknown" },
+    ...["MAIL FROM", "RCPT TO", "DATA"].map((command) => ({ error: { responseCode: 550, command }, outcome: "failed" })),
+  ];
+  for (const vector of vectors) {
+    let calls = 0;
+    const sender = createSmtpLegalRequestEmailSender(configuration, { sendMail: async (message) => {
+      calls += 1;
+      assert.equal("html" in message, false);
+      assert.match(String(message.text), /lr_fixture/u);
+      if ("error" in vector) throw vector.error;
+      return vector.result as never;
+    } });
+    if (vector.outcome === "sent") await sender.send(input);
+    else if (vector.outcome === "failed") await assert.rejects(sender.send(input), LegalRequestConfirmationRejectedError);
+    else await assert.rejects(sender.send(input), { message: "legal_request_email_unknown" });
+    assert.equal(calls, 1);
+  }
+});
+
+test("SMTP dormant answered and purchase acceptance policies remain purpose specific", async () => {
+  const recipient = "person@example.com";
+  const transport = { sendMail: async () => ({ accepted: [recipient], rejected: [recipient] }) as never };
+  await createSmtpLegalRequestEmailSender(configuration, transport).send({ recipient, purpose: "answered", requestId: "lr_fixture", kind: "complaint", response: "Answer" });
+  await createSmtpPurchaseReceiptEmailSender(configuration, transport).send({ userId: "user-1", receiptId: "receipt-1", deliveryClaimId: "claim-1", recipient, transactionId: "tx-123", confirmationId: "confirmation-1", productIdentifier: "monthly", storefrontPrice: "29,99 zł", locale: "pl", termsVersion: "2026-09-01", immediateStartRequested: true });
+  await assert.rejects(createSmtpLegalRequestEmailSender(configuration, { sendMail: async () => ({ rejected: [recipient] }) as never }).send({ recipient, purpose: "answered", requestId: "lr_fixture", kind: "complaint" }), { message: "legal_request_email_rejected" });
 });

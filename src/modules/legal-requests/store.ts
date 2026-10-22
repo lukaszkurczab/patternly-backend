@@ -45,6 +45,11 @@ export interface LegalRequestEmailSender {
   send(input: Readonly<{ recipient: string; purpose: "received" | "answered"; requestId: string; kind: LegalRequestKind; response?: string }>): Promise<void>;
 }
 
+/** Definite refusal of the active received notice, never inferred from ambiguous delivery. */
+export class LegalRequestConfirmationRejectedError extends Error {
+  constructor() { super("legal_request_confirmation_rejected"); }
+}
+
 type LegalRequestCreateInput = Readonly<{
   email: string;
   kind: LegalRequestKind;
@@ -92,14 +97,46 @@ export class FirestoreLegalRequestStore implements LegalRequestStore {
         transaction.create(requestRef, record);
       });
     }
+    let outcome: "sent" | "failed" | "unknown" = "sent";
     try {
       await sender.send({ recipient: email, purpose: "received", requestId, kind: input.kind });
-      await requestRef.set({ confirmationStatus: "sent", confirmationSentAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-    } catch {
-      await requestRef.set({ confirmationStatus: "failed", updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-      throw new Error("legal_request_email_unavailable");
+    } catch (error) {
+      outcome = error instanceof LegalRequestConfirmationRejectedError ? "failed" : "unknown";
     }
+    let confirmedSent = false;
+    try {
+      confirmedSent = await this.finalizeReceivedConfirmation(record, outcome);
+    } catch {
+      // An unconfirmed commit may already have recorded sent. One fresh fenced
+      // readback preserves it, or marks a still-pending delivery uncertain.
+      try { confirmedSent = await this.finalizeReceivedConfirmation(record, "unknown"); } catch { /* Remain unavailable when persistence cannot be confirmed. */ }
+    }
+    if (!confirmedSent) throw new Error("legal_request_email_unavailable");
     return this.read(requestId, record);
+  }
+
+  private async finalizeReceivedConfirmation(
+    identity: Readonly<{ requestId: string; userId: string | null; email: string; kind: LegalRequestKind; createdAt: Timestamp; receivedAt: Timestamp }>,
+    outcome: "sent" | "failed" | "unknown",
+  ): Promise<boolean> {
+    const ref = this.db.collection("legalRequests").doc(identity.requestId);
+    return this.db.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists) return false;
+      const current = snapshot.data()!;
+      if (current.requestId !== identity.requestId || current.userId !== identity.userId
+        || current.email !== identity.email || current.kind !== identity.kind
+        || !(current.createdAt instanceof Timestamp) || !current.createdAt.isEqual(identity.createdAt)
+        || !(current.receivedAt instanceof Timestamp) || !current.receivedAt.isEqual(identity.receivedAt)) return false;
+      if (current.confirmationStatus === "sent") return current.confirmationSentAt instanceof Timestamp;
+      if (current.confirmationStatus !== "pending" || current.confirmationSentAt !== undefined) return false;
+      transaction.update(ref, {
+        confirmationStatus: outcome,
+        ...(outcome === "sent" ? { confirmationSentAt: FieldValue.serverTimestamp() } : {}),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return outcome === "sent";
+    });
   }
 
   public async listAccount(userId: string): Promise<readonly LegalRequestItem[]> {
