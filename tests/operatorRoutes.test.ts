@@ -78,6 +78,42 @@ test("unconfigured operator access is explicit and no-store", async () => {
   } finally { await app.close(); }
 });
 
+test("receipt reconciliation requires its exact OIDC purpose, strict attestation and server-derived actor", async () => {
+  let calls = 0;
+  const input = { operationId: "11111111-1111-4111-8111-111111111111", receiptId: "a".repeat(64), deliveryClaimId: "22222222-2222-4222-8222-222222222222", expectedAuthorizationGeneration: 1,
+    scope: { firebaseProjectId: "demo-patternly-receipts", databaseId: "(default)", revenueCatProjectId: "projtest", appId: "app-1", environment: "SANDBOX", store: "APP_STORE", rcProductId: "monthly", productIdentifier: "monthly", basePlanId: null, mapVersion: "receipt-map-v1" },
+    attestation: { kind: "operator_attested_smtp_acceptance", deliveryClaimId: "22222222-2222-4222-8222-222222222222", exactAttemptVerified: true, smtpAcceptedAt: "2026-10-22T12:00:00.000Z", providerAccountReference: "controlled-account", providerEventReference: "controlled-event", evidenceReference: "private-case:controlled", evidenceSha256: "b".repeat(64) } };
+  const stores = { revenueCatWebhook: { reconcileReceipt: async (_key: string, request: { mode: string }, actor: string, project: string) => {
+    calls++; assert.equal(request.mode, "preview"); assert.match(actor, /^[A-Za-z0-9_-]{40,}$/u); assert.notEqual(actor, subject); assert.equal(project, input.scope.firebaseProjectId);
+    return { kind: "preview", snapshotFingerprint: "c".repeat(64) };
+  } } };
+  const url = `/v1/operator/purchase-cases/${"d".repeat(64)}/receipt-reconciliation`;
+  for (const allow of [["purchase_cases:resolve"], ["purchase_receipts:reconcile"]]) {
+    const dependencies = makeDependencies(stores, allow);
+    const app = buildApplication({ ...dependencies, environment: { ...dependencies.environment, firebaseProjectId: input.scope.firebaseProjectId,
+      premiumMap: { version: "receipt-map-v1", projectId: "projtest", entitlementId: "premium", environment: "SANDBOX", fixture: true, bindings: [{ platform: "ios", store: "APP_STORE", appId: "app-1", rcProductId: "monthly", storeProductId: "monthly", basePlanId: null }] } } });
+    try {
+      const result = await app.inject({ method: "POST", url, headers: auth, payload: input });
+      assert.equal(result.statusCode, allow[0] === "purchase_receipts:reconcile" ? 200 : 401);
+      assert.equal(result.headers["cache-control"], "private, no-store");
+      if (result.statusCode === 200) {
+        const path = OPENAPI_DOCUMENT.paths["/v1/operator/purchase-cases/{transactionKey}/receipt-reconciliation"];
+        assert.ok(path);
+        for (const body of [{ ...input, actorPseudonym: "spoofed" }, { ...input, mode: "apply" }, { ...input, attestation: { ...input.attestation, exactAttemptVerified: false } }]) {
+          assert.equal((await app.inject({ method: "POST", url, headers: auth, payload: body })).statusCode, 400);
+        }
+        assert.equal((await app.inject({ method: "POST", url, headers: auth, payload: { ...input, scope: { ...input.scope, firebaseProjectId: "foreign" } } })).statusCode, 409);
+        assert.equal(JSON.stringify(result.json()).includes(input.attestation.evidenceReference), false);
+      }
+    } finally { await app.close(); }
+  }
+  assert.equal(calls, 1);
+  const unconfigured = buildApplication(makeDependencies(stores, ["purchase_receipts:reconcile"], false));
+  try { assert.equal((await unconfigured.inject({ method: "POST", url, headers: auth, payload: input })).statusCode, 503); }
+  finally { await unconfigured.close(); }
+  assert.equal(calls, 1);
+});
+
 test("operator queue and mutation projections stay minimal while audited details expose only allowlisted context", async () => {
   const actorIds: string[] = [];
   const stores = {

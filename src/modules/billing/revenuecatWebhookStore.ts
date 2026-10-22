@@ -6,6 +6,31 @@ import { revenueCatEventSchema, type RevenueCatEvent } from "./revenuecatWebhook
 import { activeAccount, digest, FirestorePurchaseCorrelation, isAccountId, transactionKey, PURCHASE_PAYLOAD_MS, type PurchaseScopeInput, type PurchaseStore } from "./purchaseCorrelation.js";
 import { productIdentifier, type PremiumMap, type StoreBinding } from "../../config/premiumMap.js";
 import type { RevenueCatEntitlementReader, RevenueCatEntitlementResult } from "../../infrastructure/revenuecat/client.js";
+import { z } from "zod";
+import { assertExpectedAuthorizationGeneration } from "../auth/authorizationGeneration.js";
+
+const boundedReference = z.string().trim().min(1).max(512);
+const receiptReconciliationScopeSchema = z.object({
+  firebaseProjectId: boundedReference, databaseId: boundedReference, revenueCatProjectId: boundedReference,
+  appId: boundedReference, environment: z.enum(["SANDBOX", "PRODUCTION"]), store: z.enum(["APP_STORE", "PLAY_STORE"]),
+  rcProductId: boundedReference, productIdentifier: boundedReference, basePlanId: boundedReference.nullable(), mapVersion: boundedReference,
+}).strict();
+export const receiptReconciliationRequestSchema = z.object({
+  mode: z.enum(["preview", "apply"]).default("preview"), operationId: z.string().uuid(),
+  receiptId: z.string().regex(/^(?:play-)?[a-f0-9]{64}$/u), deliveryClaimId: z.string().uuid(),
+  expectedAuthorizationGeneration: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  expectedSnapshotFingerprint: z.string().regex(/^[a-f0-9]{64}$/u).optional(), scope: receiptReconciliationScopeSchema,
+  attestation: z.object({
+    kind: z.literal("operator_attested_smtp_acceptance"), deliveryClaimId: z.string().uuid(), exactAttemptVerified: z.literal(true),
+    smtpAcceptedAt: z.string().datetime(), providerAccountReference: boundedReference, providerEventReference: boundedReference,
+    evidenceReference: boundedReference, evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  }).strict(),
+}).strict().superRefine((input, context) => {
+  if (input.mode === "apply" && !input.expectedSnapshotFingerprint) context.addIssue({ code: "custom", path: ["expectedSnapshotFingerprint"], message: "required_for_apply" });
+  if (input.attestation.deliveryClaimId !== input.deliveryClaimId) context.addIssue({ code: "custom", path: ["attestation"], message: "exact_attempt_required" });
+});
+export type ReceiptReconciliationRequest = z.infer<typeof receiptReconciliationRequestSchema>;
+export type ReceiptReconciliationResult = Readonly<{ kind: "preview" | "reconciled" | "replayed" | "already_sent"; snapshotFingerprint?: string }>;
 
 export type PurchaseReceiptDelivery = Readonly<{ userId: string; receiptId: string; deliveryClaimId: string; recipient: string; transactionId: string; confirmationId: string; productIdentifier: string; storefrontPrice: string; locale: "en" | "pl"; termsVersion: string; immediateStartRequested: true; store?: PurchaseStore }>;
 export type RevenueCatWebhookResult = Readonly<{ outcome: "processed" | "ignored"; duplicate: boolean; refreshPending?: boolean; receipt?: PurchaseReceiptDelivery; receiptDeliveryState?: "pending" | "unknown" | "contact_required" }>;
@@ -17,6 +42,7 @@ export interface RevenueCatWebhookStore {
   identityAvailable(userId: string): Promise<boolean>;
   markIdentityConflict(userId: string): Promise<void>;
   markReceiptDelivery(userId: string, receiptId: string, deliveryClaimId: string, status: "sent" | "failed" | "unknown"): Promise<boolean>;
+  reconcileReceipt(key: string, input: ReceiptReconciliationRequest, actorPseudonym: string, firebaseProjectId: string): Promise<ReceiptReconciliationResult>;
 }
 function hasActiveAuthorization(snapshot: { exists: boolean; data(): Record<string, unknown> | undefined }): boolean { return snapshot.exists && activeAccount(snapshot.data()); }
 function canonicalJson(value: unknown): string {
@@ -226,6 +252,72 @@ export class FirestoreRevenueCatWebhookStore implements RevenueCatWebhookStore {
       transaction.set(attemptRef, { status, completedAt: FieldValue.serverTimestamp() }, { merge: true });
       transaction.set(ref, { deliveryStatus: status, deliveryLeaseUntil: null, updatedAt: FieldValue.serverTimestamp(), ...(status === "sent" ? { deliveredAt: FieldValue.serverTimestamp() } : {}) }, { merge: true });
       return true;
+    });
+  }
+
+  /** Human-attested SMTP acceptance only. This owner never claims or sends mail. */
+  public async reconcileReceipt(key: string, input: ReceiptReconciliationRequest, actorPseudonym: string, firebaseProjectId: string): Promise<ReceiptReconciliationResult> {
+    if (!/^[a-f0-9]{64}$/u.test(key) || !receiptReconciliationRequestSchema.safeParse(input).success || !boundedReference.safeParse(actorPseudonym).success) throw new Error("receipt_reconciliation_invalid_request");
+    const scope = input.scope, map = this.map;
+    const binding = map?.bindings.find(row => row.appId === scope.appId && row.store === scope.store && row.rcProductId === scope.rcProductId
+      && productIdentifier(row) === scope.productIdentifier && row.basePlanId === scope.basePlanId);
+    if (!map || !binding || firebaseProjectId !== scope.firebaseProjectId || this.db.databaseId !== scope.databaseId
+      || map.projectId !== scope.revenueCatProjectId || map.environment !== scope.environment || map.version !== scope.mapVersion) throw new Error("receipt_reconciliation_scope_conflict");
+    return this.db.runTransaction(async tx => {
+      const fact = await tx.get(this.db.collection("revenueCatTransactions").doc(key));
+      const owner = fact.get("ownerAccountId");
+      if (!fact.exists || !isAccountId(owner) || fact.get("receiptId") !== input.receiptId || typeof fact.get("boundConfirmationId") !== "string"
+        || !/^[A-Za-z0-9_-]{1,128}$/u.test(fact.get("boundConfirmationId"))) throw new Error("receipt_reconciliation_identity_conflict");
+      const userRef = this.db.collection("users").doc(owner), receiptRef = userRef.collection("purchaseReceipts").doc(input.receiptId);
+      const attemptRef = receiptRef.collection("deliveryAttempts").doc(input.deliveryClaimId);
+      const confirmationRef = userRef.collection("purchaseConfirmations").doc(String(fact.get("boundConfirmationId")));
+      const [user, receipt, attempt, confirmation] = await tx.getAll(userRef, receiptRef, attemptRef, confirmationRef);
+      try { if (!user!.exists) throw new Error(); assertExpectedAuthorizationGeneration(user!.data()!, input.expectedAuthorizationGeneration); }
+      catch { throw new Error("receipt_reconciliation_authority_conflict"); }
+      if (user!.get("billingIdentityConflict") === true || fact.get("identityConflict") === true || fact.get("status") !== "bound"
+        || !receipt!.exists || !attempt!.exists || !confirmation!.exists) throw new Error("receipt_reconciliation_identity_conflict");
+      const expectedScope = { projectId: map.projectId, appId: scope.appId, environment: map.environment, store: scope.store,
+        rcProductId: scope.rcProductId, productIdentifier: scope.productIdentifier, basePlanId: scope.basePlanId, mapVersion: map.version };
+      if (Object.entries(expectedScope).some(([field, value]) => fact.get(field) !== value || receipt!.get(field) !== value)
+        || typeof fact.get("transactionId") !== "string" || transactionKey({ projectId: map.projectId, appId: scope.appId, environment: scope.environment, store: scope.store }, fact.get("transactionId")) !== key
+        || receipt!.get("userId") !== owner || receipt!.get("receiptId") !== input.receiptId || receipt!.get("transactionKey") !== key
+        || receipt!.get("confirmationId") !== confirmation!.id || receipt!.get("transactionId") !== fact.get("transactionId") || receipt!.get("deliveryClaimId") !== input.deliveryClaimId) throw new Error("receipt_reconciliation_identity_conflict");
+      const payload = attempt!.get("payload") as Record<string, unknown> | undefined;
+      const payloadIdentity = { userId: owner, receiptId: input.receiptId, deliveryClaimId: input.deliveryClaimId,
+        recipient: receipt!.get("recipient"), transactionId: receipt!.get("transactionId"), confirmationId: confirmation!.id,
+        productIdentifier: scope.productIdentifier, storefrontPrice: receipt!.get("storefrontPrice"), locale: receipt!.get("locale"),
+        termsVersion: receipt!.get("termsVersion"), immediateStartRequested: true, store: scope.store };
+      if (!payload || Object.keys(payload).length !== Object.keys(payloadIdentity).length || Object.entries(payloadIdentity).some(([field, value]) => payload[field] !== value)
+        || typeof payload.recipient !== "string" || !payload.recipient.trim() || typeof payload.storefrontPrice !== "string" || !payload.storefrontPrice.trim()
+        || typeof payload.termsVersion !== "string" || !payload.termsVersion.trim() || !["en", "pl"].includes(String(payload.locale))
+        || ["productIdentifier", "storefrontPrice", "locale", "termsVersion", "immediateStartRequested"].some(field => confirmation!.get(field) !== payload[field])) throw new Error("receipt_reconciliation_identity_conflict");
+      // Proof is trusted operator attestation, not automatic verification of a hash/provider event.
+      const acceptedMs = Date.parse(input.attestation.smtpAcceptedAt), createdAt = attempt!.get("createdAt");
+      if (!(createdAt instanceof Timestamp) || acceptedMs < createdAt.toMillis() || acceptedMs > Date.now()) throw new Error("receipt_reconciliation_attestation_invalid");
+      const operationFingerprint = digest(canonicalJson({ key, actorPseudonym, ...input, mode: "apply" }));
+      const resolution = attempt!.get("resolution") as Record<string, unknown> | undefined;
+      // A committed replay must be recognized before its own write invalidates the preview CAS.
+      if (resolution !== undefined) {
+        if (!resolution || typeof resolution !== "object" || typeof resolution.operationId !== "string" || typeof resolution.fingerprint !== "string") throw new Error("receipt_reconciliation_state_invalid");
+        if (resolution.operationId === input.operationId) {
+          if (resolution.fingerprint !== operationFingerprint) throw new Error("receipt_reconciliation_operation_conflict");
+          if (receipt!.get("deliveryStatus") !== "sent" || attempt!.get("status") !== "sent") throw new Error("receipt_reconciliation_state_invalid");
+          return { kind: "replayed" };
+        }
+      }
+      if (receipt!.get("deliveryStatus") === "sent" && attempt!.get("status") === "sent") return { kind: "already_sent" };
+      const lease = receipt!.get("deliveryLeaseUntil"), receiptStatus = receipt!.get("deliveryStatus"), attemptStatus = attempt!.get("status");
+      if (!(receiptStatus === "unknown" && attemptStatus === "unknown")
+        && !(receiptStatus === "sending" && lease instanceof Timestamp && lease.toMillis() <= Date.now() && attemptStatus === "pending")) throw new Error("receipt_reconciliation_state_invalid");
+      if (resolution !== undefined) throw new Error("receipt_reconciliation_state_invalid");
+      const snapshotFingerprint = digest(canonicalJson([user!, fact, receipt!, attempt!, confirmation!].map(doc => [doc.ref.path, doc.updateTime!.seconds, doc.updateTime!.nanoseconds])));
+      if (input.mode === "preview") return { kind: "preview", snapshotFingerprint };
+      if (input.expectedSnapshotFingerprint !== snapshotFingerprint) throw new Error("receipt_reconciliation_snapshot_conflict");
+      tx.update(attemptRef, { status: "sent", resolution: { operationId: input.operationId, fingerprint: operationFingerprint, actorPseudonym,
+        priorReceiptStatus: receiptStatus, priorAttemptStatus: attemptStatus, attestation: input.attestation,
+        smtpAcceptedAt: input.attestation.smtpAcceptedAt, resolutionRecordedAt: FieldValue.serverTimestamp() } });
+      tx.update(receiptRef, { deliveryStatus: "sent", deliveryLeaseUntil: null, updatedAt: FieldValue.serverTimestamp() });
+      return { kind: "reconciled" };
     });
   }
 

@@ -1,6 +1,7 @@
 import { isSandboxPromotionalAccessAllowed } from "../config/sandboxPromotionalAccess.js";
 import { validateOperatorCursor } from "../modules/retention/operatorPage.js";
 import { dispatchPurchaseReceipt } from "../modules/billing/purchaseReceiptDispatcher.js";
+import { receiptReconciliationRequestSchema } from "../modules/billing/revenuecatWebhookStore.js";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { DestinationStream } from "pino";
 import { createHash, createHmac, randomUUID } from "node:crypto";
@@ -866,6 +867,23 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       if (error) return reply.code(503).send({ error: { code: error } });
       return { item };
     } catch (error) { return purchaseError(error, reply); }
+  });
+
+  app.post("/v1/operator/purchase-cases/:transactionKey/receipt-reconciliation", { preHandler: routeGuard("operator", dependencies, "purchase_receipts:reconcile") }, async (request, reply) => {
+    const key = z.string().regex(/^[a-f0-9]{64}$/u).safeParse((request.params as { transactionKey: string }).transactionKey);
+    const input = receiptReconciliationRequestSchema.safeParse(request.body);
+    if (!key.success || !input.success) return reply.code(400).send({ error: { code: "invalid_request" } });
+    const environment = dependencies.environment;
+    if (!environment.premiumMap) return reply.code(503).send({ error: { code: "receipt_reconciliation_unavailable" } });
+    if (input.data.scope.firebaseProjectId !== environment.firebaseProjectId || input.data.scope.revenueCatProjectId !== environment.premiumMap.projectId
+      || input.data.scope.mapVersion !== environment.premiumMap.version) return reply.code(409).send({ error: { code: "receipt_reconciliation_scope_conflict" } });
+    try { return await requireStores(dependencies).revenueCatWebhook.reconcileReceipt(key.data, input.data, request.operatorIdentity!.actorPseudonym, environment.firebaseProjectId!); }
+    catch (error) {
+      const code = error instanceof Error ? error.message : "";
+      const safe = ["receipt_reconciliation_invalid_request", "receipt_reconciliation_scope_conflict", "receipt_reconciliation_identity_conflict", "receipt_reconciliation_authority_conflict", "receipt_reconciliation_attestation_invalid", "receipt_reconciliation_operation_conflict", "receipt_reconciliation_state_invalid", "receipt_reconciliation_snapshot_conflict"];
+      if (safe.includes(code)) return reply.code(409).send({ error: { code } });
+      throw error;
+    }
   });
 
   app.get("/v1/entitlements", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {

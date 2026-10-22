@@ -3,6 +3,7 @@ import { z } from "zod";
 export const OPERATOR_ACTIONS = [
   "purchase_cases:read",
   "purchase_cases:resolve",
+  "purchase_receipts:reconcile",
   "content_reports:read",
   "content_reports:transition",
   "privacy_requests:read",

@@ -2081,6 +2081,467 @@
         }
       }
     },
+    "/v1/operator/purchase-cases/{transactionKey}/receipt-reconciliation": {
+      "x-patternly-security-profile": "operator",
+      "x-patternly-consumer-scope": "backend-only",
+      "post": {
+        "description": "Preview (default, zero writes) or atomically record a trusted operator's exact-attempt SMTP acceptance attestation. Requires purchase_receipts:reconcile. Does not contact the provider, prove inbox delivery, claim or resend mail.",
+        "responses": {
+          "200": {
+            "description": "Preview, reconciled, exact replay or already sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "snapshotFingerprint"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "preview"
+                        },
+                        "snapshotFingerprint": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "reconciled",
+                            "replayed",
+                            "already_sent"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid strict request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator purpose authorization required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Scope, authority, identity, state, attestation, operation or snapshot conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator or configured receipt reconciliation unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_v1_operator_purchase_cases_by_transactionkey_receipt_reconciliation",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "operator",
+        "x-patternly-consumer-scope": "backend-only",
+        "parameters": [
+          {
+            "name": "transactionKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "operationId",
+                      "receiptId",
+                      "deliveryClaimId",
+                      "expectedAuthorizationGeneration",
+                      "scope",
+                      "attestation"
+                    ],
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "const": "preview",
+                        "default": "preview"
+                      },
+                      "operationId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "receiptId": {
+                        "type": "string",
+                        "pattern": "^(?:play-)?[a-f0-9]{64}$"
+                      },
+                      "deliveryClaimId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "expectedAuthorizationGeneration": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      "expectedSnapshotFingerprint": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "scope": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "firebaseProjectId",
+                          "databaseId",
+                          "revenueCatProjectId",
+                          "appId",
+                          "environment",
+                          "store",
+                          "rcProductId",
+                          "productIdentifier",
+                          "basePlanId",
+                          "mapVersion"
+                        ],
+                        "properties": {
+                          "firebaseProjectId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "databaseId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "revenueCatProjectId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "appId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "environment": {
+                            "type": "string",
+                            "enum": [
+                              "SANDBOX",
+                              "PRODUCTION"
+                            ]
+                          },
+                          "store": {
+                            "type": "string",
+                            "enum": [
+                              "APP_STORE",
+                              "PLAY_STORE"
+                            ]
+                          },
+                          "rcProductId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "productIdentifier": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "basePlanId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 512
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "mapVersion": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          }
+                        }
+                      },
+                      "attestation": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "kind",
+                          "deliveryClaimId",
+                          "exactAttemptVerified",
+                          "smtpAcceptedAt",
+                          "providerAccountReference",
+                          "providerEventReference",
+                          "evidenceReference",
+                          "evidenceSha256"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "const": "operator_attested_smtp_acceptance"
+                          },
+                          "deliveryClaimId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "exactAttemptVerified": {
+                            "const": true
+                          },
+                          "smtpAcceptedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "providerAccountReference": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "providerEventReference": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "evidenceReference": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "evidenceSha256": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "operationId",
+                      "receiptId",
+                      "deliveryClaimId",
+                      "expectedAuthorizationGeneration",
+                      "scope",
+                      "attestation",
+                      "mode",
+                      "expectedSnapshotFingerprint"
+                    ],
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "const": "apply"
+                      },
+                      "operationId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "receiptId": {
+                        "type": "string",
+                        "pattern": "^(?:play-)?[a-f0-9]{64}$"
+                      },
+                      "deliveryClaimId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "expectedAuthorizationGeneration": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      "expectedSnapshotFingerprint": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "scope": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "firebaseProjectId",
+                          "databaseId",
+                          "revenueCatProjectId",
+                          "appId",
+                          "environment",
+                          "store",
+                          "rcProductId",
+                          "productIdentifier",
+                          "basePlanId",
+                          "mapVersion"
+                        ],
+                        "properties": {
+                          "firebaseProjectId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "databaseId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "revenueCatProjectId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "appId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "environment": {
+                            "type": "string",
+                            "enum": [
+                              "SANDBOX",
+                              "PRODUCTION"
+                            ]
+                          },
+                          "store": {
+                            "type": "string",
+                            "enum": [
+                              "APP_STORE",
+                              "PLAY_STORE"
+                            ]
+                          },
+                          "rcProductId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "productIdentifier": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "basePlanId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 512
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "mapVersion": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          }
+                        }
+                      },
+                      "attestation": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "kind",
+                          "deliveryClaimId",
+                          "exactAttemptVerified",
+                          "smtpAcceptedAt",
+                          "providerAccountReference",
+                          "providerEventReference",
+                          "evidenceReference",
+                          "evidenceSha256"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "const": "operator_attested_smtp_acceptance"
+                          },
+                          "deliveryClaimId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "exactAttemptVerified": {
+                            "const": true
+                          },
+                          "smtpAcceptedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "providerAccountReference": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "providerEventReference": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "evidenceReference": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          },
+                          "evidenceSha256": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$"
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/entitlements": {
       "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",
