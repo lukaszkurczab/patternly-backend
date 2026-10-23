@@ -10,13 +10,13 @@ import { createFirebaseTokenVerifier } from "../src/infrastructure/firebase/veri
 import { ContentPackageService, FirestoreContentPackagePointerStore, contentNodePackagePath } from "../src/modules/content/packages.js";
 import { REVENUECAT_OFFICIAL_API_BASE_URL, parseSandboxPromotionalAccessPolicy, SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID, SANDBOX_PROMOTIONAL_REVENUECAT_APP_ID, SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID } from "../src/config/sandboxPromotionalAccess.js";
 import type { Environment } from "../src/config/environment.js";
-import { TEST_APP_CHECK_TOKEN, clearFirestore, createEmulatorContext, createVerifiedAuthUser, createVerifiedRegisteredAuthUser, registerAuthUser, testEnvironment } from "./support.js";
+import { TEST_APP_CHECK_TOKEN, clearFirestoreForProject, createEmulatorContext, createVerifiedAuthUser, createVerifiedRegisteredAuthUser, registerAuthUser, testEnvironment } from "./support.js";
 
 test("sandbox promotional package access is owner-bound and rechecked at the expiry cutoff", async () => {
-  await clearFirestore();
+  await clearFirestoreForProject(SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID);
   const authApp = getApps().find((app) => app.name === "[DEFAULT]") ?? initializeApp({ projectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID });
   assert.equal(authApp.options.projectId, SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID);
-  const ownerAuth = await createVerifiedAuthUser();
+  const ownerAuth = await createVerifiedAuthUser(undefined, SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID);
   const policyExpiresAtMs = Date.now() + 10 * 60_000;
   const policyJson = JSON.stringify({
     firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
@@ -61,9 +61,9 @@ test("sandbox promotional package access is owner-bound and rechecked at the exp
   let expiredApp: ReturnType<typeof buildApplication> | undefined;
   let promotionalApp: ReturnType<typeof buildApplication> | undefined;
   try {
-    const owner = await registerAuthUser(context, ownerAuth);
+    const owner = await registerAuthUser(context, ownerAuth, SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID);
     assert.equal(owner.localId, ownerAuth.localId);
-    const other = await createVerifiedRegisteredAuthUser(context);
+    const other = await createVerifiedRegisteredAuthUser(context, undefined, SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID);
     const ownerPolicy = parseSandboxPromotionalAccessPolicy(JSON.stringify({
       firebaseProjectId: SANDBOX_PROMOTIONAL_FIREBASE_PROJECT_ID,
       revenueCatProjectId: SANDBOX_PROMOTIONAL_REVENUECAT_PROJECT_ID,

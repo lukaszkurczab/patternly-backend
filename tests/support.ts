@@ -99,40 +99,44 @@ export function createEmulatorContext(options: Readonly<{ projectId?: string; en
 }
 
 export async function clearFirestore(): Promise<void> {
-  const response = await fetch(`http://${firestoreHost}/emulator/v1/projects/${projectId}/databases/(default)/documents`, { method: "DELETE" });
+  return clearFirestoreForProject(projectId);
+}
+
+export async function clearFirestoreForProject(targetProjectId: string): Promise<void> {
+  const response = await fetch(`http://${firestoreHost}/emulator/v1/projects/${targetProjectId}/databases/(default)/documents`, { method: "DELETE" });
   if (!response.ok && response.status !== 404) throw new Error(`firestore_clear_failed:${response.status}`);
 }
 
 const emulatorPassword = "Patternly-test-123!";
 
-export async function createAuthUser(email = `emulator-${randomUUID()}@example.com`): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
+export async function createAuthUser(email = `emulator-${randomUUID()}@example.com`, targetProjectId = projectId): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
   const response = await fetch(`http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=patternly-emulator`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: "Bearer owner" },
     // Explicit project routing is required when a disposable emulator hosts a second fixture project.
-    body: JSON.stringify({ email, password: emulatorPassword, returnSecureToken: true, targetProjectId: projectId }),
+    body: JSON.stringify({ email, password: emulatorPassword, returnSecureToken: true, targetProjectId }),
   });
   if (!response.ok) {
     const failure = await response.text();
     if (response.status === 400 && failure.includes("EMAIL_EXISTS")) {
       const existing = await getAuth().getUserByEmail(email);
       await getAuth().updateUser(existing.uid, { emailVerified: false });
-      return signInAuthUser(email);
+      return signInAuthUser(email, targetProjectId);
     }
     throw new Error(`auth_emulator_signup_failed:${response.status}:${failure}`);
   }
   const payload = await response.json() as { email: string; idToken: string; localId: string };
   if (!payload.email || !payload.localId) throw new Error("auth_emulator_signup_invalid");
   // Admin-routed sign-up creates the fixture account without minting an end-user token.
-  return payload.idToken ? Object.freeze(payload) : signInAuthUser(payload.email);
+  return payload.idToken ? Object.freeze(payload) : signInAuthUser(payload.email, targetProjectId);
 }
 
-async function signInAuthUser(email: string): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
+async function signInAuthUser(email: string, targetProjectId = projectId): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
   const response = await fetch(`http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=patternly-emulator`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: "Bearer owner" },
     // Explicit project routing is required when a disposable emulator hosts a second fixture project.
-    body: JSON.stringify({ email, password: emulatorPassword, returnSecureToken: true, targetProjectId: projectId }),
+    body: JSON.stringify({ email, password: emulatorPassword, returnSecureToken: true, targetProjectId }),
   });
   if (!response.ok) throw new Error(`auth_emulator_signin_failed:${response.status}:${await response.text()}`);
   const payload = await response.json() as { email: string; idToken: string; localId: string };
@@ -140,9 +144,9 @@ async function signInAuthUser(email: string): Promise<Readonly<{ email: string; 
   return Object.freeze(payload);
 }
 
-export async function createVerifiedAuthUser(email = `emulator-${randomUUID()}@example.com`): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
-  const user = await createAuthUser(email);
-  return verifyAuthUser(user);
+export async function createVerifiedAuthUser(email = `emulator-${randomUUID()}@example.com`, targetProjectId = projectId): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
+  const user = await createAuthUser(email, targetProjectId);
+  return verifyAuthUser(user, targetProjectId);
 }
 
 export const accountRegistrationPayload = Object.freeze({
@@ -156,6 +160,7 @@ export const accountRegistrationPayload = Object.freeze({
 export async function registerAuthUser(
   context: Pick<EmulatorContext, "app">,
   user: Readonly<{ email: string; idToken: string; localId: string }>,
+  targetProjectId = projectId,
 ): Promise<Readonly<{ email: string; idToken: string; localId: string; userId: string }>> {
   const response = await context.app.inject({
     method: "POST",
@@ -166,32 +171,34 @@ export async function registerAuthUser(
   if (response.statusCode !== 201 && response.statusCode !== 200) throw new Error(`account_registration_failed:${response.statusCode}:${response.body}`);
   const userId = response.json().registration?.user?.id;
   if (typeof userId !== "string") throw new Error("account_registration_response_invalid");
-  const session = await setAuthCustomClaimsAndSignIn(user, { authorizationGeneration: 1 });
+  const session = await setAuthCustomClaimsAndSignIn(user, { authorizationGeneration: 1 }, targetProjectId);
   return Object.freeze({ ...session, userId });
 }
 
 export async function createRegisteredAuthUser(
   context: Pick<EmulatorContext, "app">,
   email?: string,
+  targetProjectId = projectId,
 ): Promise<Readonly<{ email: string; idToken: string; localId: string; userId: string }>> {
-  return registerAuthUser(context, await createAuthUser(email));
+  return registerAuthUser(context, await createAuthUser(email, targetProjectId), targetProjectId);
 }
 
 export async function createVerifiedRegisteredAuthUser(
   context: Pick<EmulatorContext, "app">,
   email?: string,
+  targetProjectId = projectId,
 ): Promise<Readonly<{ email: string; idToken: string; localId: string; userId: string }>> {
-  return registerAuthUser(context, await createVerifiedAuthUser(email));
+  return registerAuthUser(context, await createVerifiedAuthUser(email, targetProjectId), targetProjectId);
 }
 
-export async function verifyAuthUser(user: Readonly<{ email: string; idToken: string; localId: string }>): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
+export async function verifyAuthUser(user: Readonly<{ email: string; idToken: string; localId: string }>, targetProjectId = projectId): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
   await getAuth().updateUser(user.localId, { emailVerified: true });
-  return signInAuthUser(user.email);
+  return signInAuthUser(user.email, targetProjectId);
 }
 
-export async function setAuthCustomClaimsAndSignIn(user: Readonly<{ email: string; localId: string }>, claims: Readonly<Record<string, unknown>>): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
+export async function setAuthCustomClaimsAndSignIn(user: Readonly<{ email: string; localId: string }>, claims: Readonly<Record<string, unknown>>, targetProjectId = projectId): Promise<Readonly<{ email: string; idToken: string; localId: string }>> {
   await getAuth().setCustomUserClaims(user.localId, claims);
-  return signInAuthUser(user.email);
+  return signInAuthUser(user.email, targetProjectId);
 }
 
 export function firestore() {
