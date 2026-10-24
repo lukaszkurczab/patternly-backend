@@ -1,0 +1,121 @@
+{
+  "status": "IMPLEMENTED_TARGETED_VERIFIED_PENDING_INDEPENDENT_QA",
+  "backendHead": "800507ad635c14f6046d863edff0801338980666",
+  "ownedPaths": [
+    "src/modules/progress/store.ts",
+    "tests/progressTransactionRetry.test.ts",
+    "tests/progressTransactionRetry.emulator.test.ts"
+  ],
+  "sha256": {
+    "src/modules/progress/store.ts": "057b5e4a19dcbcafb5b528197d74fb88a1c6a401c47f68c3fdb1538d8ab1b108",
+    "tests/progressTransactionRetry.test.ts": "9e38c92239c4c84d7cf4719f6f9c9d68f43c3bb16740e8a2daf6be2f37bf0116",
+    "tests/progressTransactionRetry.emulator.test.ts": "63355e1242362e28f5f1c03143726b8f8ba531586118cba0c2e5673243852083"
+  },
+  "design": {
+    "review": "Sol high independent PASS for read-only retry adapter",
+    "scores": {
+      "fit": 0.94,
+      "simplicity": 0.88,
+      "risk": 0.84,
+      "maintainability": 0.87,
+      "minimum": 0.84
+    },
+    "scope": "five tx.get/getAll awaits in applyBatch only; exact numeric code3 plus exact details or whole message; SDK code10 callback retry; no commit retry, no outer retry, no guard/CAS/receipt changes"
+  },
+  "verification": {
+    "publicSDKBoundary": {
+      "kind": "closed_read_sdk_boundary",
+      "project": "demo-patternly-closed-read",
+      "control": {
+        "attempts": 1,
+        "injected": true,
+        "freshTransaction": null,
+        "outcome": {
+          "status": "rejected",
+          "code": 3,
+          "exactClosedDetails": true,
+          "exactClosedMessage": true,
+          "category": "transaction_invalid_or_closed"
+        },
+        "revision": 0,
+        "recordExists": false,
+        "receiptExists": false
+      },
+      "adapted": {
+        "attempts": 2,
+        "injected": true,
+        "freshTransaction": true,
+        "outcome": {
+          "status": "fulfilled",
+          "value": {
+            "revision": 1,
+            "version": 1
+          }
+        },
+        "revision": 1,
+        "recordExists": true,
+        "receiptExists": true
+      },
+      "cleanup": "own_synthetic_fixture_deleted",
+      "status": "PASS",
+      "channelsClosed": true
+    },
+    "unit": {
+      "tests": 17,
+      "pass": 17,
+      "fail": 0,
+      "skip": 0
+    },
+    "emulatorRegressionAndStorageReceipts": {
+      "tests": 23,
+      "pass": 23,
+      "fail": 0,
+      "skip": 0,
+      "log": "regression.log"
+    },
+    "existingConcurrentCASAndGenerationRoute": {
+      "tests": 2,
+      "pass": 2,
+      "fail": 0,
+      "skip": 0,
+      "log": "existing-route.log"
+    },
+    "typecheck": "PASS",
+    "lint": "PASS",
+    "diffCheck": "PASS"
+  },
+  "cleanup": {
+    "ownedPorts": [
+      {
+        "port": 19519,
+        "free": true
+      },
+      {
+        "port": 19520,
+        "free": true
+      },
+      {
+        "port": 19521,
+        "free": true
+      },
+      {
+        "port": 19522,
+        "free": true
+      },
+      {
+        "port": 9151,
+        "free": true
+      }
+    ],
+    "allFree": true,
+    "sharedServices": "not stopped or modified; API8080/Auth19099/Firestore18081/Metro8081 preserved"
+  },
+  "limits": {
+    "currentCIRootCause": "NOT_ESTABLISHED; remote JSON does not identify read versus commit or exact message",
+    "fullCI": "NOT_RUN; parent after independent QA",
+    "remoteCI39941728100": "HISTORICAL_FAIL_520PASS_1FAIL_12SKIP",
+    "failureOnlyDiagnostic": "existing concurrent test unchanged",
+    "commitPush": "NOT_RUN"
+  },
+  "setupFailure": "Initial public v1 named ESM import failed before SDK requests; preserved setup-import-failure.log. Corrected default CJS import; offline export preflight PASS before actual two-scenario probe."
+}

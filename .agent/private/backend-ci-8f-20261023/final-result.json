@@ -1,0 +1,11 @@
+{
+  "backendHead": "0e3a7c17382633747b023b53882972107d3ea4b3",
+  "frontendHead": "9579a99b1ac8f3b15aa579399e3e18b3d4d68898",
+  "runtime": {"node": "v22.22.3", "firebaseCli": "15.19.0", "java": "Temurin 21.0.13+9 ARM64", "adoptiumArchiveSha256": "bf036b35b071bfb2f54f2c0af8ee8d88afa95ee6eb3dce02c0f94cfc2524d04a"},
+  "isolation": {"baseSuiteProject": "demo-patternly-ci-8f-20261023", "baseSuitePorts": {"auth": 19419, "firestore": 19420, "hub": 19421, "logging": 19422}, "downstreamProjects": "repository-defined unique demo projects, ports 19119/18119", "execution": "outside sandbox with controlling TTY; all emulator hosts loopback; no cloud credentials"},
+  "ci": {"orderedStages": ["lint", "typecheck", "firestore:ttl:check", "test:emulator", "test:progress-paging:client", "test:operator:emulator", "test:operator:acceptance", "openapi:check", "frontend:client:check", "build"], "allPassed": true, "emulatorSuite": {"tests": 533, "pass": 521, "fail": 0, "skipped": 12}, "targetConcurrentSync": "PASS", "targetCliPipedStdin": "PASS", "targetSandboxPromotionalPackages": "PASS", "progressPagingClient": "PASS; 212 records, 105 sessions, 105 attempts, 1 review, 4 page requests", "operatorEmulator": "PASS 4/4", "operatorAcceptance": "PASS 1/1", "openapi": "PASS 76 operations", "frontendInventory": "PASS 51 used operations", "build": "PASS", "exitCode": 0},
+  "fix": "test support helpers now route Auth and Firestore operations to the explicitly selected sandbox Firebase project; default zero-argument cleanup remains compatible with node:test hook function types",
+  "activeApiAuthFirestorePreserved": true,
+  "isolatedPortsFreeAfterRun": true,
+  "sourceChanges": ["tests/support.ts", "tests/sandboxPromotionalPackages.emulator.test.ts"]
+}

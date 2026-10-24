@@ -1,0 +1,36 @@
+Isolated emulator gate: demo-patternly-closed-read Auth19519/Firestore19520
+i  emulators: Starting emulators: auth, firestore
+i  emulators: Detected demo project ID "demo-patternly-closed-read", emulated services will use a demo configuration and attempts to access non-emulated services for this project will fail.
+/bin/sh: lsof: command not found
+/bin/sh: lsof: command not found
+/bin/sh: lsof: command not found
+/bin/sh: lsof: command not found
+/bin/sh: lsof: command not found
+/bin/sh: lsof: command not found
+i  firestore: Firestore Emulator logging to firestore-debug.log
+✔  firestore: Firestore Emulator was started in standard edition.
+✔  firestore: Firestore Emulator UI websocket is running on 9151.
+i  Running script: node .agent/private/closed-read-probe-20261023/probe.mjs
+file:///Users/lukaszkurczab/Desktop/Projects/Patternly/patternly-backend/.agent/private/closed-read-probe-20261023/probe.mjs:4
+import { Firestore, setLogFunction, v1 } from '@google-cloud/firestore';
+                                    ^^
+SyntaxError: Named export 'v1' not found. The requested module '@google-cloud/firestore' is a CommonJS module, which may not support all module.exports as named exports.
+CommonJS modules can always be imported via the default export, for example using:
+
+import pkg from '@google-cloud/firestore';
+const { Firestore, setLogFunction, v1 } = pkg;
+
+    at ModuleJob._instantiate (node:internal/modules/esm/module_job:226:21)
+    at async ModuleJob.run (node:internal/modules/esm/module_job:335:5)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:681:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5)
+
+Node.js v22.22.3
+⚠  Script exited unsuccessfully (code 1)
+i  emulators: Shutting down emulators.
+i  firestore: Stopping Firestore Emulator
+i  auth: Stopping Authentication Emulator
+i  hub: Stopping emulator hub
+i  logging: Stopping Logging Emulator
+
+Error: Script "node .agent/private/closed-read-probe-20261023/probe.mjs" exited with code 1

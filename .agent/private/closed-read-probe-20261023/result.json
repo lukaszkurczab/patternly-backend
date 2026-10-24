@@ -1,0 +1,37 @@
+{
+  "kind": "closed_read_sdk_boundary",
+  "project": "demo-patternly-closed-read",
+  "control": {
+    "attempts": 1,
+    "injected": true,
+    "freshTransaction": null,
+    "outcome": {
+      "status": "rejected",
+      "code": 3,
+      "exactClosedDetails": true,
+      "exactClosedMessage": true,
+      "category": "transaction_invalid_or_closed"
+    },
+    "revision": 0,
+    "recordExists": false,
+    "receiptExists": false
+  },
+  "adapted": {
+    "attempts": 2,
+    "injected": true,
+    "freshTransaction": true,
+    "outcome": {
+      "status": "fulfilled",
+      "value": {
+        "revision": 1,
+        "version": 1
+      }
+    },
+    "revision": 1,
+    "recordExists": true,
+    "receiptExists": true
+  },
+  "cleanup": "own_synthetic_fixture_deleted",
+  "status": "PASS",
+  "channelsClosed": true
+}
