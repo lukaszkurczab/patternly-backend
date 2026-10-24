@@ -1,0 +1,110 @@
+{
+  "verdict": "PASS",
+  "scope": "bounded exact closed transactional read retry in applyBatch only",
+  "baseHead": "800507ad635c14f6046d863edff0801338980666",
+  "ownedPaths": [
+    "src/modules/progress/store.ts",
+    "tests/progressTransactionRetry.test.ts",
+    "tests/progressTransactionRetry.emulator.test.ts"
+  ],
+  "sha256": {
+    "src/modules/progress/store.ts": "057b5e4a19dcbcafb5b528197d74fb88a1c6a401c47f68c3fdb1538d8ab1b108",
+    "tests/progressTransactionRetry.test.ts": "9e38c92239c4c84d7cf4719f6f9c9d68f43c3bb16740e8a2daf6be2f37bf0116",
+    "tests/progressTransactionRetry.emulator.test.ts": "63355e1242362e28f5f1c03143726b8f8ba531586118cba0c2e5673243852083"
+  },
+  "independentVerification": {
+    "unit": {
+      "tests": 17,
+      "pass": 17,
+      "fail": 0,
+      "skip": 0
+    },
+    "realClosedReadAndAuthorization": {
+      "tests": 2,
+      "pass": 2,
+      "fail": 0,
+      "skip": 0
+    },
+    "additionalSDKBounds": {
+      "tests": 2,
+      "pass": 2,
+      "fail": 0,
+      "skip": 0,
+      "exactClosedDefaultAttempts": 5,
+      "unrelatedInvalidArgumentAttempts": 1,
+      "limitation": "modeled callback read error with actual SDK transaction runner, not natural failure"
+    },
+    "existingCASAndAuthorizationRoutes": {
+      "tests": 2,
+      "pass": 2,
+      "fail": 0,
+      "skip": 0
+    },
+    "typecheck": "PASS",
+    "lint": "PASS",
+    "diffCheck": "PASS"
+  },
+  "reusedEvidence": {
+    "workerStorageReceipts": {
+      "tests": 21,
+      "pass": 21,
+      "source": "../closed-read-probe-20261023/regression.log",
+      "basis": "raw log reviewed; three source hashes match receipt; excludes two new tests independently rerun"
+    },
+    "publicSDKControlAndAdaptedProbe": {
+      "status": "PASS",
+      "source": "../closed-read-probe-20261023/probe.log",
+      "basis": "read raw probe source and log; control exact real gRPC3 one callback zero result writes, adapted two callbacks fresh token one result"
+    }
+  },
+  "acceptanceCoverage": {
+    "fiveReadsOnly": "PASS",
+    "strictMatcherAndErrorIdentity": "PASS",
+    "commitAndDomainErrorsUnchanged": "PASS",
+    "retryRollbackFreshCallback": "PASS",
+    "boundedSDKAttempts": "PASS",
+    "CASAndReceiptReplay": "PASS",
+    "authorizationRotation": "PASS",
+    "secretFreePublishedProbeOutput": "PASS"
+  },
+  "materialFindings": [],
+  "limitations": [
+    "Forced rollback proves the modeled closed-read boundary, not natural CI root cause.",
+    "Remote CI39941728100 historical FAIL520/1/12 unchanged; fullCI NOT_RUN by QA.",
+    "Callback read origin and exact error message of original remote failure remain NOT_ESTABLISHED.",
+    "No cloud/device/build/deployment/commit/push performed."
+  ],
+  "cleanup": {
+    "ports": [
+      {
+        "port": 19519,
+        "free": true
+      },
+      {
+        "port": 19520,
+        "free": true
+      },
+      {
+        "port": 19521,
+        "free": true
+      },
+      {
+        "port": 19522,
+        "free": true
+      },
+      {
+        "port": 9151,
+        "free": true
+      }
+    ],
+    "allFree": true,
+    "sharedServices": "not stopped or modified"
+  },
+  "logs": [
+    "qa.log",
+    "existing.log",
+    "typecheck.log",
+    "lint.log"
+  ],
+  "privateExperiment": "bounded-retry.test.ts is temporary QA evidence; delivered reproduction remains versioned progressTransactionRetry tests"
+}

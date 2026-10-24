@@ -1,0 +1,19 @@
+Isolated emulator gate: demo-patternly-closed-read Auth19519/Firestore19520
+i  emulators: Starting emulators: auth, firestore
+i  emulators: Detected demo project ID "demo-patternly-closed-read", emulated services will use a demo configuration and attempts to access non-emulated services for this project will fail.
+i  firestore: Firestore Emulator logging to firestore-debug.log
+✔  firestore: Firestore Emulator was started in standard edition.
+✔  firestore: Firestore Emulator UI websocket is running on 9151.
+i  Running script: node .agent/private/closed-read-probe-20261023/probe.mjs
+CLOSED_READ_PROBE {"stage":"guarded_real_sdk_seed_read_confirmed"}
+CLOSED_READ_PROBE {"scenario":"control","stage":"one_shot_public_rollback_complete","attempt":1}
+CLOSED_READ_PROBE {"scenario":"control","observation":{"attempts":1,"injected":true,"freshTransaction":null,"outcome":{"status":"rejected","code":3,"exactClosedDetails":true,"exactClosedMessage":true,"category":"transaction_invalid_or_closed"},"revision":0,"recordExists":false,"receiptExists":false}}
+CLOSED_READ_PROBE {"scenario":"adapted","stage":"one_shot_public_rollback_complete","attempt":1}
+CLOSED_READ_PROBE {"scenario":"adapted","observation":{"attempts":2,"injected":true,"freshTransaction":true,"outcome":{"status":"fulfilled","value":{"revision":1,"version":1}},"revision":1,"recordExists":true,"receiptExists":true}}
+CLOSED_READ_PROBE {"stage":"complete","status":"PASS","cleanup":"own_synthetic_fixture_deleted","limitation":"fault_injection_boundary_only_not_natural_ci_cause"}
+✔  Script exited successfully (code 0)
+i  emulators: Shutting down emulators.
+i  firestore: Stopping Firestore Emulator
+i  auth: Stopping Authentication Emulator
+i  hub: Stopping emulator hub
+i  logging: Stopping Logging Emulator

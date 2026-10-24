@@ -1,0 +1,155 @@
+Isolated emulator gate: demo-patternly-closed-read-qa Auth19519/Firestore19520
+i  emulators: Starting emulators: auth, firestore
+i  emulators: Detected demo project ID "demo-patternly-closed-read-qa", emulated services will use a demo configuration and attempts to access non-emulated services for this project will fail.
+/bin/sh: lsof: command not found
+/bin/sh: lsof: command not found
+/bin/sh: lsof: command not found
+/bin/sh: lsof: command not found
+/bin/sh: lsof: command not found
+/bin/sh: lsof: command not found
+i  firestore: Firestore Emulator logging to firestore-debug.log
+✔  firestore: Firestore Emulator was started in standard edition.
+✔  firestore: Firestore Emulator UI websocket is running on 9151.
+i  Running script: node --import tsx --test --test-concurrency=1 tests/progressTransactionRetry.test.ts tests/progressTransactionRetry.emulator.test.ts .agent/private/closed-read-qa-20261023/bounded-retry.test.ts
+TAP version 13
+# Subtest: SDK bounds repeated exact closed read failure
+ok 1 - SDK bounds repeated exact closed read failure
+  ---
+  duration_ms: 9252.402375
+  type: 'test'
+  ...
+# Subtest: SDK bounds repeated unrelated read failure
+ok 2 - SDK bounds repeated unrelated read failure
+  ---
+  duration_ms: 11.803834
+  type: 'test'
+  ...
+# Subtest: real closed progress read retries with a fresh SDK transaction and keeps one durable result
+ok 3 - real closed progress read retries with a fresh SDK transaction and keeps one durable result
+  ---
+  duration_ms: 8718.988
+  type: 'test'
+  ...
+# Subtest: real closed-read retry rechecks authorization and cannot write after generation rotation
+ok 4 - real closed-read retry rechecks authorization and cannot write after generation rotation
+  ---
+  duration_ms: 8357.800625
+  type: 'test'
+  ...
+# Subtest: closed transaction read 1 delegates a bounded retry signal to the SDK
+ok 5 - closed transaction read 1 delegates a bounded retry signal to the SDK
+  ---
+  duration_ms: 5.460792
+  type: 'test'
+  ...
+# Subtest: closed transaction read 2 delegates a bounded retry signal to the SDK
+ok 6 - closed transaction read 2 delegates a bounded retry signal to the SDK
+  ---
+  duration_ms: 0.840417
+  type: 'test'
+  ...
+# Subtest: closed transaction read 3 delegates a bounded retry signal to the SDK
+ok 7 - closed transaction read 3 delegates a bounded retry signal to the SDK
+  ---
+  duration_ms: 0.811875
+  type: 'test'
+  ...
+# Subtest: closed transaction read 4 delegates a bounded retry signal to the SDK
+ok 8 - closed transaction read 4 delegates a bounded retry signal to the SDK
+  ---
+  duration_ms: 0.80475
+  type: 'test'
+  ...
+# Subtest: closed transaction read 5 delegates a bounded retry signal to the SDK
+ok 9 - closed transaction read 5 delegates a bounded retry signal to the SDK
+  ---
+  duration_ms: 0.887917
+  type: 'test'
+  ...
+# Subtest: exact closed message without details is recognized: Transaction is invalid or closed.
+ok 10 - exact closed message without details is recognized: Transaction is invalid or closed.
+  ---
+  duration_ms: 0.748292
+  type: 'test'
+  ...
+# Subtest: exact closed message without details is recognized: 3 INVALID_ARGUMENT: Transaction is invalid or closed.
+ok 11 - exact closed message without details is recognized: 3 INVALID_ARGUMENT: Transaction is invalid or closed.
+  ---
+  duration_ms: 0.696625
+  type: 'test'
+  ...
+# Subtest: unrelated read error 1 retains its identity
+ok 12 - unrelated read error 1 retains its identity
+  ---
+  duration_ms: 0.961791
+  type: 'test'
+  ...
+# Subtest: unrelated read error 2 retains its identity
+ok 13 - unrelated read error 2 retains its identity
+  ---
+  duration_ms: 1.038125
+  type: 'test'
+  ...
+# Subtest: unrelated read error 3 retains its identity
+ok 14 - unrelated read error 3 retains its identity
+  ---
+  duration_ms: 1.020042
+  type: 'test'
+  ...
+# Subtest: unrelated read error 4 retains its identity
+ok 15 - unrelated read error 4 retains its identity
+  ---
+  duration_ms: 0.796167
+  type: 'test'
+  ...
+# Subtest: unrelated read error 5 retains its identity
+ok 16 - unrelated read error 5 retains its identity
+  ---
+  duration_ms: 0.776416
+  type: 'test'
+  ...
+# Subtest: unrelated read error 6 retains its identity
+ok 17 - unrelated read error 6 retains its identity
+  ---
+  duration_ms: 0.712042
+  type: 'test'
+  ...
+# Subtest: unrelated read error 7 retains its identity
+ok 18 - unrelated read error 7 retains its identity
+  ---
+  duration_ms: 2.113667
+  type: 'test'
+  ...
+# Subtest: writeError is never normalized or retried by the read adapter
+ok 19 - writeError is never normalized or retried by the read adapter
+  ---
+  duration_ms: 2.489167
+  type: 'test'
+  ...
+# Subtest: commitError is never normalized or retried by the read adapter
+ok 20 - commitError is never normalized or retried by the read adapter
+  ---
+  duration_ms: 0.891292
+  type: 'test'
+  ...
+# Subtest: authorization domain errors remain fail closed before other reads or writes
+ok 21 - authorization domain errors remain fail closed before other reads or writes
+  ---
+  duration_ms: 0.649667
+  type: 'test'
+  ...
+1..21
+# tests 21
+# suites 0
+# pass 21
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 27638.468667
+✔  Script exited successfully (code 0)
+i  emulators: Shutting down emulators.
+i  firestore: Stopping Firestore Emulator
+i  auth: Stopping Authentication Emulator
+i  hub: Stopping emulator hub
+i  logging: Stopping Logging Emulator

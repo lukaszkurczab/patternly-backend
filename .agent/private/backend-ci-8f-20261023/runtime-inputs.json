@@ -1,0 +1,8 @@
+{
+  "backendHead": "0e3a7c17382633747b023b53882972107d3ea4b3",
+  "frontendHead": "9579a99b1ac8f3b15aa579399e3e18b3d4d68898",
+  "requiredOrder": ["lint", "typecheck", "firestore:ttl:check", "test:emulator", "test:progress-paging:client", "test:operator:emulator", "test:operator:acceptance", "openapi:check", "frontend:client:check", "build"],
+  "emulatorIsolation": "repo scripts/isolated-emulator-test-runner.mjs; full emulator suite uses demo-patternly-ci-8f-20261023 and Auth/Firestore ports 19419/19420; downstream repository CI scripts retain their documented isolated demo projects and ports",
+  "activeServicesPreserved": ["API 127.0.0.1:8080", "Auth 127.0.0.1:19099", "Firestore 127.0.0.1:18081"],
+  "runtime": "private Temurin JDK 21 ARM64 from official Adoptium API; Node v22.22.3; Firebase CLI 15.19.0"
+}

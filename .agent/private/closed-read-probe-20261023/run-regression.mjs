@@ -1,0 +1,2 @@
+import { runIsolatedEmulatorTests } from '../../../scripts/isolated-emulator-test-runner.mjs';
+process.exitCode = await runIsolatedEmulatorTests({ backendRoot: process.cwd(), projectId: 'demo-patternly-closed-read', command: 'node --import tsx --test --test-concurrency=1 tests/progressTransactionRetry.emulator.test.ts tests/progressStorage.emulator.test.ts tests/syncMutationReceipts.emulator.test.ts', environment: { PATTERNLY_ISOLATED_TEST_PORT_BASE: '19519' }, timeoutMs: 180000 });

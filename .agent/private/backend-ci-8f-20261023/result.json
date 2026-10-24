@@ -1,0 +1,13 @@
+{
+  "backendHead": "0e3a7c17382633747b023b53882972107d3ea4b3",
+  "frontendHead": "9579a99b1ac8f3b15aa579399e3e18b3d4d68898",
+  "runtime": {"node": "v22.22.3", "firebaseCli": "15.19.0", "java": "Temurin 21.0.13+9 arm64", "adoptiumArchiveSha256": "bf036b35b071bfb2f54f2c0af8ee8d88afa95ee6eb3dce02c0f94cfc2524d04a"},
+  "execution": {"fullCiStages": ["lint", "typecheck", "firestore:ttl:check", "test:emulator", "test:progress-paging:client", "test:operator:emulator", "test:operator:acceptance", "openapi:check", "frontend:client:check", "build"], "finishedStages": ["lint", "typecheck", "firestore:ttl:check", "test:emulator"], "emulatorHarness": "scripts/isolated-emulator-test-runner.mjs with demo-patternly-ci-8f-20261023, Auth 19419, Firestore 19420, hub 19421, logging 19422", "exitCode": 1, "oneRunOnly": true},
+  "testSummary": {"tests": 533, "passed": 519, "failed": 2, "skipped": 12, "concurrentProgressSyncCAS": "PASS", "failures": [
+    {"name": "standalone CLI cancellation sends no mutation after reading payload from piped stdin", "file": "tests/operatorCli.tty.test.ts", "detail": "token_prompt_requires_tty; expected 2 prompts, received 0"},
+    {"name": "sandbox promotional package access is owner-bound and rechecked at the expiry cutoff", "file": "tests/sandboxPromotionalPackages.emulator.test.ts", "detail": "auth/user-not-found at verifyAuthUser; test initializes the default Firebase Auth app with fixed patternly-app-sandbox while isolated runner sets FIREBASE_PROJECT_ID to demo-patternly-ci-8f-20261023"}
+  ]},
+  "downstreamStages": "NOT_RUN after fail-fast emulator suite failure",
+  "activeApiAuthFirestorePreserved": true,
+  "rerun": false
+}
