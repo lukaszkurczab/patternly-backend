@@ -320,6 +320,18 @@ function operationRef(db: Firestore, userId: string, operationId: string): Docum
 function syncBatchRef(db: Firestore, userId: string, metadata: SyncBatchMetadata): DocumentReference { return db.collection(COLLECTIONS.users).doc(userId).collection("syncBatches").doc(createHash("sha256").update(`${metadata.sessionId}:${metadata.batchId}`, "utf8").digest("hex")); }
 function syncBatchFingerprint(metadata: SyncBatchMetadata, expectedAccountRevision: number, mutations: readonly ProgressMutation[]): string { return createHash("sha256").update(canonicalJson({ metadata, expectedAccountRevision, mutations }), "utf8").digest("hex"); }
 function readAccountRevision(data: Record<string, unknown> | undefined): number { if (!data || data.accountRevision === undefined) return 0; if (!Number.isSafeInteger(data.accountRevision) || Number(data.accountRevision) < 0) throw new Error("account_revision_invalid"); return Number(data.accountRevision); }
+async function readProgressTransaction<T>(operation: () => Promise<T>): Promise<T> {
+  try { return await operation(); }
+  catch (error) {
+    const candidate = error as { code?: unknown; details?: unknown; message?: unknown } | null;
+    const closed = candidate?.code === 3 && (candidate.details === "Transaction is invalid or closed."
+      || (candidate.details === undefined && (candidate.message === "Transaction is invalid or closed." || candidate.message === "3 INVALID_ARGUMENT: Transaction is invalid or closed.")));
+    if (!closed) throw error;
+    // A closed read cannot continue. Let the SDK roll back and retry the whole
+    // callback within its existing attempt/backoff budget; never retry a commit.
+    throw Object.assign(new Error("progress_transaction_closed", { cause: error }), { code: 10 });
+  }
+}
 function progressSnapshotScope(userId: string, authorizationGeneration: number, generation: number): string {
   return createHash("sha256").update(canonicalJson({ schema: "progress-scope-v1", userId, authorizationGeneration, generation }), "utf8").digest("hex");
 }
@@ -999,11 +1011,11 @@ export class FirestoreProgressStore implements ProgressStore {
     assertGoalPlanRecordShapes(mutations.map((mutation) => ({ fingerprint: mutation.fingerprint, recordId: mutation.targetId, recordType: mutation.recordType, state: mutation.state, trackId: mutation.trackId, version: mutation.expectedVersion ?? 0 })));
     return this.db.runTransaction(async (transaction) => {
       const userRef = this.db.collection(COLLECTIONS.users).doc(userId);
-      const user = await transaction.get(userRef);
+      const user = await readProgressTransaction(() => transaction.get(userRef));
       if (!user.exists) throw new Error("account_deleted");
       assertExpectedAuthorizationGeneration(asRecord(user.data(), "user"), expectedAuthorizationGeneration);
       const metaRef = accountMetadataRef(this.db, userId);
-      const metaSnapshot = await transaction.get(metaRef);
+      const metaSnapshot = await readProgressTransaction(() => transaction.get(metaRef));
       const metadataSnapshot = metaSnapshot.data() as Record<string, unknown> | undefined;
       if (hasActiveAdoptionPromotionLease(metadataSnapshot)) throw new Error("progress_generation_conflict");
       const activeGeneration = readAccountGeneration(metadataSnapshot);
@@ -1011,8 +1023,8 @@ export class FirestoreProgressStore implements ProgressStore {
       const currentRefs = mutations.map((mutation) => progressCollection.doc(progressDocumentId(mutation)));
       const mutationRefs = mutations.map((mutation) => userRef.collection("syncMutations").doc(mutation.mutationId));
       const batchRef = syncBatchRef(this.db, userId, metadata);
-      const batchSnapshot = await transaction.get(batchRef);
-      const snapshots = await transaction.getAll(...currentRefs, ...mutationRefs);
+      const batchSnapshot = await readProgressTransaction(() => transaction.get(batchRef));
+      const snapshots = await readProgressTransaction(() => transaction.getAll(...currentRefs, ...mutationRefs));
       const accountRevision = readAccountRevision(metadataSnapshot);
       if (batchSnapshot.exists) {
         const stored = asRecord(batchSnapshot.data(), "sync_batch");
@@ -1064,7 +1076,7 @@ export class FirestoreProgressStore implements ProgressStore {
           }
         }
         const counterpartSnapshots = counterpartRefs.length > 0
-          ? await transaction.getAll(...counterpartRefs.map(({ ref }) => ref))
+          ? await readProgressTransaction(() => transaction.getAll(...counterpartRefs.map(({ ref }) => ref)))
           : [];
         const counterpartByKey = new Map(counterpartRefs.map(({ trackId, recordType }, index) => [canonicalJson({ trackId, recordType }), counterpartSnapshots[index]! ]));
         const prospectiveRecords: GuestMergeRecord[] = [];
