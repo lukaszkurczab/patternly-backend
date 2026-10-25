@@ -1,0 +1,172 @@
+TAP version 13
+# Subtest: the canonical sync envelope is required and has one mutation shape
+ok 1 - the canonical sync envelope is required and has one mutation shape
+  ---
+  duration_ms: 7.436084
+  type: 'test'
+  ...
+# Subtest: sync batches require unique mutation ids and record targets
+ok 2 - sync batches require unique mutation ids and record targets
+  ---
+  duration_ms: 2.929125
+  type: 'test'
+  ...
+# Subtest: canonical tombstones are accepted directly and retired identity markers are rejected recursively
+ok 3 - canonical tombstones are accepted directly and retired identity markers are rejected recursively
+  ---
+  duration_ms: 1.858709
+  type: 'test'
+  ...
+# Subtest: resolved material identity is exact and remains part of the mutation fingerprint
+ok 4 - resolved material identity is exact and remains part of the mutation fingerprint
+  ---
+  duration_ms: 1.070709
+  type: 'test'
+  ...
+# Subtest: resolved material identity uses the canonical safe identity rules
+ok 5 - resolved material identity uses the canonical safe identity rules
+  ---
+  duration_ms: 0.233792
+  type: 'test'
+  ...
+# Subtest: sync identities are bounded by the canonical envelope rather than arbitrary field caps
+ok 6 - sync identities are bounded by the canonical envelope rather than arbitrary field caps
+  ---
+  duration_ms: 1.153458
+  type: 'test'
+  ...
+# Subtest: sync and state limits are enforced without a compatibility branch
+ok 7 - sync and state limits are enforced without a compatibility branch
+  ---
+  duration_ms: 64.321625
+  type: 'test'
+  ...
+# Subtest: pagination tokens contain only generation, revision and cursor identity
+ok 8 - pagination tokens contain only generation, revision and cursor identity
+  ---
+  duration_ms: 1.311208
+  type: 'test'
+  ...
+# Subtest: canonical JSON uses NFC normalization and UTF-8 byte accounting
+ok 9 - canonical JSON uses NFC normalization and UTF-8 byte accounting
+  ---
+  duration_ms: 0.607416
+  type: 'test'
+  ...
+# Subtest: pagination rejects old, ambiguous and open-shaped tokens
+ok 10 - pagination rejects old, ambiguous and open-shaped tokens
+  ---
+  duration_ms: 0.651834
+  type: 'test'
+  ...
+# Subtest: closed transaction read 1 delegates a bounded retry signal to the SDK
+ok 11 - closed transaction read 1 delegates a bounded retry signal to the SDK
+  ---
+  duration_ms: 5.535
+  type: 'test'
+  ...
+# Subtest: closed transaction read 2 delegates a bounded retry signal to the SDK
+ok 12 - closed transaction read 2 delegates a bounded retry signal to the SDK
+  ---
+  duration_ms: 0.918042
+  type: 'test'
+  ...
+# Subtest: closed transaction read 3 delegates a bounded retry signal to the SDK
+ok 13 - closed transaction read 3 delegates a bounded retry signal to the SDK
+  ---
+  duration_ms: 0.804959
+  type: 'test'
+  ...
+# Subtest: closed transaction read 4 delegates a bounded retry signal to the SDK
+ok 14 - closed transaction read 4 delegates a bounded retry signal to the SDK
+  ---
+  duration_ms: 0.816375
+  type: 'test'
+  ...
+# Subtest: closed transaction read 5 delegates a bounded retry signal to the SDK
+ok 15 - closed transaction read 5 delegates a bounded retry signal to the SDK
+  ---
+  duration_ms: 0.90175
+  type: 'test'
+  ...
+# Subtest: exact closed message without details is recognized: Transaction is invalid or closed.
+ok 16 - exact closed message without details is recognized: Transaction is invalid or closed.
+  ---
+  duration_ms: 0.807708
+  type: 'test'
+  ...
+# Subtest: exact closed message without details is recognized: 3 INVALID_ARGUMENT: Transaction is invalid or closed.
+ok 17 - exact closed message without details is recognized: 3 INVALID_ARGUMENT: Transaction is invalid or closed.
+  ---
+  duration_ms: 0.678291
+  type: 'test'
+  ...
+# Subtest: unrelated read error 1 retains its identity
+ok 18 - unrelated read error 1 retains its identity
+  ---
+  duration_ms: 0.97375
+  type: 'test'
+  ...
+# Subtest: unrelated read error 2 retains its identity
+ok 19 - unrelated read error 2 retains its identity
+  ---
+  duration_ms: 1.037542
+  type: 'test'
+  ...
+# Subtest: unrelated read error 3 retains its identity
+ok 20 - unrelated read error 3 retains its identity
+  ---
+  duration_ms: 1.203584
+  type: 'test'
+  ...
+# Subtest: unrelated read error 4 retains its identity
+ok 21 - unrelated read error 4 retains its identity
+  ---
+  duration_ms: 0.741792
+  type: 'test'
+  ...
+# Subtest: unrelated read error 5 retains its identity
+ok 22 - unrelated read error 5 retains its identity
+  ---
+  duration_ms: 0.595917
+  type: 'test'
+  ...
+# Subtest: unrelated read error 6 retains its identity
+ok 23 - unrelated read error 6 retains its identity
+  ---
+  duration_ms: 0.632292
+  type: 'test'
+  ...
+# Subtest: unrelated read error 7 retains its identity
+ok 24 - unrelated read error 7 retains its identity
+  ---
+  duration_ms: 0.612958
+  type: 'test'
+  ...
+# Subtest: writeError is never normalized or retried by the read adapter
+ok 25 - writeError is never normalized or retried by the read adapter
+  ---
+  duration_ms: 1.656166
+  type: 'test'
+  ...
+# Subtest: commitError is never normalized or retried by the read adapter
+ok 26 - commitError is never normalized or retried by the read adapter
+  ---
+  duration_ms: 0.884958
+  type: 'test'
+  ...
+# Subtest: authorization domain errors remain fail closed before other reads or writes
+ok 27 - authorization domain errors remain fail closed before other reads or writes
+  ---
+  duration_ms: 0.688792
+  type: 'test'
+  ...
+1..27
+# tests 27
+# suites 0
+# pass 27
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 529.675041

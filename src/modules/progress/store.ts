@@ -1019,18 +1019,18 @@ export class FirestoreProgressStore implements ProgressStore {
       const metadataSnapshot = metaSnapshot.data() as Record<string, unknown> | undefined;
       if (hasActiveAdoptionPromotionLease(metadataSnapshot)) throw new Error("progress_generation_conflict");
       const activeGeneration = readAccountGeneration(metadataSnapshot);
-      const progressCollection = progressCollectionRef(this.db, userId, activeGeneration);
-      const currentRefs = mutations.map((mutation) => progressCollection.doc(progressDocumentId(mutation)));
-      const mutationRefs = mutations.map((mutation) => userRef.collection("syncMutations").doc(mutation.mutationId));
       const batchRef = syncBatchRef(this.db, userId, metadata);
       const batchSnapshot = await readProgressTransaction(() => transaction.get(batchRef));
-      const snapshots = await readProgressTransaction(() => transaction.getAll(...currentRefs, ...mutationRefs));
       const accountRevision = readAccountRevision(metadataSnapshot);
       if (batchSnapshot.exists) {
         const stored = asRecord(batchSnapshot.data(), "sync_batch");
         if (stored.fingerprint !== syncBatchFingerprint(metadata, expectedAccountRevision, mutations)) throw new Error("mutation_id_reuse");
         return parseStoredBatchResult(stored.result as object);
       }
+      const progressCollection = progressCollectionRef(this.db, userId, activeGeneration);
+      const currentRefs = mutations.map((mutation) => progressCollection.doc(progressDocumentId(mutation)));
+      const mutationRefs = mutations.map((mutation) => userRef.collection("syncMutations").doc(mutation.mutationId));
+      const snapshots = await readProgressTransaction(() => transaction.getAll(...currentRefs, ...mutationRefs));
       const applied: ProgressRecord[] = [];
       const duplicates: string[] = [];
       const conflicts: Array<SyncBatchResult["conflicts"][number]> = [];

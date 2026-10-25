@@ -1,0 +1,124 @@
+{
+  "task": "PAT-OPT-005",
+  "date": "2026-10-25",
+  "worker": {
+    "model": "gpt-6.1-sol",
+    "effort": "high"
+  },
+  "designReview": "controller approved before edits; minimum score .95",
+  "files": {
+    "src/modules/progress/store.ts": "ce6127ebaa9cb83d518a07ad622cd15feed4ae3e620b91ef5a979cd3f1018b9a",
+    "tests/progressStorage.emulator.test.ts": "36fc4b3c6c57a515d83373fd90839634775c04cfb2f8963adef9e274be1e985a"
+  },
+  "change": "Move mutation-dependent refs/getAll after authorized, metadata-validated, fingerprint-validated durable batch replay; preserve retry helper and all fresh-write contracts.",
+  "counts": {
+    "M1": {
+      "preimageReplayGetAll": 1,
+      "preimageReplayMutationDocuments": 2,
+      "freshGetAll": 1,
+      "freshMutationDocuments": 2,
+      "replayGetAll": 0,
+      "replayMutationDocuments": 0
+    },
+    "M100": {
+      "preimageReplayGetAll": 1,
+      "preimageReplayMutationDocuments": 200,
+      "freshGetAll": 1,
+      "freshMutationDocuments": 200,
+      "replayGetAll": 0,
+      "replayMutationDocuments": 0
+    },
+    "freshPlanOnlyGetAllArgumentCounts": [
+      2,
+      1
+    ]
+  },
+  "checks": [
+    {
+      "log": "sdk-counter-probe.log",
+      "result": "PASS",
+      "node": "24.21.0",
+      "scope": "real SDK get/getAll observer capability 1/1"
+    },
+    {
+      "log": "preimage-red.log",
+      "result": "EXPECTED_RED",
+      "node": "22.22.3",
+      "tests": 2,
+      "pass": 0,
+      "fail": 2,
+      "reason": "old replay retained getAll arguments2/200"
+    },
+    {
+      "log": "emulator.log",
+      "result": "PASS",
+      "node": "24.21.0",
+      "groups": [
+        {
+          "scope": "storage + real SDK closed read retry + retry unit",
+          "tests": 36,
+          "pass": 36,
+          "skip": 0
+        },
+        {
+          "scope": "relevant firestore HTTP sync CAS/auth/duplicate/tombstone",
+          "tests": 4,
+          "pass": 4,
+          "skip": 0
+        }
+      ]
+    },
+    {
+      "log": "storage-node22.log",
+      "result": "PASS",
+      "node": "22.22.3",
+      "tests": 17,
+      "pass": 17,
+      "skip": 0,
+      "scope": "final storage incl counterpart count assertion"
+    },
+    {
+      "log": "unit-node22.log",
+      "result": "PASS",
+      "node": "22.22.3",
+      "tests": 27,
+      "pass": 27,
+      "skip": 0,
+      "scope": "retry unit + progress contracts; retry overlaps emulator group"
+    },
+    {
+      "log": "typecheck-node22.log",
+      "result": "PASS"
+    },
+    {
+      "log": "lint-node22.log",
+      "result": "PASS"
+    },
+    {
+      "log": "build-node22.log",
+      "result": "PASS"
+    },
+    {
+      "scope": "git diff --check",
+      "result": "PASS"
+    }
+  ],
+  "environment": {
+    "java": "23.0.1",
+    "firebaseCli": "15.19.0",
+    "project": "demo-patternly-pat-opt-005",
+    "isolatedPorts": [
+      19651,
+      19652,
+      19653,
+      19654
+    ]
+  },
+  "safety": "Existing emulator19099/18081 left running; no existing emulator/account data cleared; test-only demo projects on isolated ports; temporary preimage copies removed.",
+  "limits": [
+    "Operation counts at public transaction API; no provider billing/physical I/O/p95 claim",
+    "No full backend CI or cloud/device/deploy acceptance",
+    "No PAT-CODE-017 identifier changes"
+  ],
+  "sourceFrozen": true
+}

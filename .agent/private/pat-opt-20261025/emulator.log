@@ -1,0 +1,273 @@
+Isolated emulator gate: demo-patternly-pat-opt-005 Auth19651/Firestore19652
+i  emulators: Starting emulators: auth, firestore
+i  emulators: Detected demo project ID "demo-patternly-pat-opt-005", emulated services will use a demo configuration and attempts to access non-emulated services for this project will fail.
+i  firestore: Firestore Emulator logging to firestore-debug.log
+✔  firestore: Firestore Emulator was started in standard edition.
+✔  firestore: Firestore Emulator UI websocket is running on 9151.
+i  Running script: node --import tsx --test --test-concurrency=1 tests/progressStorage.emulator.test.ts tests/progressTransactionRetry.test.ts tests/progressTransactionRetry.emulator.test.ts && node --import tsx --test --test-name-pattern="Firestore transaction preserves sync CAS|progress sync rejects fresh writes|sync rejects duplicate mutations|account-owned writers reject" tests/firestore.emulator.test.ts
+TAP version 13
+# Subtest: canonical sync persists exact identity records and replays by batch metadata
+ok 1 - canonical sync persists exact identity records and replays by batch metadata
+  ---
+  duration_ms: 658.901209
+  type: 'test'
+  ...
+# Subtest: long sync identities persist through hashed Firestore document keys
+ok 2 - long sync identities persist through hashed Firestore document keys
+  ---
+  duration_ms: 32.596042
+  type: 'test'
+  ...
+# Subtest: read fails closed for malformed persisted progress identity records
+ok 3 - read fails closed for malformed persisted progress identity records
+  ---
+  duration_ms: 51.810125
+  type: 'test'
+  ...
+# Subtest: one-shot adoption uses the same exact identity and explicit group choice shape
+ok 4 - one-shot adoption uses the same exact identity and explicit group choice shape
+  ---
+  duration_ms: 61.026208
+  type: 'test'
+  ...
+# Subtest: one-shot grouped keep_account preserves exact v2 pair and replays once
+ok 5 - one-shot grouped keep_account preserves exact v2 pair and replays once
+  ---
+  duration_ms: 114.940916
+  type: 'test'
+  ...
+# Subtest: one-shot grouped keep_guest preserves exact v2 pair and replays once
+ok 6 - one-shot grouped keep_guest preserves exact v2 pair and replays once
+  ---
+  duration_ms: 94.59275
+  type: 'test'
+  ...
+# Subtest: legacy identity leaves are rejected before a write
+ok 7 - legacy identity leaves are rejected before a write
+  ---
+  duration_ms: 10.341167
+  type: 'test'
+  ...
+# Subtest: goal and accepted plan sync as one effective bundle while unrelated tracks stay valid
+ok 8 - goal and accepted plan sync as one effective bundle while unrelated tracks stay valid
+  ---
+  duration_ms: 51.920333
+  type: 'test'
+  ...
+# Subtest: a changed goal cannot leave its v2 accepted plan pointing at the old target
+ok 9 - a changed goal cannot leave its v2 accepted plan pointing at the old target
+  ---
+  duration_ms: 63.11375
+  type: 'test'
+  ...
+# Subtest: duplicate goal identities in one batch are rejected before either bundle write
+ok 10 - duplicate goal identities in one batch are rejected before either bundle write
+  ---
+  duration_ms: 31.865875
+  type: 'test'
+  ...
+# Subtest: goal deletion alone is rejected, while deleting both bundle records is accepted
+ok 11 - goal deletion alone is rejected, while deleting both bundle records is accepted
+  ---
+  duration_ms: 72.885833
+  type: 'test'
+  ...
+# Subtest: concurrent accepted-pair updates serialize and retain an exact final bundle
+ok 12 - concurrent accepted-pair updates serialize and retain an exact final bundle
+  ---
+  duration_ms: 3061.32575
+  type: 'test'
+  ...
+# Subtest: a plan-only update validates against the current goal counterpart
+ok 13 - a plan-only update validates against the current goal counterpart
+  ---
+  duration_ms: 77.629583
+  type: 'test'
+  ...
+# Subtest: identical batch replay remains stable after a later accepted-pair revision
+ok 14 - identical batch replay remains stable after a later accepted-pair revision
+  ---
+  duration_ms: 59.783792
+  type: 'test'
+  ...
+# Subtest: batch replay skips all mutation-dependent reads for 1 mutations
+ok 15 - batch replay skips all mutation-dependent reads for 1 mutations
+  ---
+  duration_ms: 79.054042
+  type: 'test'
+  ...
+# Subtest: batch replay skips all mutation-dependent reads for 100 mutations
+ok 16 - batch replay skips all mutation-dependent reads for 100 mutations
+  ---
+  duration_ms: 409.856125
+  type: 'test'
+  ...
+# Subtest: batch replay retains authorization, lease and malformed metadata guards
+ok 17 - batch replay retains authorization, lease and malformed metadata guards
+  ---
+  duration_ms: 127.618708
+  type: 'test'
+  ...
+# Subtest: real closed progress read retries with a fresh SDK transaction and keeps one durable result
+ok 18 - real closed progress read retries with a fresh SDK transaction and keeps one durable result
+  ---
+  duration_ms: 7276.65075
+  type: 'test'
+  ...
+# Subtest: real closed-read retry rechecks authorization and cannot write after generation rotation
+ok 19 - real closed-read retry rechecks authorization and cannot write after generation rotation
+  ---
+  duration_ms: 7767.991667
+  type: 'test'
+  ...
+# Subtest: closed transaction read 1 delegates a bounded retry signal to the SDK
+ok 20 - closed transaction read 1 delegates a bounded retry signal to the SDK
+  ---
+  duration_ms: 6.448875
+  type: 'test'
+  ...
+# Subtest: closed transaction read 2 delegates a bounded retry signal to the SDK
+ok 21 - closed transaction read 2 delegates a bounded retry signal to the SDK
+  ---
+  duration_ms: 1.015125
+  type: 'test'
+  ...
+# Subtest: closed transaction read 3 delegates a bounded retry signal to the SDK
+ok 22 - closed transaction read 3 delegates a bounded retry signal to the SDK
+  ---
+  duration_ms: 0.821458
+  type: 'test'
+  ...
+# Subtest: closed transaction read 4 delegates a bounded retry signal to the SDK
+ok 23 - closed transaction read 4 delegates a bounded retry signal to the SDK
+  ---
+  duration_ms: 0.924167
+  type: 'test'
+  ...
+# Subtest: closed transaction read 5 delegates a bounded retry signal to the SDK
+ok 24 - closed transaction read 5 delegates a bounded retry signal to the SDK
+  ---
+  duration_ms: 1.041166
+  type: 'test'
+  ...
+# Subtest: exact closed message without details is recognized: Transaction is invalid or closed.
+ok 25 - exact closed message without details is recognized: Transaction is invalid or closed.
+  ---
+  duration_ms: 0.88225
+  type: 'test'
+  ...
+# Subtest: exact closed message without details is recognized: 3 INVALID_ARGUMENT: Transaction is invalid or closed.
+ok 26 - exact closed message without details is recognized: 3 INVALID_ARGUMENT: Transaction is invalid or closed.
+  ---
+  duration_ms: 0.765792
+  type: 'test'
+  ...
+# Subtest: unrelated read error 1 retains its identity
+ok 27 - unrelated read error 1 retains its identity
+  ---
+  duration_ms: 1.014875
+  type: 'test'
+  ...
+# Subtest: unrelated read error 2 retains its identity
+ok 28 - unrelated read error 2 retains its identity
+  ---
+  duration_ms: 1.13525
+  type: 'test'
+  ...
+# Subtest: unrelated read error 3 retains its identity
+ok 29 - unrelated read error 3 retains its identity
+  ---
+  duration_ms: 1.176208
+  type: 'test'
+  ...
+# Subtest: unrelated read error 4 retains its identity
+ok 30 - unrelated read error 4 retains its identity
+  ---
+  duration_ms: 0.932708
+  type: 'test'
+  ...
+# Subtest: unrelated read error 5 retains its identity
+ok 31 - unrelated read error 5 retains its identity
+  ---
+  duration_ms: 0.71275
+  type: 'test'
+  ...
+# Subtest: unrelated read error 6 retains its identity
+ok 32 - unrelated read error 6 retains its identity
+  ---
+  duration_ms: 0.715333
+  type: 'test'
+  ...
+# Subtest: unrelated read error 7 retains its identity
+ok 33 - unrelated read error 7 retains its identity
+  ---
+  duration_ms: 3.253375
+  type: 'test'
+  ...
+# Subtest: writeError is never normalized or retried by the read adapter
+ok 34 - writeError is never normalized or retried by the read adapter
+  ---
+  duration_ms: 2.374625
+  type: 'test'
+  ...
+# Subtest: commitError is never normalized or retried by the read adapter
+ok 35 - commitError is never normalized or retried by the read adapter
+  ---
+  duration_ms: 1.831291
+  type: 'test'
+  ...
+# Subtest: authorization domain errors remain fail closed before other reads or writes
+ok 36 - authorization domain errors remain fail closed before other reads or writes
+  ---
+  duration_ms: 0.777333
+  type: 'test'
+  ...
+1..36
+# tests 36
+# suites 0
+# pass 36
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 21768.564334
+TAP version 13
+# Subtest: Firestore transaction preserves sync CAS and idempotency under concurrent retries
+ok 1 - Firestore transaction preserves sync CAS and idempotency under concurrent retries
+  ---
+  duration_ms: 3938.926375
+  type: 'test'
+  ...
+# Subtest: progress sync rejects fresh writes and batch replays when authorization rotates after the request guard
+ok 2 - progress sync rejects fresh writes and batch replays when authorization rotates after the request guard
+  ---
+  duration_ms: 195.785
+  type: 'test'
+  ...
+# Subtest: sync rejects duplicate mutations before writing and applies distinct targets
+ok 3 - sync rejects duplicate mutations before writing and applies distinct targets
+  ---
+  duration_ms: 153.954542
+  type: 'test'
+  ...
+# Subtest: account-owned writers reject a tombstoned or missing user after authentication
+ok 4 - account-owned writers reject a tombstoned or missing user after authentication
+  ---
+  duration_ms: 169.324083
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5306.628208
+✔  Script exited successfully (code 0)
+i  emulators: Shutting down emulators.
+i  firestore: Stopping Firestore Emulator
+i  auth: Stopping Authentication Emulator
+i  hub: Stopping emulator hub
+i  logging: Stopping Logging Emulator

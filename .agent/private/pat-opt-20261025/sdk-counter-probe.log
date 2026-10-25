@@ -1,0 +1,14 @@
+Isolated emulator gate: demo-patternly-pat-opt-005 Auth19651/Firestore19652
+i  emulators: Starting emulators: auth, firestore
+i  emulators: Detected demo project ID "demo-patternly-pat-opt-005", emulated services will use a demo configuration and attempts to access non-emulated services for this project will fail.
+i  firestore: Firestore Emulator logging to firestore-debug.log
+✔  firestore: Firestore Emulator was started in standard edition.
+✔  firestore: Firestore Emulator UI websocket is running on 9151.
+i  Running script: node .agent/private/pat-opt-20261025/sdk-counter-probe.mjs
+{"stage":"public-sdk-counter-probe","get":1,"getAll":1,"documents":1}
+✔  Script exited successfully (code 0)
+i  emulators: Shutting down emulators.
+i  firestore: Stopping Firestore Emulator
+i  auth: Stopping Authentication Emulator
+i  hub: Stopping emulator hub
+i  logging: Stopping Logging Emulator

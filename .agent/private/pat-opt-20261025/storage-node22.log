@@ -1,0 +1,125 @@
+Isolated emulator gate: demo-patternly-pat-opt-005 Auth19651/Firestore19652
+i  emulators: Starting emulators: auth, firestore
+i  emulators: Detected demo project ID "demo-patternly-pat-opt-005", emulated services will use a demo configuration and attempts to access non-emulated services for this project will fail.
+i  firestore: Firestore Emulator logging to firestore-debug.log
+✔  firestore: Firestore Emulator was started in standard edition.
+✔  firestore: Firestore Emulator UI websocket is running on 9151.
+i  Running script: node --import tsx --test --test-concurrency=1 tests/progressStorage.emulator.test.ts
+TAP version 13
+# Subtest: canonical sync persists exact identity records and replays by batch metadata
+ok 1 - canonical sync persists exact identity records and replays by batch metadata
+  ---
+  duration_ms: 662.59425
+  type: 'test'
+  ...
+# Subtest: long sync identities persist through hashed Firestore document keys
+ok 2 - long sync identities persist through hashed Firestore document keys
+  ---
+  duration_ms: 73.11725
+  type: 'test'
+  ...
+# Subtest: read fails closed for malformed persisted progress identity records
+ok 3 - read fails closed for malformed persisted progress identity records
+  ---
+  duration_ms: 70.7575
+  type: 'test'
+  ...
+# Subtest: one-shot adoption uses the same exact identity and explicit group choice shape
+ok 4 - one-shot adoption uses the same exact identity and explicit group choice shape
+  ---
+  duration_ms: 108.064792
+  type: 'test'
+  ...
+# Subtest: one-shot grouped keep_account preserves exact v2 pair and replays once
+ok 5 - one-shot grouped keep_account preserves exact v2 pair and replays once
+  ---
+  duration_ms: 142.395583
+  type: 'test'
+  ...
+# Subtest: one-shot grouped keep_guest preserves exact v2 pair and replays once
+ok 6 - one-shot grouped keep_guest preserves exact v2 pair and replays once
+  ---
+  duration_ms: 127.113458
+  type: 'test'
+  ...
+# Subtest: legacy identity leaves are rejected before a write
+ok 7 - legacy identity leaves are rejected before a write
+  ---
+  duration_ms: 10.093708
+  type: 'test'
+  ...
+# Subtest: goal and accepted plan sync as one effective bundle while unrelated tracks stay valid
+ok 8 - goal and accepted plan sync as one effective bundle while unrelated tracks stay valid
+  ---
+  duration_ms: 56.942875
+  type: 'test'
+  ...
+# Subtest: a changed goal cannot leave its v2 accepted plan pointing at the old target
+ok 9 - a changed goal cannot leave its v2 accepted plan pointing at the old target
+  ---
+  duration_ms: 65.888958
+  type: 'test'
+  ...
+# Subtest: duplicate goal identities in one batch are rejected before either bundle write
+ok 10 - duplicate goal identities in one batch are rejected before either bundle write
+  ---
+  duration_ms: 32.386875
+  type: 'test'
+  ...
+# Subtest: goal deletion alone is rejected, while deleting both bundle records is accepted
+ok 11 - goal deletion alone is rejected, while deleting both bundle records is accepted
+  ---
+  duration_ms: 74.963833
+  type: 'test'
+  ...
+# Subtest: concurrent accepted-pair updates serialize and retain an exact final bundle
+ok 12 - concurrent accepted-pair updates serialize and retain an exact final bundle
+  ---
+  duration_ms: 2972.2165
+  type: 'test'
+  ...
+# Subtest: a plan-only update validates against the current goal counterpart
+ok 13 - a plan-only update validates against the current goal counterpart
+  ---
+  duration_ms: 102.405542
+  type: 'test'
+  ...
+# Subtest: identical batch replay remains stable after a later accepted-pair revision
+ok 14 - identical batch replay remains stable after a later accepted-pair revision
+  ---
+  duration_ms: 88.091709
+  type: 'test'
+  ...
+# Subtest: batch replay skips all mutation-dependent reads for 1 mutations
+ok 15 - batch replay skips all mutation-dependent reads for 1 mutations
+  ---
+  duration_ms: 113.095167
+  type: 'test'
+  ...
+# Subtest: batch replay skips all mutation-dependent reads for 100 mutations
+ok 16 - batch replay skips all mutation-dependent reads for 100 mutations
+  ---
+  duration_ms: 601.118625
+  type: 'test'
+  ...
+# Subtest: batch replay retains authorization, lease and malformed metadata guards
+ok 17 - batch replay retains authorization, lease and malformed metadata guards
+  ---
+  duration_ms: 164.764
+  type: 'test'
+  ...
+1..17
+# tests 17
+# suites 0
+# pass 17
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6209.150208
+✔  Script exited successfully (code 0)
+i  emulators: Shutting down emulators.
+i  firestore: Stopping Firestore Emulator
+i  auth: Stopping Authentication Emulator
+i  hub: Stopping emulator hub
+i  logging: Stopping Logging Emulator

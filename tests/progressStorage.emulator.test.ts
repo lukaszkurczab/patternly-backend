@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { deleteApp, initializeApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, Timestamp, type Transaction } from "firebase-admin/firestore";
 import { FirestoreProgressStore } from "../src/modules/progress/store.js";
 import { createMergeRecordFingerprint } from "../src/modules/users/merge.js";
 
@@ -48,6 +48,35 @@ function goalPlanPair(track: string, targetDate: string, goalRevision = 1, planR
   const goal = goalPlanMutation("goal", track, goalState(track, targetDate, goalRevision), goalRevision === 1 ? null : goalRevision - 1);
   const plan = goalPlanMutation("learning_plan", track, planState(track, targetDate, goalRevision, planRevision), planRevision === 1 ? null : planRevision - 1);
   return [goal, plan] as const;
+}
+
+function observeTransactionReads() {
+  const reads: Array<{ method: "get" | "getAll"; paths: string[] }> = [];
+  const observedDb = new Proxy(db, { get(target, property) {
+    if (property === "runTransaction") return (callback: (transaction: Transaction) => Promise<unknown>) => target.runTransaction(transaction => {
+      const observed = new Proxy(transaction, { get(actual, member) {
+        const value: unknown = Reflect.get(actual, member, actual);
+        if ((member === "get" || member === "getAll") && typeof value === "function") return (...refs: Array<{ path: string }>) => {
+          reads.push({ method: member, paths: refs.map(ref => ref.path) });
+          return Reflect.apply(value, actual, refs);
+        };
+        return typeof value === "function" ? value.bind(actual) : value;
+      } });
+      return callback(observed);
+    });
+    const value: unknown = Reflect.get(target, property, target);
+    return typeof value === "function" ? value.bind(target) : value;
+  } });
+  return { store: new FirestoreProgressStore(observedDb), reads };
+}
+
+async function syncDocuments(userId: string) {
+  const user = db.collection("users").doc(userId);
+  const collections = ["progress", "syncMetadata", "syncMutations", "syncBatches"];
+  return Promise.all(collections.map(async name => {
+    const snapshot = await user.collection(name).get();
+    return { name, documents: snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() })).sort((left, right) => left.id.localeCompare(right.id)) };
+  }));
 }
 
 test.after(async () => {
@@ -245,7 +274,9 @@ test("a plan-only update validates against the current goal counterpart", async 
   await store.applyBatch(userId, 1, deviceId, 0, goalPlanPair(track, "2027-09-09"), metadata(55));
   await store.applyBatch(userId, 1, deviceId, 2, goalPlanPair(track, "2027-10-10", 2, 2), metadata(56));
   const stalePlanUpdate = goalPlanMutation("learning_plan", track, planState(track, "2027-09-09", 2, 3), 2);
-  await assert.rejects(() => store.applyBatch(userId, 1, deviceId, 4, [stalePlanUpdate], metadata(57)), { message: "goal_plan_bundle_invalid" });
+  const observed = observeTransactionReads();
+  await assert.rejects(() => observed.store.applyBatch(userId, 1, deviceId, 4, [stalePlanUpdate], metadata(57)), { message: "goal_plan_bundle_invalid" });
+  assert.deepEqual(observed.reads.filter(read => read.method === "getAll").map(read => read.paths.length), [2, 1]);
   const snapshot = await store.readSnapshot(userId);
   assert.equal(snapshot.accountRevision, 4);
   const goal = snapshot.records.find((record) => record.recordType === "goal")!;
@@ -263,4 +294,70 @@ test("identical batch replay remains stable after a later accepted-pair revision
   const replay = await store.applyBatch(userId, 1, deviceId, 0, originalMutations, metadata(60));
   assert.deepEqual(replay, original);
   assert.equal((await store.readSnapshot(userId)).accountRevision, 4);
+});
+
+for (const count of [1, 100]) {
+  test(`batch replay skips all mutation-dependent reads for ${count} mutations`, async () => {
+    const userId = await account();
+    const inputs = Array.from({ length: count }, (_, index) => {
+      const target = `counted-attempt-${index}`;
+      return mutation("training_attempt", target, attemptState(target, trackId));
+    });
+    const fresh = observeTransactionReads();
+    const result = await fresh.store.applyBatch(userId, 1, deviceId, 0, inputs, metadata(70), true);
+    assert.equal(result.applied.length, count);
+    assert.equal(result.accountRevision, count);
+    assert.equal(typeof result.snapshotScope, "string");
+    assert.deepEqual(fresh.reads.map(read => [read.method, read.paths.length]), [["get", 1], ["get", 1], ["get", 1], ["getAll", 2 * count]]);
+    assert.equal(fresh.reads[3]!.paths.filter(path => path.includes("/progress/")).length, count);
+    assert.equal(fresh.reads[3]!.paths.filter(path => path.includes("/syncMutations/")).length, count);
+
+    // A stored result must remain original even when the current revision advances.
+    const laterTarget = "later-attempt";
+    await store.applyBatch(userId, 1, deviceId, count, [mutation("training_attempt", laterTarget, attemptState(laterTarget, trackId))], metadata(71));
+    const before = await syncDocuments(userId);
+    const replay = observeTransactionReads();
+    const replayed = await replay.store.applyBatch(userId, 1, deviceId, 0, inputs, metadata(70), true);
+    const { snapshotScope: _snapshotScope, ...durableResult } = result;
+    assert.deepEqual(replayed, durableResult);
+    assert.deepEqual(replay.reads.map(read => [read.method, read.paths.length]), [["get", 1], ["get", 1], ["get", 1]]);
+    assert.ok(replay.reads.every(read => read.paths.every(path => !path.includes("/progress/") && !path.includes("/syncMutations/"))));
+    assert.deepEqual(await syncDocuments(userId), before);
+
+    const reused = observeTransactionReads();
+    const changedTarget = "changed-attempt";
+    const changed = mutation("training_attempt", changedTarget, attemptState(changedTarget, trackId));
+    await assert.rejects(reused.store.applyBatch(userId, 1, deviceId, 0, [changed, ...inputs.slice(1)], metadata(70)), { message: "mutation_id_reuse" });
+    assert.equal(reused.reads.filter(read => read.method === "getAll").length, 0);
+    assert.deepEqual(await syncDocuments(userId), before);
+  });
+}
+
+test("batch replay retains authorization, lease and malformed metadata guards", async () => {
+  const userId = await account();
+  const user = db.collection("users").doc(userId);
+  const meta = user.collection("syncMetadata").doc("account");
+  const target = "guarded-replay";
+  const input = mutation("training_attempt", target, attemptState(target, trackId));
+  await store.applyBatch(userId, 1, deviceId, 0, [input], metadata(80));
+  const initial = (await meta.get()).data()!;
+  for (const [update, message] of [
+    [{ accountRevision: "1" }, "account_revision_invalid"],
+    [{ generation: -1 }, "account_generation_invalid"],
+    [{ adoptionPromotionSessionId: "active-promotion", adoptionPromotionLeaseExpiresAt: Timestamp.fromMillis(Date.now() + 60_000) }, "progress_generation_conflict"],
+  ] as const) {
+    await meta.set({ ...initial, ...update });
+    const before = await syncDocuments(userId);
+    const replay = observeTransactionReads();
+    await assert.rejects(replay.store.applyBatch(userId, 1, deviceId, 0, [input], metadata(80)), { message });
+    assert.equal(replay.reads.filter(read => read.method === "getAll").length, 0);
+    assert.deepEqual(await syncDocuments(userId), before);
+  }
+  await meta.set(initial);
+  await user.update({ authorizationGeneration: 2 });
+  const before = await syncDocuments(userId);
+  const replay = observeTransactionReads();
+  await assert.rejects(replay.store.applyBatch(userId, 1, deviceId, 0, [input], metadata(80)), { message: "authorization_generation_conflict" });
+  assert.deepEqual(replay.reads, [{ method: "get", paths: [user.path] }]);
+  assert.deepEqual(await syncDocuments(userId), before);
 });
