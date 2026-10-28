@@ -308,9 +308,9 @@ for (const count of [1, 100]) {
     assert.equal(result.applied.length, count);
     assert.equal(result.accountRevision, count);
     assert.equal(typeof result.snapshotScope, "string");
-    assert.deepEqual(fresh.reads.map(read => [read.method, read.paths.length]), [["get", 1], ["get", 1], ["get", 1], ["getAll", 2 * count]]);
-    assert.equal(fresh.reads[3]!.paths.filter(path => path.includes("/progress/")).length, count);
-    assert.equal(fresh.reads[3]!.paths.filter(path => path.includes("/syncMutations/")).length, count);
+    assert.deepEqual(fresh.reads.map(read => [read.method, read.paths.length]), [["get", 1], ["get", 1], ["get", 1], ["get", 1], ["getAll", 2 * count]]);
+    assert.equal(fresh.reads[4]!.paths.filter(path => path.includes("/progress/")).length, count);
+    assert.equal(fresh.reads[4]!.paths.filter(path => path.includes("/syncMutations/")).length, count);
 
     // A stored result must remain original even when the current revision advances.
     const laterTarget = "later-attempt";

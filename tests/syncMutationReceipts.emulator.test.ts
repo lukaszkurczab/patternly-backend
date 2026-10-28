@@ -1,6 +1,6 @@
 import { attemptState, reviewState } from "./progressFixtures.js";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
 import { Timestamp } from "firebase-admin/firestore";
 import { progressDocumentId } from "../src/infrastructure/firestore/paths.js";
@@ -34,6 +34,8 @@ const metadata = () => ({ sessionId: "receipt-session", batchId: randomUUID(), h
 const userRef = (id: string) => db.collection("users").doc(id);
 const receiptRef = (id: string, value: ProgressMutation) => userRef(id).collection("syncMutations").doc(value.mutationId);
 const progressRef = (id: string, value: ProgressMutation) => userRef(id).collection("progress").doc(progressDocumentId(value));
+const legacyBatchRef = (id: string, value: { sessionId: string; batchId: string }) => userRef(id).collection("syncBatches").doc(createHash("sha256").update(`${value.sessionId}:${value.batchId}`, "utf8").digest("hex"));
+const versionedBatchRef = (id: string, value: { sessionId: string; batchId: string }) => userRef(id).collection("syncBatches").doc(`v2_${createHash("sha256").update(JSON.stringify(["sync-batch-v2", value.sessionId, value.batchId]), "utf8").digest("hex")}`);
 async function persisted(id: string) {
   const rows = await Promise.all(["progress", "syncMutations", "syncBatches", "syncMetadata"].map(async (collection) =>
     (await userRef(id).collection(collection).orderBy("__name__").get()).docs.map((document) => [document.id, document.data()])));
@@ -55,6 +57,159 @@ function assertBinding(data: Record<string, unknown> | undefined, value: Progres
 test.after(async () => {
   for (const id of accounts) await db.recursiveDelete(userRef(id));
   await context.close();
+});
+
+test("versioned batch keys separate legacy-colliding pairs and preserve exact replay", async () => {
+  const id = await account();
+  const firstMetadata = { sessionId: "alpha", batchId: "beta:gamma", highWatermark: 1 };
+  const secondMetadata = { sessionId: "alpha:beta", batchId: "gamma", highWatermark: 1 };
+  const first = mutation({ targetId: "collision-first" });
+  const second = mutation({ targetId: "collision-second" });
+
+  const firstResult = await store.applyBatch(id, 1, deviceId, 0, [first], firstMetadata);
+  assert.deepEqual(firstResult.applied.map((record) => record.lastMutationId), [first.mutationId]);
+
+  // Turn the first batch receipt into an exact v1 fixture, as persisted by the
+  // old delimiter-based implementation.
+  const firstV2Ref = versionedBatchRef(id, firstMetadata);
+  const firstReceipt = (await firstV2Ref.get()).data()!;
+  const firstLegacyRef = legacyBatchRef(id, firstMetadata);
+  await firstLegacyRef.create(firstReceipt);
+  await firstV2Ref.delete();
+
+  const secondResult = await store.applyBatch(id, 1, deviceId, 1, [second], secondMetadata);
+  assert.deepEqual(secondResult.applied.map((record) => record.lastMutationId), [second.mutationId]);
+  assert.equal(secondResult.accountRevision, 2);
+  const secondReceiptRef = versionedBatchRef(id, secondMetadata);
+  const secondReceipt = (await secondReceiptRef.get()).data();
+  assert.ok(secondReceipt);
+
+  await assertNoWrite(id, async () => {
+    assert.deepEqual(await store.applyBatch(id, 1, deviceId, 1, [second], secondMetadata), secondResult);
+  });
+  await assertNoWrite(id, async () => {
+    assert.deepEqual(await store.applyBatch(id, 1, deviceId, 0, [first], firstMetadata), firstResult);
+  });
+  assert.deepEqual((await firstLegacyRef.get()).data(), firstReceipt, "legacy replay must preserve its receipt and TTL");
+  assert.deepEqual((await secondReceiptRef.get()).data(), secondReceipt, "batch replay must not renew TTL");
+
+  const changedFirst = mutation({ ...first, state: { answer: "changed" } });
+  await assertNoWrite(id, () => assert.rejects(store.applyBatch(id, 1, deviceId, 0, [changedFirst], firstMetadata), /mutation_id_reuse/u));
+  const changedSecond = mutation({ ...second, state: { answer: "changed" } });
+  await assertNoWrite(id, () => assert.rejects(store.applyBatch(id, 1, deviceId, 1, [changedSecond], secondMetadata), /mutation_id_reuse/u));
+});
+
+test("versioned namespace cannot alias an arbitrary legacy delimiter pair", async () => {
+  const id = await account();
+  const targetMetadata = { sessionId: "alpha:beta", batchId: "gamma", highWatermark: 1 };
+  const encodedTarget = JSON.stringify(["sync-batch-v2", targetMetadata.sessionId, targetMetadata.batchId]);
+  const separator = encodedTarget.indexOf(":");
+  assert.ok(separator > 0);
+  const legacyMetadata = { sessionId: encodedTarget.slice(0, separator), batchId: encodedTarget.slice(separator + 1), highWatermark: 1 };
+  assert.ok(legacyMetadata.sessionId.length <= 128);
+  assert.ok(legacyMetadata.batchId.length <= 128);
+  assert.equal(`${legacyMetadata.sessionId}:${legacyMetadata.batchId}`, encodedTarget);
+
+  // Create a realistic old receipt, then place it at the old v1 document ID.
+  const legacyMutation = mutation({ targetId: "namespace-legacy" });
+  await store.applyBatch(id, 1, deviceId, 0, [legacyMutation], legacyMetadata);
+  const legacyV2Ref = versionedBatchRef(id, legacyMetadata);
+  const legacyReceipt = (await legacyV2Ref.get()).data()!;
+  const oldReceiptRef = legacyBatchRef(id, legacyMetadata);
+  await oldReceiptRef.create(legacyReceipt);
+  await legacyV2Ref.delete();
+
+  const targetMutation = mutation({ targetId: "namespace-target" });
+  const result = await store.applyBatch(id, 1, deviceId, 1, [targetMutation], targetMetadata);
+  assert.deepEqual(result.applied.map((record) => record.lastMutationId), [targetMutation.mutationId]);
+  assert.equal(result.accountRevision, 2);
+  assert.match(versionedBatchRef(id, targetMetadata).id, /^v2_[a-f0-9]{64}$/u);
+});
+
+test("concurrent legacy-colliding batch pairs serialize at account revision", async () => {
+  const id = await account();
+  const firstMetadata = { sessionId: "alpha", batchId: "beta:gamma", highWatermark: 1 };
+  const secondMetadata = { sessionId: "alpha:beta", batchId: "gamma", highWatermark: 1 };
+  const first = mutation({ targetId: "concurrent-collision-first" });
+  const second = mutation({ targetId: "concurrent-collision-second" });
+
+  const attempts = await Promise.all([
+    store.applyBatch(id, 1, deviceId, 0, [first], firstMetadata),
+    store.applyBatch(id, 1, deviceId, 0, [second], secondMetadata),
+  ]);
+  const winner = attempts.find((result) => result.applied.length === 1)!;
+  const loser = attempts.find((result) => result.accountRevisionConflict !== undefined)!;
+  assert.ok(winner);
+  assert.ok(loser);
+  const winnerMutation = winner.applied[0]!.lastMutationId === first.mutationId ? first : second;
+  const loserMutation = winnerMutation === first ? second : first;
+  const loserMetadata = winnerMutation === first ? secondMetadata : firstMetadata;
+
+  const retried = await store.applyBatch(id, 1, deviceId, winner.accountRevision, [loserMutation], loserMetadata);
+  assert.deepEqual(retried.applied.map((record) => record.lastMutationId), [loserMutation.mutationId]);
+  assert.equal(retried.accountRevision, 2);
+  assert.deepEqual((await store.readSnapshot(id)).records.map((record) => record.lastMutationId).sort(), [first.mutationId, second.mutationId].sort());
+});
+
+test("concurrent identical 100-mutation batches share one durable result", async () => {
+  const id = await account();
+  const value = { sessionId: "concurrent-100-session", batchId: "concurrent-100-batch", highWatermark: 100 };
+  const inputs = Array.from({ length: 100 }, (_, index) => mutation({ targetId: `concurrent-batch-${index}` }));
+  const [first, retry] = await Promise.all([
+    store.applyBatch(id, 1, deviceId, 0, inputs, value),
+    store.applyBatch(id, 1, deviceId, 0, inputs, value),
+  ]);
+
+  assert.deepEqual(retry, first);
+  assert.equal(first.applied.length, 100);
+  assert.equal(first.accountRevision, 100);
+  assert.equal((await store.readSnapshot(id)).records.length, 100);
+  const batchReceiptRef = versionedBatchRef(id, value);
+  const receipt = (await batchReceiptRef.get()).data();
+  assert.ok(receipt);
+  assert.ok(receipt.createdAt instanceof Timestamp);
+  assert.ok(receipt.expiresAt instanceof Timestamp);
+  assert.equal(receipt.expiresAt.toMillis() - receipt.createdAt.toMillis(), 30 * 24 * 60 * 60 * 1_000);
+  assert.equal((await userRef(id).collection("syncBatches").get()).size, 1);
+
+  await assertNoWrite(id, async () => {
+    assert.deepEqual(await store.applyBatch(id, 1, deviceId, 0, inputs, value), first);
+  });
+  assert.deepEqual((await batchReceiptRef.get()).data(), receipt, "concurrent retry must not renew batch TTL");
+});
+
+test("versioned batch identity preserves exact Unicode strings", async () => {
+  const id = await account();
+  const composed = { sessionId: "caf\u00e9", batchId: "unicode-batch", highWatermark: 1 };
+  const decomposed = { sessionId: "cafe\u0301", batchId: "unicode-batch", highWatermark: 1 };
+  const first = mutation({ targetId: "unicode-composed" });
+  const second = mutation({ targetId: "unicode-decomposed" });
+
+  const firstResult = await store.applyBatch(id, 1, deviceId, 0, [first], composed);
+  const secondResult = await store.applyBatch(id, 1, deviceId, 1, [second], decomposed);
+  assert.deepEqual(firstResult.applied.map((record) => record.lastMutationId), [first.mutationId]);
+  assert.deepEqual(secondResult.applied.map((record) => record.lastMutationId), [second.mutationId]);
+  assert.equal((await userRef(id).collection("syncBatches").get()).size, 2);
+});
+
+test("a mismatched v2 receipt pair fails closed", async () => {
+  const id = await account();
+  const value = metadata();
+  const input = mutation({ targetId: "tampered-v2-receipt" });
+  await store.applyBatch(id, 1, deviceId, 0, [input], value);
+  const ref = versionedBatchRef(id, value);
+  await ref.update({ sessionId: "other-session" });
+  await assertNoWrite(id, () => assert.rejects(store.applyBatch(id, 1, deviceId, 0, [input], value), /sync_batch_invalid/u));
+});
+
+test("malformed legacy batch identity fails closed", async () => {
+  for (const stored of [{}, { sessionId: "", batchId: "batch" }, { sessionId: "session", batchId: "b".repeat(129) }]) {
+    const id = await account();
+    const value = { sessionId: "session", batchId: "batch", highWatermark: 1 };
+    const input = mutation({ targetId: "malformed-legacy-receipt" });
+    await legacyBatchRef(id, value).set(stored);
+    await assertNoWrite(id, () => assert.rejects(store.applyBatch(id, 1, deviceId, 0, [input], value), /sync_batch_invalid/u));
+  }
 });
 
 test("A → retry A in another batch → changed B rejects atomically for every binding", async () => {

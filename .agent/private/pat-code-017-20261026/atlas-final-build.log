@@ -1,0 +1,54 @@
+{
+  "summary": {
+    "patternly": {
+      "files": 1564,
+      "folders": 148,
+      "fileNotes": 1349,
+      "individualDescriptions": 190,
+      "sourceSpecificDescriptions": 759,
+      "boundaries": 16,
+      "excluded": 2
+    },
+    "patternly-backend": {
+      "files": 251,
+      "folders": 48,
+      "fileNotes": 215,
+      "individualDescriptions": 70,
+      "sourceSpecificDescriptions": 152,
+      "boundaries": 8,
+      "excluded": 2
+    },
+    "patternly-content": {
+      "files": 1155,
+      "folders": 170,
+      "fileNotes": 78,
+      "individualDescriptions": 18,
+      "sourceSpecificDescriptions": 1126,
+      "boundaries": 7,
+      "excluded": 0
+    },
+    "patternly-web": {
+      "files": 88,
+      "folders": 17,
+      "fileNotes": 67,
+      "individualDescriptions": 34,
+      "sourceSpecificDescriptions": 46,
+      "boundaries": 11,
+      "excluded": 1
+    }
+  },
+  "graph": {
+    "fileNodes": 1709,
+    "importOccurrences": 6078,
+    "importEdges": 5726,
+    "crossRepositoryEdges": 20,
+    "unresolvedLocalImports": 0,
+    "excludedPrivateImports": 0,
+    "unsupportedImports": 1,
+    "dynamicLoads": 129,
+    "issues": []
+  },
+  "generatedNotes": 2092,
+  "migration": null,
+  "status": "STRUCTURE_MAPPED_NOT_RUNTIME_VERIFIED"
+}

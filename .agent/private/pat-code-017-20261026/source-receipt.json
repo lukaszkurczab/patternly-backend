@@ -1,0 +1,11 @@
+{
+  "ownedFiles": {
+    "src/modules/progress/store.ts": "0d487f10dfddbcc6f34df64d1cb89e340df1031ab4921e97d8870d531a08dbc8",
+    "tests/syncMutationReceipts.emulator.test.ts": "046389027e2ded44194f097eb27b7345992a8af106b38121d646f18cf747a13c",
+    "tests/progressStorage.emulator.test.ts": "263448041339ffb8938497fefee9cd806c1e79caca604fcd7d5eaaa63ccda29e"
+  },
+  "unownedWipPreserved": {
+    "src/modules/progress/accountWireState.ts": "c3971ca5920c0b5818e2f2af48922d8e62d0097a94b0d6b5b4941e69f21812a7"
+  },
+  "namespace": "v2_ outside hash"
+}

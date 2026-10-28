@@ -1,0 +1,2 @@
+PASS: 2286 vault notes, 10573 local references, 13682 wiki targets; one vault plan/state.
+Scope: documentation links and routing, canonical plan/state and backend CI pins. External URLs, historical archive contents and runtime behavior are separate checks.

@@ -1,0 +1,25 @@
+{
+  "schema": "pat-code-017-local-cleanup-v1",
+  "isolatedProject": "demo-patternly-pat-code017",
+  "isolatedServicesStopped": true,
+  "ephemeralDataNotExported": true,
+  "runnerConfigRemovedByFinally": true,
+  "localOnly": true,
+  "listeners": {
+    "19119": [],
+    "18119": [],
+    "4419": [],
+    "4519": [],
+    "19099": [
+      "COMMAND   PID          USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME",
+      "node    53082 lukaszkurczab   17u  IPv4 0x25ac809352588c5f      0t0  TCP 127.0.0.1:19099 (LISTEN)"
+    ],
+    "18081": [
+      "COMMAND   PID          USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME",
+      "java    53102 lukaszkurczab  138u  IPv6 0x2d8453263371495a      0t0  TCP 127.0.0.1:18081 (LISTEN)"
+    ]
+  },
+  "unownedWipPreserved": true,
+  "noDeviceUsed": true,
+  "finalGreen": "31/31 exit0"
+}

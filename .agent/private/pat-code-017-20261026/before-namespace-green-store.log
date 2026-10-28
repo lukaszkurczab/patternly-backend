@@ -1,0 +1,203 @@
+Isolated emulator gate: demo-patternly-pat-code017 Auth19119/Firestore18119
+i  emulators: Starting emulators: auth, firestore
+i  emulators: Detected demo project ID "demo-patternly-pat-code017", emulated services will use a demo configuration and attempts to access non-emulated services for this project will fail.
+i  firestore: Firestore Emulator logging to firestore-debug.log
+✔  firestore: Firestore Emulator was started in standard edition.
+✔  firestore: Firestore Emulator UI websocket is running on 9151.
+i  Running script: node --import tsx --test --test-concurrency=1 tests/syncMutationReceipts.emulator.test.ts tests/progressStorage.emulator.test.ts
+TAP version 13
+# Subtest: canonical sync persists exact identity records and replays by batch metadata
+ok 1 - canonical sync persists exact identity records and replays by batch metadata
+  ---
+  duration_ms: 569.208542
+  type: 'test'
+  ...
+# Subtest: long sync identities persist through hashed Firestore document keys
+ok 2 - long sync identities persist through hashed Firestore document keys
+  ---
+  duration_ms: 34.485458
+  type: 'test'
+  ...
+# Subtest: read fails closed for malformed persisted progress identity records
+ok 3 - read fails closed for malformed persisted progress identity records
+  ---
+  duration_ms: 42.947167
+  type: 'test'
+  ...
+# Subtest: one-shot adoption uses the same exact identity and explicit group choice shape
+ok 4 - one-shot adoption uses the same exact identity and explicit group choice shape
+  ---
+  duration_ms: 60.989
+  type: 'test'
+  ...
+# Subtest: one-shot grouped keep_account preserves exact v2 pair and replays once
+ok 5 - one-shot grouped keep_account preserves exact v2 pair and replays once
+  ---
+  duration_ms: 117.664125
+  type: 'test'
+  ...
+# Subtest: one-shot grouped keep_guest preserves exact v2 pair and replays once
+ok 6 - one-shot grouped keep_guest preserves exact v2 pair and replays once
+  ---
+  duration_ms: 92.896833
+  type: 'test'
+  ...
+# Subtest: legacy identity leaves are rejected before a write
+ok 7 - legacy identity leaves are rejected before a write
+  ---
+  duration_ms: 10.689292
+  type: 'test'
+  ...
+# Subtest: goal and accepted plan sync as one effective bundle while unrelated tracks stay valid
+ok 8 - goal and accepted plan sync as one effective bundle while unrelated tracks stay valid
+  ---
+  duration_ms: 56.892583
+  type: 'test'
+  ...
+# Subtest: a changed goal cannot leave its v2 accepted plan pointing at the old target
+ok 9 - a changed goal cannot leave its v2 accepted plan pointing at the old target
+  ---
+  duration_ms: 67.758584
+  type: 'test'
+  ...
+# Subtest: duplicate goal identities in one batch are rejected before either bundle write
+ok 10 - duplicate goal identities in one batch are rejected before either bundle write
+  ---
+  duration_ms: 32.145
+  type: 'test'
+  ...
+# Subtest: goal deletion alone is rejected, while deleting both bundle records is accepted
+ok 11 - goal deletion alone is rejected, while deleting both bundle records is accepted
+  ---
+  duration_ms: 79.375416
+  type: 'test'
+  ...
+# Subtest: concurrent accepted-pair updates serialize and retain an exact final bundle
+ok 12 - concurrent accepted-pair updates serialize and retain an exact final bundle
+  ---
+  duration_ms: 2926.900416
+  type: 'test'
+  ...
+# Subtest: a plan-only update validates against the current goal counterpart
+ok 13 - a plan-only update validates against the current goal counterpart
+  ---
+  duration_ms: 99.425125
+  type: 'test'
+  ...
+# Subtest: identical batch replay remains stable after a later accepted-pair revision
+ok 14 - identical batch replay remains stable after a later accepted-pair revision
+  ---
+  duration_ms: 73.620083
+  type: 'test'
+  ...
+# Subtest: batch replay skips all mutation-dependent reads for 1 mutations
+ok 15 - batch replay skips all mutation-dependent reads for 1 mutations
+  ---
+  duration_ms: 94.220333
+  type: 'test'
+  ...
+# Subtest: batch replay skips all mutation-dependent reads for 100 mutations
+ok 16 - batch replay skips all mutation-dependent reads for 100 mutations
+  ---
+  duration_ms: 490.75975
+  type: 'test'
+  ...
+# Subtest: batch replay retains authorization, lease and malformed metadata guards
+ok 17 - batch replay retains authorization, lease and malformed metadata guards
+  ---
+  duration_ms: 120.888833
+  type: 'test'
+  ...
+# Subtest: versioned batch keys separate legacy-colliding pairs and preserve exact replay
+ok 18 - versioned batch keys separate legacy-colliding pairs and preserve exact replay
+  ---
+  duration_ms: 262.223541
+  type: 'test'
+  ...
+# Subtest: concurrent legacy-colliding batch pairs serialize at account revision
+ok 19 - concurrent legacy-colliding batch pairs serialize at account revision
+  ---
+  duration_ms: 3540.137667
+  type: 'test'
+  ...
+# Subtest: concurrent identical 100-mutation batches share one durable result
+ok 20 - concurrent identical 100-mutation batches share one durable result
+  ---
+  duration_ms: 3585.68125
+  type: 'test'
+  ...
+# Subtest: versioned batch identity preserves exact Unicode strings
+ok 21 - versioned batch identity preserves exact Unicode strings
+  ---
+  duration_ms: 40.245
+  type: 'test'
+  ...
+# Subtest: a mismatched v2 receipt pair fails closed
+ok 22 - a mismatched v2 receipt pair fails closed
+  ---
+  duration_ms: 40.768708
+  type: 'test'
+  ...
+# Subtest: malformed legacy batch identity fails closed
+ok 23 - malformed legacy batch identity fails closed
+  ---
+  duration_ms: 74.539916
+  type: 'test'
+  ...
+# Subtest: A → retry A in another batch → changed B rejects atomically for every binding
+ok 24 - A → retry A in another batch → changed B rejects atomically for every binding
+  ---
+  duration_ms: 133.924959
+  type: 'test'
+  ...
+# Subtest: full receipt proves old A after newer C or absent current record, without rewriting progress
+ok 25 - full receipt proves old A after newer C or absent current record, without rewriting progress
+  ---
+  duration_ms: 92.924875
+  type: 'test'
+  ...
+# Subtest: every incomplete legacy binding needs an exact lastMutationId witness and is preserved
+ok 26 - every incomplete legacy binding needs an exact lastMutationId witness and is preserved
+  ---
+  duration_ms: 1391.353833
+  type: 'test'
+  ...
+# Subtest: present contradictory legacy fields cannot be rescued by a matching current record
+ok 27 - present contradictory legacy fields cannot be rescued by a matching current record
+  ---
+  duration_ms: 183.953708
+  type: 'test'
+  ...
+# Subtest: TTL-removed receipt: exact surviving A deduplicates without recreating it; superseded A conflicts
+ok 28 - TTL-removed receipt: exact surviving A deduplicates without recreating it; superseded A conflicts
+  ---
+  duration_ms: 143.78125
+  type: 'test'
+  ...
+# Subtest: one-shot adoption writes full immutable receipts reusable by ordinary sync
+ok 29 - one-shot adoption writes full immutable receipts reusable by ordinary sync
+  ---
+  duration_ms: 90.110375
+  type: 'test'
+  ...
+# Subtest: HTTP route returns an error and no ACK for reused mutation ID in a separate batch
+ok 30 - HTTP route returns an error and no ACK for reused mutation ID in a separate batch
+  ---
+  duration_ms: 154.785458
+  type: 'test'
+  ...
+1..30
+# tests 30
+# suites 0
+# pass 30
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 16222.474834
+✔  Script exited successfully (code 0)
+i  emulators: Shutting down emulators.
+i  firestore: Stopping Firestore Emulator
+i  auth: Stopping Authentication Emulator
+i  hub: Stopping emulator hub
+i  logging: Stopping Logging Emulator

@@ -1,0 +1,28 @@
+{
+  "schema": "pat-code-017-local-completion-v1",
+  "verdict": "PASS",
+  "independentReviewer": "qa_luna/gpt-6-luna/high",
+  "canonicalClosed": true,
+  "tests": {
+    "backendFirestore": "31/31",
+    "APPconsumer": "3/3",
+    "typecheckExit": 0
+  },
+  "sourceAndEvidence": {
+    "accepted.patch": "9492f1e28a9c8b359eef54bbfd1b6e0862269c0f84f0b9a4fc6862e41afcd384",
+    "source-receipt.json": "718fa670fa1f6644fd82bb8d9861f1483b64225f21d4a1de7d8a24b35ca9e6d3",
+    "red-collision.log": "357968e6d3e09e15f60279b3b8ab628443e0731abfaaa78a693761d37c35c893",
+    "red-cross-version-namespace.log": "3a7ed6e3dd7b528c2dfbc89b7fda30838a29555a30677b86104d65b613039af1",
+    "green-final.log": "a6e88f0a4aeb8780aaf0811a891163047ad60943bad6c4313278be55c46d99e9",
+    "app-duplicate-consumer.log": "5d8b5352324c60f328a79c4f4955e1bef16cee3bc8157cf9ed8e31f973c02e25",
+    "typecheck-final.log": "9eabea53529f38c9be73859397599dc5e8256c6cb536936a23d96ace2921b392",
+    "typecheck-final-exit.json": "fc929f80fefd3b23da0f194fda5f932666ebfad94b9bc19444cb366c889c1a94",
+    "independent-qa-controller-record.md": "23f539550d53e1e12af61fd93357cdc5dcd2a0b59d89c691811977bc0d96cc1e",
+    "cleanup-receipt.json": "de22e5aa073ad4e9338eb9716501c75b151e7c52e59d7026acc38d028c572f04",
+    "atlas-final-check.json": "10e07792000e77bf38c03461bd8827c042992b1c5227ce2a8d10d6141affa6b3",
+    "docs-final.log": "97a45ab8d36933e2bed2422e97d70b9245f1140f3fe7a6c5e25b605b9a74aea3"
+  },
+  "ownRuntimeCleaned": true,
+  "cloudResidualRequiredByCard": false,
+  "limits": "No old-binary response/rollback availability or Cloud/rollout proof"
+}

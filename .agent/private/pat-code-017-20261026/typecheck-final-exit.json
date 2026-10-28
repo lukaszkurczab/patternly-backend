@@ -1,0 +1,7 @@
+{
+  "command": "npm run typecheck",
+  "node": "22",
+  "exitCode": 0,
+  "rootToolSession": 77497,
+  "sourceSha256": "0d487f10dfddbcc6f34df64d1cb89e340df1031ab4921e97d8870d531a08dbc8"
+}

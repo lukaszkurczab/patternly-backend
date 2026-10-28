@@ -47,6 +47,8 @@ const response: Guard = x => shape(x, { type: one("choice_single"), optionId: te
   shape(x, { type: one("choice_multiple"), optionIds: strings }) ||
   shape(x, { type: one("ordering"), orderedElementIds: strings }) ||
   shape(x, { type: one("complexity", "decision_matrix"), selectedValueIdsByDimension: dictionary(strings) });
+const partialResponse: Guard = x => shape(x, { type: one("choice_multiple"), optionIds: list(text) }) && (x.optionIds as unknown[]).length > 0 && new Set(x.optionIds as string[]).size === (x.optionIds as string[]).length ||
+  shape(x, { type: one("decision_matrix"), selectedValueIdsByDimension: dictionary(list(text)) }) && Object.keys((x as R).selectedValueIdsByDimension as R).length > 0 && Object.values((x as R).selectedValueIdsByDimension as R).every(value => Array.isArray(value) && value.length === 1);
 const configuration: Guard = x => shape(x, { kind: text }, {
   timer: one("elapsedForeground", "countdownForeground", "absoluteDeadline"), feedbackMode: one("afterEachAnswer", "atSessionEnd"),
   answerChanges: one("none", "untilFinalSubmission"), submission: one("perItem", "manualOrForegroundTimeout"), reinsertEnabled: bool,
@@ -56,21 +58,36 @@ const configuration: Guard = x => shape(x, { kind: text }, {
   simulationProfileId: text, simulationProfileVersion: text, simulationCaseId: text, simulationCaseVersion: text,
   simulationBlueprintId: text, simulationBlueprintVersion: text, simulationPoolId: text, simulationPoolVersion: text,
   simulationPolicyId: text, simulationPolicyVersion: text, flagging: one("available"), navigator: one("available"), sectionIds: strings,
-});
+  scoringPolicyId: one("patternly-ccarp-complete-item-v1"), scoringPolicyVersion: one("1"),
+}) && (Object.hasOwn(x as R, "scoringPolicyId") === Object.hasOwn(x as R, "scoringPolicyVersion"));
 const summary: Guard = x => shape(x, {
   schemaVersion: one("terminal-session-v1"), id: text, trackId: text, modeId: text, requestedLength: integer,
   status: one("completed", "abandoned"), startedAt: timestamp, durationMs: number,
   contentVersion: text, artifactSha256: sha, configurationSnapshot: configuration,
   itemOrder: x => Array.isArray(x) && x.length > 0 && x.every(occurrence), optionOrderByOccurrence: dictionary(strings), conditionalReinsertSlots: list(slot),
 }, { completedAt: timestamp, taxonomyVersion: text, planFingerprint: sha, caseState, caseStates: list(caseState) }) &&
+  (!Object.hasOwn(x.configurationSnapshot as R, "scoringPolicyId") || x.trackId === "claude-certified-architect-professional-certification" && x.modeId === "certification-exam-simulation") &&
   (x.status !== "completed" || timestamp(x.completedAt)) && Number(x.requestedLength) >= (x.itemOrder as unknown[]).length;
 const aggregateFields = { activeForegroundMs: number, correctCount: integer, partialCount: integer, incorrectCount: integer, pointsEarned: number, maxPoints: number };
-const aggregate: Guard = x => shape(x, aggregateFields, { profileId: text, profileVersion: text });
+const aggregate: Guard = x => shape(x, aggregateFields, {
+  profileId: text, profileVersion: text,
+  scoringPolicyId: one("patternly-ccarp-complete-item-v1"), scoringPolicyVersion: one("1"),
+  partialResponsesByOccurrenceId: dictionary(partialResponse),
+}) && (Object.hasOwn(x as R, "scoringPolicyId") === Object.hasOwn(x as R, "scoringPolicyVersion")) &&
+  (!Object.hasOwn(x as R, "partialResponsesByOccurrenceId") || (x as R).scoringPolicyId === "patternly-ccarp-complete-item-v1");
 const designResponses: Guard = x => shape(x, { requirements: string, architecture: string, tradeoffs: string, final_answer: string });
 const designCompleteness: Guard = x => shape(x, { requirements: bool, architecture: bool, tradeoffs: bool, final_answer: bool });
 const designResult: Guard = x => shape(x, { profileId: text, profileVersion: text, caseId: text, caseVersion: text, responsesByStage: designResponses, stageCompleteness: designCompleteness });
 const resultEnvelope: Guard = x => shape(x, { familyId: one("certification", "coding_interview"), details: aggregate }) || shape(x, { familyId: one("design_interview"), details: x => aggregate(x) || designResult(x) });
-const sessionResult: Guard = x => shape(x, { id: text, sessionId: text, trackId: text, totalOccurrences: positive, answeredOccurrenceIds: strings, unansweredOccurrenceIds: strings, completedAt: timestamp, evidence: resultEnvelope });
+const sessionResult: Guard = x => shape(x, { id: text, sessionId: text, trackId: text, totalOccurrences: positive, answeredOccurrenceIds: strings, unansweredOccurrenceIds: strings, completedAt: timestamp, evidence: resultEnvelope }) && (() => {
+  const evidence = x.evidence as R, details = evidence.details as R;
+  const partial = details.partialResponsesByOccurrenceId;
+  if (details.scoringPolicyId !== undefined && (x.trackId !== "claude-certified-architect-professional-certification" || details.scoringPolicyId !== "patternly-ccarp-complete-item-v1" || details.scoringPolicyVersion !== "1")) return false;
+  if (partial === undefined) return true;
+  if (details.scoringPolicyId !== "patternly-ccarp-complete-item-v1" || !object(partial)) return false;
+  const unanswered = new Set(x.unansweredOccurrenceIds as string[]), answered = new Set(x.answeredOccurrenceIds as string[]);
+  return Object.keys(partial).every(id => unanswered.has(id) && !answered.has(id));
+})();
 const attempt: Guard = x => shape(x, { id: text, sessionId: text, trackId: text, modeId: text, occurrenceId: text, item: ref, response, result: attemptResult, reviewEvidence, answeredAt: timestamp, committedAt: timestamp }, { durationMs: number });
 const review: Guard = x => shape(x, {
   id: text, trackId: text, sourceAttemptId: text, sourceSessionId: text, sourceItem: ref, taxonomyOrSkillRefs: list(evidenceRef),

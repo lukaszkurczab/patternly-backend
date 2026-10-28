@@ -317,7 +317,17 @@ function assertAdoptionApplyCheckpoint(data: Record<string, unknown>, materializ
 }
 
 function operationRef(db: Firestore, userId: string, operationId: string): DocumentReference { return db.collection(COLLECTIONS.users).doc(userId).collection("syncOperations").doc(operationId); }
-function syncBatchRef(db: Firestore, userId: string, metadata: SyncBatchMetadata): DocumentReference { return db.collection(COLLECTIONS.users).doc(userId).collection("syncBatches").doc(createHash("sha256").update(`${metadata.sessionId}:${metadata.batchId}`, "utf8").digest("hex")); }
+function syncBatchRef(db: Firestore, userId: string, metadata: SyncBatchMetadata): DocumentReference {
+  const identity = JSON.stringify(["sync-batch-v2", metadata.sessionId, metadata.batchId]);
+  const documentId = `v2_${createHash("sha256").update(identity, "utf8").digest("hex")}`;
+  return db.collection(COLLECTIONS.users).doc(userId).collection("syncBatches").doc(documentId);
+}
+function legacySyncBatchId(sessionId: string, batchId: string): string {
+  return createHash("sha256").update(`${sessionId}:${batchId}`, "utf8").digest("hex");
+}
+function legacySyncBatchRef(db: Firestore, userId: string, metadata: SyncBatchMetadata): DocumentReference {
+  return db.collection(COLLECTIONS.users).doc(userId).collection("syncBatches").doc(legacySyncBatchId(metadata.sessionId, metadata.batchId));
+}
 function syncBatchFingerprint(metadata: SyncBatchMetadata, expectedAccountRevision: number, mutations: readonly ProgressMutation[]): string { return createHash("sha256").update(canonicalJson({ metadata, expectedAccountRevision, mutations }), "utf8").digest("hex"); }
 function readAccountRevision(data: Record<string, unknown> | undefined): number { if (!data || data.accountRevision === undefined) return 0; if (!Number.isSafeInteger(data.accountRevision) || Number(data.accountRevision) < 0) throw new Error("account_revision_invalid"); return Number(data.accountRevision); }
 async function readProgressTransaction<T>(operation: () => Promise<T>): Promise<T> {
@@ -1020,12 +1030,27 @@ export class FirestoreProgressStore implements ProgressStore {
       if (hasActiveAdoptionPromotionLease(metadataSnapshot)) throw new Error("progress_generation_conflict");
       const activeGeneration = readAccountGeneration(metadataSnapshot);
       const batchRef = syncBatchRef(this.db, userId, metadata);
+      const legacyBatchRef = legacySyncBatchRef(this.db, userId, metadata);
       const batchSnapshot = await readProgressTransaction(() => transaction.get(batchRef));
       const accountRevision = readAccountRevision(metadataSnapshot);
       if (batchSnapshot.exists) {
         const stored = asRecord(batchSnapshot.data(), "sync_batch");
+        if (stored.sessionId !== metadata.sessionId || stored.batchId !== metadata.batchId) throw new Error("sync_batch_invalid");
         if (stored.fingerprint !== syncBatchFingerprint(metadata, expectedAccountRevision, mutations)) throw new Error("mutation_id_reuse");
         return parseStoredBatchResult(stored.result as object);
+      }
+      const legacyBatchSnapshot = await readProgressTransaction(() => transaction.get(legacyBatchRef));
+      if (legacyBatchSnapshot.exists) {
+        const stored = asRecord(legacyBatchSnapshot.data(), "sync_batch");
+        if (typeof stored.sessionId !== "string" || stored.sessionId.length < 1 || stored.sessionId.length > 128
+          || typeof stored.batchId !== "string" || stored.batchId.length < 1 || stored.batchId.length > 128) throw new Error("sync_batch_invalid");
+        // A v1 key may belong to another legal pair that shares its ambiguous
+        // delimiter preimage. Only an exact stored pair can prove this replay.
+        if (legacySyncBatchId(stored.sessionId, stored.batchId) !== legacyBatchRef.id) throw new Error("sync_batch_invalid");
+        if (stored.sessionId === metadata.sessionId && stored.batchId === metadata.batchId) {
+          if (stored.fingerprint !== syncBatchFingerprint(metadata, expectedAccountRevision, mutations)) throw new Error("mutation_id_reuse");
+          return parseStoredBatchResult(stored.result as object);
+        }
       }
       const progressCollection = progressCollectionRef(this.db, userId, activeGeneration);
       const currentRefs = mutations.map((mutation) => progressCollection.doc(progressDocumentId(mutation)));

@@ -1,0 +1,118 @@
+{
+  "summary": {
+    "patternly": {
+      "files": 1564,
+      "folders": 148,
+      "fileNotes": 1349,
+      "individualDescriptions": 190,
+      "sourceSpecificDescriptions": 759,
+      "boundaries": 16,
+      "excluded": 2
+    },
+    "patternly-backend": {
+      "files": 251,
+      "folders": 48,
+      "fileNotes": 215,
+      "individualDescriptions": 70,
+      "sourceSpecificDescriptions": 152,
+      "boundaries": 8,
+      "excluded": 2
+    },
+    "patternly-content": {
+      "files": 1155,
+      "folders": 170,
+      "fileNotes": 78,
+      "individualDescriptions": 18,
+      "sourceSpecificDescriptions": 1126,
+      "boundaries": 7,
+      "excluded": 0
+    },
+    "patternly-web": {
+      "files": 88,
+      "folders": 17,
+      "fileNotes": 67,
+      "individualDescriptions": 34,
+      "sourceSpecificDescriptions": 46,
+      "boundaries": 11,
+      "excluded": 1
+    }
+  },
+  "generatedNotes": 2092,
+  "graph": {
+    "fileNodes": 1709,
+    "importOccurrences": 6078,
+    "importEdges": 5726,
+    "crossRepositoryEdges": 20,
+    "unresolvedLocalImports": 0,
+    "excludedPrivateImports": 0,
+    "unsupportedImports": 1,
+    "dynamicLoads": 129,
+    "issues": []
+  },
+  "legacyNamesToMigrate": 0,
+  "interruptedBatch": false,
+  "flowReviews": [
+    {
+      "name": "Start aplikacji i nawigacja",
+      "currentDigest": "04c62f8579d8cbdd8d21d9930b83fbde2df879d6bd4cf1ca5c5c4f2c1222be00",
+      "reviewedDigest": "04c62f8579d8cbdd8d21d9930b83fbde2df879d6bd4cf1ca5c5c4f2c1222be00"
+    },
+    {
+      "name": "Konto, Gość i synchronizacja",
+      "currentDigest": "1f6ad45e1f30295c6dabb67c9864d2c98dab4a5c333a8e5d8afd276b70e5f1ef",
+      "reviewedDigest": "607d2cb5ef3e7651f202fc49d28b31309e47e2d7598247d029c4424b628f0bf4"
+    },
+    {
+      "name": "Treść od producenta do sesji",
+      "currentDigest": "3ca10d82a53b5542b0898b66c860022c73df19417e03bf8fa8b7d1fc300ba131",
+      "reviewedDigest": "3ca10d82a53b5542b0898b66c860022c73df19417e03bf8fa8b7d1fc300ba131"
+    },
+    {
+      "name": "Sesja, odpowiedź i trwały wynik",
+      "currentDigest": "8424acf8579585b9b9709c8d24b136d7579dd49fdcae09bf4bf37250b83553de",
+      "reviewedDigest": "8424acf8579585b9b9709c8d24b136d7579dd49fdcae09bf4bf37250b83553de"
+    },
+    {
+      "name": "Cel, plan i postęp",
+      "currentDigest": "ef90905410c83450d7993cd3e1b24accea5a85ad130ed229aee660c29b78aea1",
+      "reviewedDigest": "ef90905410c83450d7993cd3e1b24accea5a85ad130ed229aee660c29b78aea1"
+    },
+    {
+      "name": "Premium i zakup",
+      "currentDigest": "4ee6b07c14b802addb2e714080e63091ffa1a9b5d4fa53aa86ba84171b0567b3",
+      "reviewedDigest": "4ee6b07c14b802addb2e714080e63091ffa1a9b5d4fa53aa86ba84171b0567b3"
+    },
+    {
+      "name": "Dane, prywatność i zgłoszenia",
+      "currentDigest": "5a1a01fd09efeb446351717bd73cf5669ad2cb7148ced2e0d9bb43f482cc9886",
+      "reviewedDigest": "5a1a01fd09efeb446351717bd73cf5669ad2cb7148ced2e0d9bb43f482cc9886"
+    },
+    {
+      "name": "Witryna, demo i panel",
+      "currentDigest": "9558a8bd0f87adb147f929b656e13c805e883c6ace241e3dbf3be56d9f6f1842",
+      "reviewedDigest": "9558a8bd0f87adb147f929b656e13c805e883c6ace241e3dbf3be56d9f6f1842"
+    }
+  ],
+  "changes": [
+    {
+      "repo": "patternly",
+      "path": "scripts/docAtlas/catalog.json",
+      "kind": "changed-needs-review"
+    },
+    {
+      "repo": "patternly-backend",
+      "path": "src/modules/progress/store.ts",
+      "kind": "changed-needs-review"
+    },
+    {
+      "repo": "patternly-backend",
+      "path": "tests/progressStorage.emulator.test.ts",
+      "kind": "changed-needs-review"
+    },
+    {
+      "repo": "patternly-backend",
+      "path": "tests/syncMutationReceipts.emulator.test.ts",
+      "kind": "changed-needs-review"
+    }
+  ]
+}
