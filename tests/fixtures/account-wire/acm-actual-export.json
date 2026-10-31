@@ -1,0 +1,222 @@
+{
+  "schemaVersion": 1,
+  "source": "buildAccountDataSnapshot",
+  "producer": "current-canonical-bank-session",
+  "currentBank": {
+    "trackId": "coding-interview-dsa-problem-solving",
+    "contentVersion": "coding-interview-dsa-problem-solving-authoring-v2026.10.02-bizq01-04-bizq02-v2-bizq03-planning-v2-dsa-20261024-fixes-v1",
+    "artifactSha256": "f1f3277cc0a5a50289bc8edc921270aebed8d8bf4080ad328e9000d90c7159e1"
+  },
+  "runtimeTrainingPin": {
+    "trackId": "coding-interview-dsa-problem-solving",
+    "contentVersion": "coding-interview-dsa-problem-solving-authoring-v2026.10.02-bizq01-04-bizq02-v2-bizq03-planning-v2-dsa-20261024-fixes-v1",
+    "artifactSha256": "f1f3277cc0a5a50289bc8edc921270aebed8d8bf4080ad328e9000d90c7159e1"
+  },
+  "ordinaryTrainingIdentity": {
+    "trackId": "coding-interview-dsa-problem-solving",
+    "contentVersion": "coding-interview-dsa-problem-solving-authoring-v2026.10.02-bizq01-04-bizq02-v2-bizq03-planning-v2-dsa-20261024-fixes-v1",
+    "artifactSha256": "a85fb2ca9f57315d76f34627c109aa8ebc25536c4b4684356d97236a09145a2d"
+  },
+  "records": [
+    {
+      "fingerprint": "bc75360a64681f565a96d32b81f14d87a1ee1a00d0a1570e4888d641fa0d7cb3",
+      "recordId": "acm-current-bank-account-wire:result",
+      "recordType": "training_session_result",
+      "state": {
+        "id": "acm-current-bank-account-wire:result",
+        "sessionId": "acm-current-bank-account-wire",
+        "trackId": "coding-interview-dsa-problem-solving",
+        "totalOccurrences": 2,
+        "answeredOccurrenceIds": [
+          "acm-current-bank-account-wire:occurrence:0",
+          "acm-current-bank-account-wire:occurrence:1"
+        ],
+        "unansweredOccurrenceIds": [],
+        "completedAt": "2026-10-30T12:00:00.000Z",
+        "evidence": {
+          "familyId": "coding_interview",
+          "details": {
+            "activeForegroundMs": 0,
+            "correctCount": 1,
+            "partialCount": 1,
+            "incorrectCount": 0,
+            "pointsEarned": 1,
+            "maxPoints": 2,
+            "modeId": "coding-interview-approach-challenge",
+            "manifestVersion": 1,
+            "problemCount": 1
+          }
+        }
+      },
+      "trackId": "coding-interview-dsa-problem-solving",
+      "version": 0
+    },
+    {
+      "fingerprint": "e04a4df41e3318c03cac5986d933f002d04eaa4f9d4f72fb76f53983619cad71",
+      "recordId": "acm-current-bank-account-wire",
+      "recordType": "training_session_summary",
+      "state": {
+        "schemaVersion": "terminal-session-v1",
+        "id": "acm-current-bank-account-wire",
+        "trackId": "coding-interview-dsa-problem-solving",
+        "modeId": "coding-interview-approach-challenge",
+        "status": "completed",
+        "startedAt": "2026-10-30T12:00:00.000Z",
+        "requestedLength": 10,
+        "durationMs": 0,
+        "contentVersion": "coding-interview-dsa-problem-solving-authoring-v2026.10.02-bizq01-04-bizq02-v2-bizq03-planning-v2-dsa-20261024-fixes-v1",
+        "artifactSha256": "f1f3277cc0a5a50289bc8edc921270aebed8d8bf4080ad328e9000d90c7159e1",
+        "configurationSnapshot": {
+          "kind": "practice",
+          "timer": "elapsedForeground",
+          "feedbackMode": "afterEachAnswer",
+          "answerChanges": "none",
+          "submission": "perItem",
+          "reinsertEnabled": false,
+          "approachChallengeManifestV1": "{\"schemaVersion\":1,\"modeId\":\"coding-interview-approach-challenge\",\"accessAtStart\":\"premium\",\"admissionGrant\":\"session_start\",\"requestedProblemCount\":5,\"actualProblemCount\":1,\"shortenedConfirmed\":true,\"entries\":[{\"problemRef\":{\"trackId\":\"coding-interview-dsa-problem-solving\",\"problemId\":\"acm-b01-01\",\"problemVersion\":\"1\",\"contentVersion\":\"coding-interview-dsa-problem-solving-authoring-v2026.10.02-bizq01-04-bizq02-v2-bizq03-planning-v2-dsa-20261024-fixes-v1\",\"artifactSha256\":\"f1f3277cc0a5a50289bc8edc921270aebed8d8bf4080ad328e9000d90c7159e1\",\"approachQuestionId\":\"acm-b01-01-q1\",\"complexityQuestionId\":\"acm-b01-01-q2\",\"analyzedApproachId\":\"scan-requested-range\"},\"primaryFamilyId\":\"complexity_and_constraints\",\"requiredFamilyIds\":[\"complexity_and_constraints\"],\"difficulty\":\"easy\",\"approachOccurrenceId\":\"acm-current-bank-account-wire:occurrence:0\",\"complexityOccurrenceId\":\"acm-current-bank-account-wire:occurrence:1\"}]}"
+        },
+        "itemOrder": [
+          {
+            "occurrenceId": "acm-current-bank-account-wire:occurrence:0",
+            "item": {
+              "trackId": "coding-interview-dsa-problem-solving",
+              "questionId": "acm-b01-01-q1",
+              "contentVersion": "coding-interview-dsa-problem-solving-authoring-v2026.10.02-bizq01-04-bizq02-v2-bizq03-planning-v2-dsa-20261024-fixes-v1",
+              "artifactSha256": "f1f3277cc0a5a50289bc8edc921270aebed8d8bf4080ad328e9000d90c7159e1"
+            }
+          },
+          {
+            "occurrenceId": "acm-current-bank-account-wire:occurrence:1",
+            "item": {
+              "trackId": "coding-interview-dsa-problem-solving",
+              "questionId": "acm-b01-01-q2",
+              "contentVersion": "coding-interview-dsa-problem-solving-authoring-v2026.10.02-bizq01-04-bizq02-v2-bizq03-planning-v2-dsa-20261024-fixes-v1",
+              "artifactSha256": "f1f3277cc0a5a50289bc8edc921270aebed8d8bf4080ad328e9000d90c7159e1"
+            }
+          }
+        ],
+        "optionOrderByOccurrence": {
+          "acm-current-bank-account-wire:occurrence:0": [
+            "A",
+            "B",
+            "C",
+            "D"
+          ],
+          "acm-current-bank-account-wire:occurrence:1": [
+            "k-constant",
+            "n-constant",
+            "n-linear"
+          ]
+        },
+        "conditionalReinsertSlots": [],
+        "completedAt": "2026-10-30T12:00:00.000Z",
+        "taxonomyVersion": "canonical-content-v1",
+        "planFingerprint": "9f90e0617e31f79046c830a8ba2b280d21f9a6833d1b7f9e0445442a9c72082b"
+      },
+      "trackId": "coding-interview-dsa-problem-solving",
+      "version": 0
+    },
+    {
+      "fingerprint": "a368614d0963137f554d12527de93046902e0a1e112cf11d6387d90c5543bc1f",
+      "recordId": "attempt:acm-current-bank-account-wire:acm-current-bank-account-wire:occurrence:0:d85c9ea067a3471807180592151e86590cfdc24814718ca40013a7d47115cace",
+      "recordType": "training_attempt",
+      "state": {
+        "id": "attempt:acm-current-bank-account-wire:acm-current-bank-account-wire:occurrence:0:d85c9ea067a3471807180592151e86590cfdc24814718ca40013a7d47115cace",
+        "sessionId": "acm-current-bank-account-wire",
+        "trackId": "coding-interview-dsa-problem-solving",
+        "modeId": "coding-interview-approach-challenge",
+        "occurrenceId": "acm-current-bank-account-wire:occurrence:0",
+        "item": {
+          "trackId": "coding-interview-dsa-problem-solving",
+          "questionId": "acm-b01-01-q1",
+          "contentVersion": "coding-interview-dsa-problem-solving-authoring-v2026.10.02-bizq01-04-bizq02-v2-bizq03-planning-v2-dsa-20261024-fixes-v1",
+          "artifactSha256": "f1f3277cc0a5a50289bc8edc921270aebed8d8bf4080ad328e9000d90c7159e1"
+        },
+        "response": {
+          "type": "approach_choice",
+          "optionId": "B"
+        },
+        "result": {
+          "kind": "partial",
+          "earnedPoints": 0,
+          "maxPoints": 1
+        },
+        "reviewEvidence": {
+          "sourceItem": {
+            "trackId": "coding-interview-dsa-problem-solving",
+            "questionId": "acm-b01-01-q1",
+            "contentVersion": "coding-interview-dsa-problem-solving-authoring-v2026.10.02-bizq01-04-bizq02-v2-bizq03-planning-v2-dsa-20261024-fixes-v1",
+            "artifactSha256": "f1f3277cc0a5a50289bc8edc921270aebed8d8bf4080ad328e9000d90c7159e1"
+          },
+          "taxonomyOrSkillRefs": [
+            {
+              "axisId": "node",
+              "nodeId": "complexity_and_constraints",
+              "role": "primary"
+            },
+            {
+              "axisId": "mental_unit",
+              "nodeId": "query-workload-and-preprocessing-cost",
+              "role": "primary"
+            }
+          ]
+        },
+        "answeredAt": "2026-10-30T12:00:00.000Z",
+        "committedAt": "2026-10-30T12:00:00.000Z"
+      },
+      "trackId": "coding-interview-dsa-problem-solving",
+      "version": 0
+    },
+    {
+      "fingerprint": "f7dc1c09b3fcd2ed348954c0a563ac28e7d32edaf79f349d4dbae061bd40a2fc",
+      "recordId": "attempt:acm-current-bank-account-wire:acm-current-bank-account-wire:occurrence:1:aedcb5199d064595e2e3aea48911d03e770277df18e5c677a40726fe9c8b3d2b",
+      "recordType": "training_attempt",
+      "state": {
+        "id": "attempt:acm-current-bank-account-wire:acm-current-bank-account-wire:occurrence:1:aedcb5199d064595e2e3aea48911d03e770277df18e5c677a40726fe9c8b3d2b",
+        "sessionId": "acm-current-bank-account-wire",
+        "trackId": "coding-interview-dsa-problem-solving",
+        "modeId": "coding-interview-approach-challenge",
+        "occurrenceId": "acm-current-bank-account-wire:occurrence:1",
+        "item": {
+          "trackId": "coding-interview-dsa-problem-solving",
+          "questionId": "acm-b01-01-q2",
+          "contentVersion": "coding-interview-dsa-problem-solving-authoring-v2026.10.02-bizq01-04-bizq02-v2-bizq03-planning-v2-dsa-20261024-fixes-v1",
+          "artifactSha256": "f1f3277cc0a5a50289bc8edc921270aebed8d8bf4080ad328e9000d90c7159e1"
+        },
+        "response": {
+          "optionId": "k-constant",
+          "type": "choice_single"
+        },
+        "result": {
+          "kind": "correct",
+          "earnedPoints": 1,
+          "maxPoints": 1
+        },
+        "reviewEvidence": {
+          "sourceItem": {
+            "trackId": "coding-interview-dsa-problem-solving",
+            "questionId": "acm-b01-01-q2",
+            "contentVersion": "coding-interview-dsa-problem-solving-authoring-v2026.10.02-bizq01-04-bizq02-v2-bizq03-planning-v2-dsa-20261024-fixes-v1",
+            "artifactSha256": "f1f3277cc0a5a50289bc8edc921270aebed8d8bf4080ad328e9000d90c7159e1"
+          },
+          "taxonomyOrSkillRefs": [
+            {
+              "axisId": "node",
+              "nodeId": "complexity_and_constraints",
+              "role": "primary"
+            },
+            {
+              "axisId": "mental_unit",
+              "nodeId": "query-workload-and-preprocessing-cost",
+              "role": "primary"
+            }
+          ]
+        },
+        "answeredAt": "2026-10-30T12:00:00.000Z",
+        "committedAt": "2026-10-30T12:00:00.000Z"
+      },
+      "trackId": "coding-interview-dsa-problem-solving",
+      "version": 0
+    }
+  ]
+}

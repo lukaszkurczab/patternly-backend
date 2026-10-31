@@ -43,13 +43,15 @@ const evidenceRef: Guard = x => shape(x, { axisId: text, nodeId: text }, { role:
 const reviewEvidence: Guard = x => shape(x, { sourceItem: ref, taxonomyOrSkillRefs: list(evidenceRef) }, { evidence: caseEnvelope });
 const component: Guard = x => shape(x, { id: text, earnedPoints: number, maxPoints: positive }) && Number(x.earnedPoints) <= Number(x.maxPoints);
 const attemptResult: Guard = x => shape(x, { kind: one("correct", "partial", "incorrect"), earnedPoints: number, maxPoints: positive }, { components: list(component) }) && Number(x.earnedPoints) <= Number(x.maxPoints);
-const response: Guard = x => shape(x, { type: one("choice_single"), optionId: text }) ||
+const response: Guard = x => shape(x, { type: one("approach_choice"), optionId: text }) ||
+  shape(x, { type: one("choice_single"), optionId: text }) ||
   shape(x, { type: one("choice_multiple"), optionIds: strings }) ||
   shape(x, { type: one("ordering"), orderedElementIds: strings }) ||
   shape(x, { type: one("complexity", "decision_matrix"), selectedValueIdsByDimension: dictionary(strings) });
 const partialResponse: Guard = x => shape(x, { type: one("choice_multiple"), optionIds: list(text) }) && (x.optionIds as unknown[]).length > 0 && new Set(x.optionIds as string[]).size === (x.optionIds as string[]).length ||
   shape(x, { type: one("decision_matrix"), selectedValueIdsByDimension: dictionary(list(text)) }) && Object.keys((x as R).selectedValueIdsByDimension as R).length > 0 && Object.values((x as R).selectedValueIdsByDimension as R).every(value => Array.isArray(value) && value.length === 1);
 const configuration: Guard = x => shape(x, { kind: text }, {
+  approachChallengeManifestV1: text,
   timer: one("elapsedForeground", "countdownForeground", "absoluteDeadline"), feedbackMode: one("afterEachAnswer", "atSessionEnd"),
   answerChanges: one("none", "untilFinalSubmission"), submission: one("perItem", "manualOrForegroundTimeout"), reinsertEnabled: bool,
   mentalUnitId: text, caseBlockPolicy: one("claude-case-blocks-v1"), caseReviewPolicy: one("claude-case-review-v1"),
@@ -67,13 +69,17 @@ const summary: Guard = x => shape(x, {
   itemOrder: x => Array.isArray(x) && x.length > 0 && x.every(occurrence), optionOrderByOccurrence: dictionary(strings), conditionalReinsertSlots: list(slot),
 }, { completedAt: timestamp, taxonomyVersion: text, planFingerprint: sha, caseState, caseStates: list(caseState) }) &&
   (!Object.hasOwn(x.configurationSnapshot as R, "scoringPolicyId") || x.trackId === "claude-certified-architect-professional-certification" && x.modeId === "certification-exam-simulation") &&
+  (x.modeId !== "coding-interview-approach-challenge" || x.trackId === "coding-interview-dsa-problem-solving" && Object.hasOwn(x.configurationSnapshot as R, "approachChallengeManifestV1")) &&
+  (x.modeId === "coding-interview-approach-challenge" || !Object.hasOwn(x.configurationSnapshot as R, "approachChallengeManifestV1")) &&
   (x.status !== "completed" || timestamp(x.completedAt)) && Number(x.requestedLength) >= (x.itemOrder as unknown[]).length;
 const aggregateFields = { activeForegroundMs: number, correctCount: integer, partialCount: integer, incorrectCount: integer, pointsEarned: number, maxPoints: number };
 const aggregate: Guard = x => shape(x, aggregateFields, {
+  modeId: one("coding-interview-approach-challenge"), manifestVersion: positive, problemCount: positive,
   profileId: text, profileVersion: text,
   scoringPolicyId: one("patternly-ccarp-complete-item-v1"), scoringPolicyVersion: one("1"),
   partialResponsesByOccurrenceId: dictionary(partialResponse),
 }) && (Object.hasOwn(x as R, "scoringPolicyId") === Object.hasOwn(x as R, "scoringPolicyVersion")) &&
+  (Object.hasOwn(x as R, "modeId") === Object.hasOwn(x as R, "manifestVersion") && Object.hasOwn(x as R, "modeId") === Object.hasOwn(x as R, "problemCount")) &&
   (!Object.hasOwn(x as R, "partialResponsesByOccurrenceId") || (x as R).scoringPolicyId === "patternly-ccarp-complete-item-v1");
 const designResponses: Guard = x => shape(x, { requirements: string, architecture: string, tradeoffs: string, final_answer: string });
 const designCompleteness: Guard = x => shape(x, { requirements: bool, architecture: bool, tradeoffs: bool, final_answer: bool });
@@ -81,6 +87,8 @@ const designResult: Guard = x => shape(x, { profileId: text, profileVersion: tex
 const resultEnvelope: Guard = x => shape(x, { familyId: one("certification", "coding_interview"), details: aggregate }) || shape(x, { familyId: one("design_interview"), details: x => aggregate(x) || designResult(x) });
 const sessionResult: Guard = x => shape(x, { id: text, sessionId: text, trackId: text, totalOccurrences: positive, answeredOccurrenceIds: strings, unansweredOccurrenceIds: strings, completedAt: timestamp, evidence: resultEnvelope }) && (() => {
   const evidence = x.evidence as R, details = evidence.details as R;
+  if (Object.hasOwn(details, "modeId") && (x.trackId !== "coding-interview-dsa-problem-solving" || evidence.familyId !== "coding_interview" || details.modeId !== "coding-interview-approach-challenge")) return false;
+  if (x.trackId !== "coding-interview-dsa-problem-solving" && (Object.hasOwn(details, "manifestVersion") || Object.hasOwn(details, "problemCount"))) return false;
   const partial = details.partialResponsesByOccurrenceId;
   if (details.scoringPolicyId !== undefined && (x.trackId !== "claude-certified-architect-professional-certification" || details.scoringPolicyId !== "patternly-ccarp-complete-item-v1" || details.scoringPolicyVersion !== "1")) return false;
   if (partial === undefined) return true;
@@ -130,6 +138,8 @@ export function isAccountWireState(recordType: string, recordId: string, trackId
   if (recordType === "training_attempt") {
     const item = state.item as R, evidence = state.reviewEvidence as R, sourceItem = evidence.sourceItem as R;
     return item.trackId === trackId && ["trackId", "questionId", "contentVersion", "artifactSha256"].every(key => item[key] === sourceItem[key]) &&
+      (state.modeId !== "coding-interview-approach-challenge" || trackId === "coding-interview-dsa-problem-solving") &&
+      ((state.response as R).type !== "approach_choice" || state.modeId === "coding-interview-approach-challenge" && trackId === "coding-interview-dsa-problem-solving") &&
       (!Object.hasOwn(evidence, "evidence") || trackId === "claude-certified-architect-professional-certification");
   }
   if (recordType === "review_queue_entry") return (state.sourceItem as R).trackId === trackId;
