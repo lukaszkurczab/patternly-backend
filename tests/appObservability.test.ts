@@ -323,3 +323,32 @@ test("progress read races return explicit bounded error codes", async () => {
     } finally { await app.close(); }
   }
 });
+
+test("every request completed line carries method and route template, never the raw URL", async () => {
+  const output: string[] = [];
+  const app = application({}, output);
+  try {
+    await app.inject({ method: "POST", url: "/v1/progress/sync?email=route-query@example.invalid", headers, payload: validSyncPayload });
+    await app.inject({ method: "GET", url: "/v1/progress?pageSize=100", headers });
+    await app.inject({ method: "GET", url: "/health?contact=route-query@example.invalid" });
+    await app.inject({ method: "GET", url: "/v1/purchase-attempts/private-attempt-id?token=route-query@example.invalid", headers });
+    await app.inject({ method: "GET", url: "/private-unmatched-path/route-query@example.invalid" });
+  } finally {
+    await app.close();
+  }
+  const logs = output.map((line) => JSON.parse(line) as Readonly<Record<string, unknown>>);
+  const completed = logs.filter((entry) => entry.msg === "request completed").map((entry) => entry.res as Readonly<Record<string, unknown>>);
+  assert.deepEqual(completed.map((res) => ({ method: res.method, route: res.route })), [
+    { method: "POST", route: "/v1/progress/sync" },
+    { method: "GET", route: "/v1/progress" },
+    { method: "GET", route: "/health" },
+    { method: "GET", route: "/v1/purchase-attempts/:attemptId" },
+    { method: "GET", route: "UNMATCHED" },
+  ]);
+  for (const res of completed) assert.deepEqual(Object.keys(res).sort(), ["method", "route", "statusCode"]);
+  const incoming = logs.filter((entry) => entry.msg === "incoming request").map((entry) => entry.req);
+  assert.deepEqual(incoming[0], { method: "POST", route: "/v1/progress/sync" });
+  const serialized = JSON.stringify(logs);
+  assert.doesNotMatch(serialized, /route-query@example\.invalid|private-attempt-id|private-unmatched-path|\?/u);
+  assert.doesNotMatch(serialized, /"url"|"headers"|"query"/u);
+});

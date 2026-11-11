@@ -1,7 +1,7 @@
 import pino, { type DestinationStream, type LevelWithSilent, type Logger, type LoggerOptions } from "pino";
 import type { Environment } from "../../config/environment.js";
 
-const SAFE_REQUEST_FIELDS = ["method"] as const;
+const UNMATCHED_ROUTE = "UNMATCHED";
 const SAFE_LOG_FIELDS = new Set(["req", "res", "err", "event", "stage", "code", "correlationId", "signal", "responseTime"]);
 const SAFE_EVENTS = new Set(["account_sync_rejected", "app_check_rejected", "request_failed", "bootstrap_failed", "shutting_down", "shutdown_failed"]);
 const SAFE_STAGES = new Set(["sync", "preview", "confirm"]);
@@ -20,14 +20,30 @@ const SAFE_MESSAGES = new Set([
 ]);
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
-function safeRequestSerializer(request: unknown): Readonly<Record<(typeof SAFE_REQUEST_FIELDS)[number], string>> {
-  const method = typeof (request as { method?: unknown })?.method === "string" ? (request as { method: string }).method : "UNKNOWN";
-  return { method };
+interface SafeRequestDiagnostics {
+  readonly method: string;
+  readonly route: string;
 }
 
-function safeResponseSerializer(response: unknown): Readonly<{ statusCode: number }> {
+/**
+ * Method plus the registered route template (`routeOptions.url`, e.g. `/v1/progress/sync`).
+ * Never the raw URL: no query string, path parameter values, headers, or body. Unmatched requests log a constant.
+ */
+function safeRequestDiagnostics(request: unknown): SafeRequestDiagnostics {
+  const method = typeof (request as { method?: unknown })?.method === "string" ? (request as { method: string }).method : "UNKNOWN";
+  const routeUrl = (request as { routeOptions?: { url?: unknown } } | undefined)?.routeOptions?.url;
+  return { method, route: typeof routeUrl === "string" && routeUrl.length > 0 ? routeUrl : UNMATCHED_ROUTE };
+}
+
+function safeRequestSerializer(request: unknown): SafeRequestDiagnostics {
+  return safeRequestDiagnostics(request);
+}
+
+/** Fastify logs `request completed` with only `{ res: reply }`, so the route is derived from `reply.request`. */
+function safeResponseSerializer(response: unknown): Readonly<{ statusCode: number } & Partial<SafeRequestDiagnostics>> {
   const statusCode = typeof (response as { statusCode?: unknown })?.statusCode === "number" ? (response as { statusCode: number }).statusCode : 0;
-  return { statusCode };
+  const request = (response as { request?: unknown } | undefined)?.request;
+  return typeof request === "object" && request !== null ? { statusCode, ...safeRequestDiagnostics(request) } : { statusCode };
 }
 
 function safeErrorSerializer(): Readonly<{ code: "internal_error" }> {
