@@ -276,7 +276,7 @@ test("a plan-only update validates against the current goal counterpart", async 
   const stalePlanUpdate = goalPlanMutation("learning_plan", track, planState(track, "2027-09-09", 2, 3), 2);
   const observed = observeTransactionReads();
   await assert.rejects(() => observed.store.applyBatch(userId, 1, deviceId, 4, [stalePlanUpdate], metadata(57)), { message: "goal_plan_bundle_invalid" });
-  assert.deepEqual(observed.reads.filter(read => read.method === "getAll").map(read => read.paths.length), [2, 1]);
+  assert.deepEqual(observed.reads.filter(read => read.method === "getAll").map(read => read.paths.length), [2, 2, 1]);
   const snapshot = await store.readSnapshot(userId);
   assert.equal(snapshot.accountRevision, 4);
   const goal = snapshot.records.find((record) => record.recordType === "goal")!;
@@ -308,9 +308,10 @@ for (const count of [1, 100]) {
     assert.equal(result.applied.length, count);
     assert.equal(result.accountRevision, count);
     assert.equal(typeof result.snapshotScope, "string");
-    assert.deepEqual(fresh.reads.map(read => [read.method, read.paths.length]), [["get", 1], ["get", 1], ["get", 1], ["get", 1], ["getAll", 2 * count]]);
-    assert.equal(fresh.reads[4]!.paths.filter(path => path.includes("/progress/")).length, count);
-    assert.equal(fresh.reads[4]!.paths.filter(path => path.includes("/syncMutations/")).length, count);
+    assert.deepEqual(fresh.reads.map(read => [read.method, read.paths.length]), [["get", 1], ["get", 1], ["getAll", 2], ["getAll", 2 * count]]);
+    assert.ok(fresh.reads[2]!.paths.every(path => path.includes("/syncBatches/")));
+    assert.equal(fresh.reads[3]!.paths.filter(path => path.includes("/progress/")).length, count);
+    assert.equal(fresh.reads[3]!.paths.filter(path => path.includes("/syncMutations/")).length, count);
 
     // A stored result must remain original even when the current revision advances.
     const laterTarget = "later-attempt";
@@ -320,7 +321,7 @@ for (const count of [1, 100]) {
     const replayed = await replay.store.applyBatch(userId, 1, deviceId, 0, inputs, metadata(70), true);
     const { snapshotScope: _snapshotScope, ...durableResult } = result;
     assert.deepEqual(replayed, durableResult);
-    assert.deepEqual(replay.reads.map(read => [read.method, read.paths.length]), [["get", 1], ["get", 1], ["get", 1]]);
+    assert.deepEqual(replay.reads.map(read => [read.method, read.paths.length]), [["get", 1], ["get", 1], ["getAll", 2]]);
     assert.ok(replay.reads.every(read => read.paths.every(path => !path.includes("/progress/") && !path.includes("/syncMutations/"))));
     assert.deepEqual(await syncDocuments(userId), before);
 
@@ -328,7 +329,7 @@ for (const count of [1, 100]) {
     const changedTarget = "changed-attempt";
     const changed = mutation("training_attempt", changedTarget, attemptState(changedTarget, trackId));
     await assert.rejects(reused.store.applyBatch(userId, 1, deviceId, 0, [changed, ...inputs.slice(1)], metadata(70)), { message: "mutation_id_reuse" });
-    assert.equal(reused.reads.filter(read => read.method === "getAll").length, 0);
+    assert.ok(reused.reads.every(read => read.paths.every(path => !path.includes("/progress/") && !path.includes("/syncMutations/"))));
     assert.deepEqual(await syncDocuments(userId), before);
   });
 }
@@ -350,7 +351,7 @@ test("batch replay retains authorization, lease and malformed metadata guards", 
     const before = await syncDocuments(userId);
     const replay = observeTransactionReads();
     await assert.rejects(replay.store.applyBatch(userId, 1, deviceId, 0, [input], metadata(80)), { message });
-    assert.equal(replay.reads.filter(read => read.method === "getAll").length, 0);
+    assert.ok(replay.reads.every(read => read.paths.every(path => !path.includes("/progress/") && !path.includes("/syncMutations/"))));
     assert.deepEqual(await syncDocuments(userId), before);
   }
   await meta.set(initial);

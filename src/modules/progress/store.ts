@@ -1031,17 +1031,18 @@ export class FirestoreProgressStore implements ProgressStore {
       const activeGeneration = readAccountGeneration(metadataSnapshot);
       const batchRef = syncBatchRef(this.db, userId, metadata);
       const legacyBatchRef = legacySyncBatchRef(this.db, userId, metadata);
-      const batchSnapshot = await readProgressTransaction(() => transaction.get(batchRef));
+      // One round-trip for both receipt keys. The v1 receipt is still consulted
+      // only when the v2 receipt is absent, exactly as before.
+      const [batchSnapshot, legacyBatchSnapshot] = await readProgressTransaction(() => transaction.getAll(batchRef, legacyBatchRef));
       const accountRevision = readAccountRevision(metadataSnapshot);
-      if (batchSnapshot.exists) {
-        const stored = asRecord(batchSnapshot.data(), "sync_batch");
+      if (batchSnapshot!.exists) {
+        const stored = asRecord(batchSnapshot!.data(), "sync_batch");
         if (stored.sessionId !== metadata.sessionId || stored.batchId !== metadata.batchId) throw new Error("sync_batch_invalid");
         if (stored.fingerprint !== syncBatchFingerprint(metadata, expectedAccountRevision, mutations)) throw new Error("mutation_id_reuse");
         return parseStoredBatchResult(stored.result as object);
       }
-      const legacyBatchSnapshot = await readProgressTransaction(() => transaction.get(legacyBatchRef));
-      if (legacyBatchSnapshot.exists) {
-        const stored = asRecord(legacyBatchSnapshot.data(), "sync_batch");
+      if (legacyBatchSnapshot!.exists) {
+        const stored = asRecord(legacyBatchSnapshot!.data(), "sync_batch");
         if (typeof stored.sessionId !== "string" || stored.sessionId.length < 1 || stored.sessionId.length > 128
           || typeof stored.batchId !== "string" || stored.batchId.length < 1 || stored.batchId.length > 128) throw new Error("sync_batch_invalid");
         // A v1 key may belong to another legal pair that shares its ambiguous

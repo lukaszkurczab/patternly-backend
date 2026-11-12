@@ -214,6 +214,21 @@ export type ProgressPage = Readonly<{
   snapshotScope?: string;
 }>;
 
+/**
+ * Optional first progress page returned by POST /v1/progress/sync when the
+ * client opts in with `x-patternly-progress-state: 1`. Same shape and
+ * guarantees as GET /v1/progress?pageSize=100&conditional=1 read after the
+ * sync commit, so its revision may be newer than the sync ACK revision.
+ */
+export type ProgressSyncState = Readonly<{
+  accountRevision: number;
+  generation: number;
+  records: readonly ProgressRecord[];
+  nextPageToken: string | null;
+  snapshotToken: string;
+  snapshotScope: string;
+}>;
+
 export type UnchangedProgressSnapshot = Readonly<{ accountRevision: number; generation: number; snapshotToken: string; snapshotScope: string; unchanged: true }>;
 export type ProgressReadCondition = Readonly<{ knownSnapshot?: string; knownScope?: string; knownRevision?: number }>;
 

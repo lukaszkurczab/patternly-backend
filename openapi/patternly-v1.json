@@ -4024,6 +4024,17 @@
                 "1"
               ]
             }
+          },
+          {
+            "name": "x-patternly-progress-state",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            }
           }
         ],
         "requestBody": {
@@ -4038,7 +4049,7 @@
         },
         "responses": {
           "200": {
-            "description": "Applied or duplicate mutations. Header x-patternly-progress-cache:1 requests ephemeral snapshotScope only for fresh successful writes, derived in the same transaction. Stored receipt replay and duplicates provide no promotion proof; durable receipts remain unchanged.",
+            "description": "Applied or duplicate mutations. Header x-patternly-progress-cache:1 requests ephemeral snapshotScope only for fresh successful writes, derived in the same transaction. Stored receipt replay and duplicates provide no promotion proof; durable receipts remain unchanged. Header x-patternly-progress-state:1 additionally requests progressState: the first progress page (pageSize 100) read after the commit, identical to GET /v1/progress?pageSize=100&conditional=1; its accountRevision may be newer than the ACK. progressState is best effort and omitted when that read fails; clients then fall back to GET /v1/progress. Without the header the response is unchanged.",
             "content": {
               "application/json": {
                 "schema": {
@@ -14288,6 +14299,116 @@
           "snapshotScope": {
             "type": "string",
             "pattern": "^[a-f0-9]{64}$"
+          },
+          "progressState": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "accountRevision",
+              "generation",
+              "records",
+              "nextPageToken",
+              "snapshotToken",
+              "snapshotScope"
+            ],
+            "properties": {
+              "accountRevision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "records": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "recordType",
+                    "trackId",
+                    "targetId",
+                    "version",
+                    "fingerprint",
+                    "state",
+                    "lastMutationId",
+                    "updatedAt"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "node",
+                        "item"
+                      ]
+                    },
+                    "recordType": {
+                      "type": "string",
+                      "enum": [
+                        "active_track",
+                        "training_session_summary",
+                        "training_session_result",
+                        "training_attempt",
+                        "review_queue_entry",
+                        "goal",
+                        "learning_plan"
+                      ]
+                    },
+                    "trackId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "targetId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "fingerprint": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "state": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {}
+                    },
+                    "lastMutationId": {
+                      "type": "string",
+                      "minLength": 16,
+                      "maxLength": 128
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              },
+              "nextPageToken": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "snapshotToken": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "snapshotScope": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
           }
         }
       },

@@ -17,7 +17,7 @@ import { authenticateIdentity, authenticateRequest } from "../modules/auth/reque
 import type { AuthenticatedIdentity } from "../modules/auth/contracts.js";
 import type { BackendStores } from "../infrastructure/firestore/stores.js";
 import type { PrivacyRequestDetails } from "../modules/privacy-requests/store.js";
-import { isSyncRequestWithinBudget, parseProgressPageToken, syncRequestSchema } from "../modules/progress/contracts.js";
+import { isSyncRequestWithinBudget, parseProgressPageToken, syncRequestSchema, type ProgressSyncState } from "../modules/progress/contracts.js";
 import { guestMergeConfirmationSchema, guestMergeSnapshotSchema } from "../modules/users/merge.js";
 import { contentReportStatusSchema, createContentReportSchema, transitionContentReportSchema, type ContentReportStatus, type ContentReportView, type OperatorContentReportDetail } from "../modules/content-reports/contracts.js";
 import { accountSessionRevokeSchema, accountDeletionRequestSchema, publicDeletionStatusSchema } from "../modules/account-lifecycle/contracts.js";
@@ -1089,6 +1089,8 @@ export function buildApplication(dependencies: ApplicationDependencies) {
   app.post("/v1/progress/sync", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const cacheProof = request.headers["x-patternly-progress-cache"];
     if (cacheProof !== undefined && cacheProof !== "1") return reply.code(400).send({ error: { code: "invalid_request" } });
+    const stateRequest = request.headers["x-patternly-progress-state"];
+    if (stateRequest !== undefined && stateRequest !== "1") return reply.code(400).send({ error: { code: "invalid_request" } });
     const parsed = syncRequestSchema.safeParse(request.body);
     const withinBudget = isSyncRequestWithinBudget(request.body);
     if (!parsed.success || !withinBudget) {
@@ -1106,7 +1108,17 @@ export function buildApplication(dependencies: ApplicationDependencies) {
         logAccountSyncRejection(request, "sync", result.accountRevisionConflict?.code ?? result.conflicts[0]?.code);
         return reply.code(409).send({ error: result.accountRevisionConflict ?? { code: result.conflicts[0]!.code } });
       }
-      return reply.code(200).send(result);
+      if (stateRequest !== "1") return reply.code(200).send(result);
+      // Opt-in post-commit read, identical to GET /v1/progress?pageSize=100&conditional=1.
+      // The write is already durable, so a failed read omits progressState and
+      // the client falls back to GET instead of retrying the sync.
+      try {
+        const progressState = await requireStores(dependencies).progress.readPage(request.userId!, request.expectedAuthorizationGeneration!, 100, null, {}) as ProgressSyncState;
+        return reply.code(200).send({ ...result, progressState });
+      } catch (stateError) {
+        request.log.warn({ code: errorCode(stateError) }, "progress sync state read skipped");
+        return reply.code(200).send(result);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "internal_error";
       if (message === "content_identity_schema_conflict") {
