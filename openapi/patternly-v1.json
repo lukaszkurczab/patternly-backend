@@ -872,6 +872,787 @@
         "x-patternly-consumer-scope": "mobile"
       }
     },
+    "/v1/bootstrap": {
+      "x-patternly-security-profile": "app_check_bearer",
+      "x-patternly-consumer-scope": "mobile",
+      "get": {
+        "description": "Start-up aggregate of GET /v1/me, GET /v1/entitlements, the first conditional GET /v1/progress page (pageSize=100, conditional=1) and GET /v1/tracks, read concurrently for the authenticated account. Each selected component is {status, body}: exactly the HTTP status and JSON body its standalone route returns for the same request, so one failing component (e.g. entitlements 503) never fails the others. include selects components (comma-separated, default all; absent components are not read). progressKnownSnapshot or progressKnownScope+progressKnownRevision behave like knownSnapshot / knownScope+knownRevision on GET /v1/progress and may yield {unchanged:true}. A progress body with nextPageToken!=null is continued with GET /v1/progress?pageSize=100&conditional=1&pageToken=. Server-Timing reports per-component and total server time. Clients fall back to the standalone routes on 404.",
+        "parameters": [
+          {
+            "name": "include",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(me|entitlements|progress|tracks)(,(me|entitlements|progress|tracks)){0,3}$"
+            }
+          },
+          {
+            "name": "progressKnownSnapshot",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          {
+            "name": "progressKnownScope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          {
+            "name": "progressKnownRevision",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-component start-up state",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              },
+              "Server-Timing": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "bootstrapVersion",
+                    "serverObservedAt",
+                    "components"
+                  ],
+                  "properties": {
+                    "bootstrapVersion": {
+                      "const": 1
+                    },
+                    "serverObservedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "components": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "me": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "status",
+                                "body"
+                              ],
+                              "properties": {
+                                "status": {
+                                  "const": 200
+                                },
+                                "body": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "user"
+                                  ],
+                                  "properties": {
+                                    "user": {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": [
+                                        "id",
+                                        "createdAt",
+                                        "acceptedTermsVersion",
+                                        "identity"
+                                      ],
+                                      "properties": {
+                                        "id": {
+                                          "type": "string",
+                                          "format": "uuid"
+                                        },
+                                        "createdAt": {
+                                          "type": "string",
+                                          "format": "date-time"
+                                        },
+                                        "acceptedTermsVersion": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "identity": {
+                                          "type": "object",
+                                          "additionalProperties": false,
+                                          "required": [
+                                            "provider",
+                                            "subject",
+                                            "email",
+                                            "emailVerified"
+                                          ],
+                                          "properties": {
+                                            "provider": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "subject": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "email": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "format": "email"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "emailVerified": {
+                                              "type": "boolean"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "status",
+                                "body"
+                              ],
+                              "properties": {
+                                "status": {
+                                  "type": "integer",
+                                  "minimum": 400,
+                                  "maximum": 599
+                                },
+                                "body": {
+                                  "$ref": "#/components/schemas/ErrorEnvelope"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "entitlements": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "status",
+                                "body"
+                              ],
+                              "properties": {
+                                "status": {
+                                  "const": 200
+                                },
+                                "body": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "serverObservedAt",
+                                    "entitlements"
+                                  ],
+                                  "properties": {
+                                    "serverObservedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "entitlements": {
+                                      "type": "array",
+                                      "minItems": 1,
+                                      "maxItems": 1,
+                                      "items": {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "accountId",
+                                          "entitlement",
+                                          "productId",
+                                          "state",
+                                          "source",
+                                          "projectId",
+                                          "mapVersion",
+                                          "environment",
+                                          "reason",
+                                          "sources",
+                                          "providerExpiresAt",
+                                          "providerGraceExpiresAt",
+                                          "providerObservedAt"
+                                        ],
+                                        "properties": {
+                                          "accountId": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "entitlement": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "productId": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "state": {
+                                            "type": "string",
+                                            "enum": [
+                                              "active",
+                                              "grace",
+                                              "hold",
+                                              "expired",
+                                              "refunded",
+                                              "unavailable"
+                                            ]
+                                          },
+                                          "source": {
+                                            "const": "revenuecat"
+                                          },
+                                          "projectId": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "mapVersion": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "environment": {
+                                            "type": "string",
+                                            "enum": [
+                                              "SANDBOX",
+                                              "PRODUCTION"
+                                            ]
+                                          },
+                                          "reason": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "enum": [
+                                                  "paused",
+                                                  "identity_conflict",
+                                                  "promotional"
+                                                ]
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "sources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "additionalProperties": false,
+                                              "required": [
+                                                "platform",
+                                                "store",
+                                                "appId",
+                                                "rcProductId",
+                                                "storeProductId",
+                                                "basePlanId",
+                                                "state",
+                                                "reason",
+                                                "managementURL",
+                                                "providerExpiresAt",
+                                                "providerGraceExpiresAt"
+                                              ],
+                                              "properties": {
+                                                "platform": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "ios",
+                                                    "android"
+                                                  ]
+                                                },
+                                                "store": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "APP_STORE",
+                                                    "PLAY_STORE"
+                                                  ]
+                                                },
+                                                "appId": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                "rcProductId": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                "storeProductId": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                "basePlanId": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string",
+                                                      "minLength": 1
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "state": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "active",
+                                                    "grace",
+                                                    "hold",
+                                                    "paused",
+                                                    "expired",
+                                                    "refunded"
+                                                  ]
+                                                },
+                                                "reason": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "paused",
+                                                        "account_hold"
+                                                      ]
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "managementURL": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string",
+                                                      "format": "uri"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "providerExpiresAt": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string",
+                                                      "format": "date-time"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "providerGraceExpiresAt": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string",
+                                                      "format": "date-time"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            }
+                                          },
+                                          "providerExpiresAt": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "format": "date-time"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "providerGraceExpiresAt": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "format": "date-time"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "providerObservedAt": {
+                                            "type": "string",
+                                            "format": "date-time"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "status",
+                                "body"
+                              ],
+                              "properties": {
+                                "status": {
+                                  "type": "integer",
+                                  "minimum": 400,
+                                  "maximum": 599
+                                },
+                                "body": {
+                                  "$ref": "#/components/schemas/ErrorEnvelope"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "progress": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "status",
+                                "body"
+                              ],
+                              "properties": {
+                                "status": {
+                                  "const": 200
+                                },
+                                "body": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": [
+                                        "accountRevision",
+                                        "generation",
+                                        "records",
+                                        "nextPageToken"
+                                      ],
+                                      "properties": {
+                                        "accountRevision": {
+                                          "type": "integer",
+                                          "minimum": 0
+                                        },
+                                        "generation": {
+                                          "type": "integer",
+                                          "minimum": 0
+                                        },
+                                        "records": {
+                                          "type": "array",
+                                          "maxItems": 100,
+                                          "items": {
+                                            "type": "object",
+                                            "additionalProperties": false,
+                                            "required": [
+                                              "kind",
+                                              "recordType",
+                                              "trackId",
+                                              "targetId",
+                                              "version",
+                                              "fingerprint",
+                                              "state",
+                                              "lastMutationId",
+                                              "updatedAt"
+                                            ],
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "node",
+                                                  "item"
+                                                ]
+                                              },
+                                              "recordType": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "active_track",
+                                                  "training_session_summary",
+                                                  "training_session_result",
+                                                  "training_attempt",
+                                                  "review_queue_entry",
+                                                  "goal",
+                                                  "learning_plan"
+                                                ]
+                                              },
+                                              "trackId": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "targetId": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "version": {
+                                                "type": "integer",
+                                                "minimum": 0
+                                              },
+                                              "fingerprint": {
+                                                "type": "string",
+                                                "pattern": "^[a-f0-9]{64}$"
+                                              },
+                                              "state": {
+                                                "type": "object",
+                                                "additionalProperties": true,
+                                                "properties": {}
+                                              },
+                                              "lastMutationId": {
+                                                "type": "string",
+                                                "minLength": 16,
+                                                "maxLength": 128
+                                              },
+                                              "updatedAt": {
+                                                "type": "string",
+                                                "format": "date-time"
+                                              }
+                                            }
+                                          }
+                                        },
+                                        "nextPageToken": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "snapshotToken": {
+                                          "type": "string",
+                                          "pattern": "^[a-f0-9]{64}$"
+                                        },
+                                        "snapshotScope": {
+                                          "type": "string",
+                                          "pattern": "^[a-f0-9]{64}$"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": [
+                                        "accountRevision",
+                                        "generation",
+                                        "snapshotToken",
+                                        "snapshotScope",
+                                        "unchanged"
+                                      ],
+                                      "properties": {
+                                        "accountRevision": {
+                                          "type": "integer",
+                                          "minimum": 0
+                                        },
+                                        "generation": {
+                                          "type": "integer",
+                                          "minimum": 0
+                                        },
+                                        "snapshotToken": {
+                                          "type": "string",
+                                          "pattern": "^[a-f0-9]{64}$"
+                                        },
+                                        "snapshotScope": {
+                                          "type": "string",
+                                          "pattern": "^[a-f0-9]{64}$"
+                                        },
+                                        "unchanged": {
+                                          "const": true
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "status",
+                                "body"
+                              ],
+                              "properties": {
+                                "status": {
+                                  "type": "integer",
+                                  "minimum": 400,
+                                  "maximum": 599
+                                },
+                                "body": {
+                                  "$ref": "#/components/schemas/ErrorEnvelope"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "tracks": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "status",
+                                "body"
+                              ],
+                              "properties": {
+                                "status": {
+                                  "const": 200
+                                },
+                                "body": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "tracks"
+                                  ],
+                                  "properties": {
+                                    "tracks": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "trackId",
+                                          "source",
+                                          "status",
+                                          "updatedAt"
+                                        ],
+                                        "properties": {
+                                          "trackId": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "source": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "status": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "updatedAt": {
+                                            "type": "string",
+                                            "format": "date-time"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "status",
+                                "body"
+                              ],
+                              "properties": {
+                                "status": {
+                                  "type": "integer",
+                                  "minimum": 400,
+                                  "maximum": 599
+                                },
+                                "body": {
+                                  "$ref": "#/components/schemas/ErrorEnvelope"
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown, repeated or malformed query parameter, or a progress condition without the progress component",
+            "x-patternly-error-codes": [
+              "invalid_request"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "App Check or authentication required, account deleted, or authorization generation claim missing, malformed, or stale",
+            "x-patternly-error-codes": [
+              "app_check_required",
+              "app_check_invalid",
+              "authentication_required",
+              "account_deleted",
+              "authorization_generation_required",
+              "authorization_generation_invalid",
+              "authorization_generation_stale"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "account_not_found when the verified bearer identity has no Patternly account",
+            "x-patternly-error-codes": [
+              "account_not_found"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_v1_bootstrap",
+        "security": [
+          {
+            "appCheckAuth": [],
+            "bearerAuth": []
+          }
+        ],
+        "x-patternly-security-profile": "app_check_bearer",
+        "x-patternly-consumer-scope": "mobile"
+      }
+    },
     "/v1/legal-acceptances": {
       "x-patternly-security-profile": "app_check_bearer",
       "x-patternly-consumer-scope": "mobile",

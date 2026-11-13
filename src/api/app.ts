@@ -17,7 +17,8 @@ import { authenticateIdentity, authenticateRequest } from "../modules/auth/reque
 import type { AuthenticatedIdentity } from "../modules/auth/contracts.js";
 import type { BackendStores } from "../infrastructure/firestore/stores.js";
 import type { PrivacyRequestDetails } from "../modules/privacy-requests/store.js";
-import { isSyncRequestWithinBudget, parseProgressPageToken, syncRequestSchema, type ProgressSyncState } from "../modules/progress/contracts.js";
+import { isSyncRequestWithinBudget, parseProgressPageToken, syncRequestSchema, type ProgressPageToken, type ProgressReadCondition, type ProgressSyncState } from "../modules/progress/contracts.js";
+import { BOOTSTRAP_PROGRESS_PAGE_SIZE, BootstrapQueryError, bootstrapServerTiming, composeBootstrap, parseBootstrapQuery, type BootstrapComponentResult, type BootstrapQuery } from "../modules/bootstrap/contracts.js";
 import { guestMergeConfirmationSchema, guestMergeSnapshotSchema } from "../modules/users/merge.js";
 import { contentReportStatusSchema, createContentReportSchema, transitionContentReportSchema, type ContentReportStatus, type ContentReportView, type OperatorContentReportDetail } from "../modules/content-reports/contracts.js";
 import { accountSessionRevokeSchema, accountDeletionRequestSchema, publicDeletionStatusSchema } from "../modules/account-lifecycle/contracts.js";
@@ -200,6 +201,83 @@ function logAccountSyncRejection(request: FastifyRequest, stage: AccountSyncReje
 function requireStores(dependencies: ApplicationDependencies): BackendStores {
   if (!dependencies.stores) throw new Error("firestore_not_ready");
   return dependencies.stores;
+}
+
+/*
+ * Shared readers for the start-up routes. Each returns the exact status and
+ * JSON body of its standalone route, so GET /v1/bootstrap cannot drift from
+ * GET /v1/me, /v1/entitlements, /v1/progress and /v1/tracks. A thrown error is
+ * what the standalone route would have surfaced as HTTP 500 internal_error.
+ */
+async function readMeResult(dependencies: ApplicationDependencies, userId: string): Promise<BootstrapComponentResult> {
+  const profile = await requireStores(dependencies).users.readProfile(userId);
+  if (!profile) return { status: 404, body: { error: { code: "user_not_found" } } };
+  return { status: 200, body: { user: profile } };
+}
+
+async function readEntitlementsResult(dependencies: ApplicationDependencies, userId: string): Promise<BootstrapComponentResult> {
+  const unavailable = (code: string): BootstrapComponentResult => ({ status: 503, body: { error: { code } } });
+  if (!dependencies.revenueCatEntitlementReader) return unavailable("revenuecat_read_unavailable");
+  try {
+    if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(userId)) return unavailable("identity_reconciliation_required");
+    const result = await dependencies.revenueCatEntitlementReader.read(userId);
+    if (result.reason === "identity_conflict") {
+      await requireStores(dependencies).revenueCatWebhook.markIdentityConflict(userId);
+      return unavailable("identity_reconciliation_required");
+    }
+    if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(userId)) return unavailable("identity_reconciliation_required");
+    if (result.state === "unavailable") return unavailable("revenuecat_read_unavailable");
+    return { status: 200, body: { serverObservedAt: new Date().toISOString(), entitlements: [{ accountId: userId, ...result, source: "revenuecat" }] } };
+  } catch {
+    return unavailable("revenuecat_read_unavailable");
+  }
+}
+
+async function readProgressResult(
+  dependencies: ApplicationDependencies,
+  userId: string,
+  expectedAuthorizationGeneration: number,
+  pageSize: number,
+  token: ProgressPageToken | null,
+  condition: ProgressReadCondition | undefined,
+): Promise<BootstrapComponentResult> {
+  try {
+    const progress = requireStores(dependencies).progress;
+    const body = condition !== undefined
+      ? await progress.readPage(userId, expectedAuthorizationGeneration, pageSize, token, condition)
+      : await progress.readPage(userId, expectedAuthorizationGeneration, pageSize, token);
+    return { status: 200, body };
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "progress_generation_conflict" || code === "content_identity_schema_conflict") return { status: 409, body: { error: { code } } };
+    const status = authErrorStatus(error);
+    if (status !== 500) return { status, body: { error: { code } } };
+    throw error;
+  }
+}
+
+async function readTracksResult(dependencies: ApplicationDependencies, userId: string): Promise<BootstrapComponentResult> {
+  return { status: 200, body: { tracks: await requireStores(dependencies).tracks.readAccess(userId) } };
+}
+
+function sendComponentResult(reply: FastifyReply, result: BootstrapComponentResult): unknown {
+  if (result.status === 200) return result.body;
+  return reply.code(result.status).send(result.body);
+}
+
+async function readBootstrap(request: FastifyRequest, dependencies: ApplicationDependencies, query: BootstrapQuery) {
+  const userId = request.userId!;
+  const generation = request.expectedAuthorizationGeneration!;
+  return composeBootstrap(query.include, {
+    me: () => readMeResult(dependencies, userId),
+    entitlements: () => readEntitlementsResult(dependencies, userId),
+    // Always the conditional first page: snapshotToken/snapshotScope are needed to continue or revalidate.
+    progress: () => readProgressResult(dependencies, userId, generation, BOOTSTRAP_PROGRESS_PAGE_SIZE, null, query.progressCondition),
+    tracks: () => readTracksResult(dependencies, userId),
+  }, (component, error) => {
+    request.log.error({ event: "request_failed", component, code: errorCode(error), correlationId: request.correlationId }, "bootstrap_component_failed");
+    return { status: 500, body: { error: { code: "internal_error", correlationId: request.correlationId } } };
+  });
 }
 
 function adoptionTransferErrorResponse(error: unknown, reply: FastifyReply): boolean {
@@ -763,10 +841,20 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.get("/v1/me", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
-    const profile = await requireStores(dependencies).users.readProfile(request.userId!);
-    if (!profile) return reply.code(404).send({ error: { code: "user_not_found" } });
-    return { user: profile };
+  app.get("/v1/me", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => sendComponentResult(reply, await readMeResult(dependencies, request.userId!)));
+
+  app.get("/v1/bootstrap", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
+    let query: BootstrapQuery;
+    try { query = parseBootstrapQuery(request.query); }
+    catch (error) {
+      if (error instanceof BootstrapQueryError) return reply.code(400).send({ error: { code: "invalid_request" } });
+      throw error;
+    }
+    const startedAt = performance.now();
+    reply.header("cache-control", "private, no-store");
+    const { response, timings } = await readBootstrap(request, dependencies, query);
+    reply.header("server-timing", bootstrapServerTiming(timings, performance.now() - startedAt));
+    return response;
   });
 
   app.post("/v1/legal-acceptances", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
@@ -886,22 +974,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
 
-  app.get("/v1/entitlements", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
-    if (!dependencies.revenueCatEntitlementReader) return reply.code(503).send({ error: { code: "revenuecat_read_unavailable" } });
-    try {
-      if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
-      const result = await dependencies.revenueCatEntitlementReader.read(request.userId!);
-      if (result.reason === "identity_conflict") {
-        await requireStores(dependencies).revenueCatWebhook.markIdentityConflict(request.userId!);
-        return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
-      }
-      if (!await requireStores(dependencies).revenueCatWebhook.identityAvailable(request.userId!)) return reply.code(503).send({ error: { code: "identity_reconciliation_required" } });
-      if (result.state === "unavailable") return reply.code(503).send({ error: { code: "revenuecat_read_unavailable" } });
-      return { serverObservedAt: new Date().toISOString(), entitlements: [{ accountId: request.userId!, ...result, source: "revenuecat" }] };
-    } catch {
-      return reply.code(503).send({ error: { code: "revenuecat_read_unavailable" } });
-    }
-  });
+  app.get("/v1/entitlements", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => sendComponentResult(reply, await readEntitlementsResult(dependencies, request.userId!)));
 
   app.get("/v1/progress", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const query = request.query as Record<string, unknown>;
@@ -924,21 +997,12 @@ export function buildApplication(dependencies: ApplicationDependencies) {
       try { token = parseProgressPageToken(query.pageToken); }
       catch { return reply.code(400).send({ error: { code: "progress_pagination_token_invalid" } }); }
     }
-    try {
-      reply.header("cache-control", "private, no-store");
-      const progress = requireStores(dependencies).progress;
-      return query.conditional === "1"
-        ? await progress.readPage(request.userId!, request.expectedAuthorizationGeneration!, pageSize, token,
-          { ...(typeof query.knownSnapshot === "string" ? { knownSnapshot: query.knownSnapshot } : {}),
-            ...(hasScopeCondition ? { knownScope: query.knownScope as string, knownRevision: Number(query.knownRevision) } : {}) })
-        : await progress.readPage(request.userId!, request.expectedAuthorizationGeneration!, pageSize, token);
-    } catch (error) {
-      const code = errorCode(error);
-      if (code === "progress_generation_conflict" || code === "content_identity_schema_conflict") return reply.code(409).send({ error: { code } });
-      const status = authErrorStatus(error);
-      if (status !== 500) return reply.code(status).send({ error: { code } });
-      throw error;
-    }
+    reply.header("cache-control", "private, no-store");
+    const condition = query.conditional === "1"
+      ? { ...(typeof query.knownSnapshot === "string" ? { knownSnapshot: query.knownSnapshot } : {}),
+        ...(hasScopeCondition ? { knownScope: query.knownScope as string, knownRevision: Number(query.knownRevision) } : {}) }
+      : undefined;
+    return sendComponentResult(reply, await readProgressResult(dependencies, request.userId!, request.expectedAuthorizationGeneration!, pageSize, token, condition));
   });
 
   app.get("/v1/account-data/export", { preHandler: createAccountExportGuard(dependencies) }, async (request, reply) => {
@@ -1335,7 +1399,7 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     return reply.code(200).send(status);
   });
 
-  app.get("/v1/tracks", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request) => ({ tracks: await requireStores(dependencies).tracks.readAccess(request.userId!) }));
+  app.get("/v1/tracks", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => sendComponentResult(reply, await readTracksResult(dependencies, request.userId!)));
   app.get("/v1/content/versions", { preHandler: routeGuard("app_check_bearer", dependencies) }, async () => ({ versions: await requireStores(dependencies).content.readCurrent() }));
   app.get("/v1/content/packages/:trackId/:nodeId", { preHandler: routeGuard("app_check_bearer", dependencies) }, async (request, reply) => {
     const sandboxPolicy = dependencies.environment.sandboxPromotionalAccess;

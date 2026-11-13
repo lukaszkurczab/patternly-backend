@@ -55,6 +55,15 @@ function probeOperations(document: unknown): readonly ProbeOperation[] {
   return operations;
 }
 
+/*
+ * Operations that aggregate private account state. They must stay documented
+ * with this exact profile, so a removed or downgraded guard fails the probe
+ * instead of silently dropping out of the profile-driven loop below.
+ */
+const REQUIRED_PROTECTED_OPERATIONS: readonly ProbeOperation[] = Object.freeze([
+  Object.freeze({ method: "GET", path: "/v1/bootstrap", profile: "app_check_bearer" }),
+]);
+
 function probePath(path: string): string {
   return path.replace(/\{[^}]+\}/gu, "security-probe");
 }
@@ -101,7 +110,8 @@ function isAuthenticationRejection(response: Readonly<{ statusCode: number; erro
  */
 export async function assertSecurityProbes(app: ProbeApp, document: unknown): Promise<void> {
   const failures: string[] = [];
-  for (const operation of probeOperations(document)) {
+  const operations = probeOperations(document);
+  for (const operation of operations) {
     if (operation.profile === "public") {
       const publicResponse = await probe(app, operation);
       if (isAuthenticationRejection(publicResponse)) {
@@ -138,6 +148,12 @@ export async function assertSecurityProbes(app: ProbeApp, document: unknown): Pr
       if (operation.profile === "app_check_only" && ["app_check_required", "app_check_invalid", "authentication_required"].includes(valid.errorCode ?? "")) failures.push(`${describe(operation)}:valid_app_check_rejected:got:${valid.statusCode}:${valid.errorCode ?? "no_code"}`);
       const both = await probe(app, operation, { ...validHeaders, authorization: `Bearer ${SECURITY_PROBE_TOKEN}` }, operation.path === "/v1/account/registration" ? SECURITY_PROBE_REGISTRATION_PAYLOAD : undefined);
       if (both.errorCode === "app_check_required" || both.errorCode === "app_check_invalid" || (operation.profile !== "app_check_only" && both.errorCode === "authentication_required")) failures.push(`${describe(operation)}:valid_combination_rejected:got:${both.statusCode}:${both.errorCode ?? "no_code"}`);
+      if (REQUIRED_PROTECTED_OPERATIONS.some((required) => required.method === operation.method && required.path === operation.path)) {
+        for (const rejected of [missing, invalid, valid]) {
+          if (rejected.body.includes("\"components\"")) failures.push(`${describe(operation)}:aggregate_leaked_before_authentication:${rejected.statusCode}`);
+        }
+        if (both.statusCode !== 200 || both.headers?.["cache-control"] !== "private, no-store") failures.push(`${describe(operation)}:aggregate_private_no_store_expected:got:${both.statusCode}:${String(both.headers?.["cache-control"] ?? "none")}`);
+      }
     } else if (operation.profile === "admin") {
       expectAuthenticationRejection(operation, await probe(app, operation), failures);
       const nonAdmin = await probe(app, operation, { authorization: `Bearer ${SECURITY_PROBE_TOKEN}` });
@@ -159,6 +175,11 @@ export async function assertSecurityProbes(app: ProbeApp, document: unknown): Pr
       if (wrongAuthorization.statusCode !== 401 || wrongAuthorization.errorCode !== "revenuecat_webhook_unauthorized") {
         failures.push(`${describe(operation)}:wrong_webhook_rejection_expected:401:revenuecat_webhook_unauthorized:got:${wrongAuthorization.statusCode}:${wrongAuthorization.errorCode ?? "no_code"}`);
       }
+    }
+  }
+  for (const required of REQUIRED_PROTECTED_OPERATIONS) {
+    if (!operations.some((operation) => operation.method === required.method && operation.path === required.path && operation.profile === required.profile)) {
+      failures.push(`${describe(required)}:required_protected_operation_missing_or_downgraded`);
     }
   }
   if (failures.length > 0) throw new Error(`security_probe_failed:${failures.join(";")}`);
