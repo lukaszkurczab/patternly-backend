@@ -747,7 +747,7 @@
     },
     "/v1/me": {
       "x-patternly-security-profile": "app_check_bearer",
-      "x-patternly-consumer-scope": "mobile",
+      "x-patternly-consumer-scope": "backend-only",
       "get": {
         "responses": {
           "200": {
@@ -869,7 +869,7 @@
           }
         ],
         "x-patternly-security-profile": "app_check_bearer",
-        "x-patternly-consumer-scope": "mobile"
+        "x-patternly-consumer-scope": "backend-only"
       }
     },
     "/v1/bootstrap": {

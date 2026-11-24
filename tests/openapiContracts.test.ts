@@ -281,13 +281,13 @@ test("frontend checker does not let a methodless static path satisfy a consumer 
     const web = join(root, "web");
     await mkdir(join(mobile, "src"), { recursive: true });
     await mkdir(join(web, "src"), { recursive: true });
-    await writeFile(join(mobile, "src", "paths.ts"), 'export const endpoint = "/v1/me";\n', "utf8");
+    await writeFile(join(mobile, "src", "paths.ts"), 'export const endpoint = "/v1/entitlements";\n', "utf8");
     await assert.rejects(
       execFileAsync(process.execPath, [resolve(process.cwd(), "scripts/check-frontend-client.mjs")], {
         cwd: process.cwd(),
         env: { ...process.env, PATTERNLY_FRONTEND_ROOT: mobile, PATTERNLY_WEB_ROOT: web },
       }),
-      (error: unknown) => error instanceof Error && error.message.includes("frontend_missing_consumer_operation:GET /v1/me:mobile"),
+      (error: unknown) => error instanceof Error && error.message.includes("frontend_missing_consumer_operation:GET /v1/entitlements:mobile"),
     );
   } finally {
     await rm(root, { recursive: true, force: true });
