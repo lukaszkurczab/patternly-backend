@@ -262,7 +262,7 @@
             }
           },
           "400": {
-            "description": "Malformed event; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Malformed event; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -273,6 +273,26 @@
           },
           "401": {
             "description": "Webhook authorization failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -590,7 +610,7 @@
             }
           },
           "400": {
-            "description": "Invalid registration evidence; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid registration evidence; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -601,6 +621,26 @@
           },
           "401": {
             "description": "Authentication failed or an active deletion tombstone blocks registration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -704,7 +744,7 @@
             }
           },
           "400": {
-            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -725,6 +765,26 @@
           },
           "404": {
             "description": "Verified identity has no Patternly account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -1693,7 +1753,7 @@
             }
           },
           "400": {
-            "description": "Invalid acceptance; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid acceptance; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -1737,6 +1797,26 @@
             "x-patternly-error-codes": [
               "authorization_generation_conflict"
             ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -1828,7 +1908,7 @@
             }
           },
           "400": {
-            "description": "Invalid confirmation; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid confirmation; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -1877,6 +1957,26 @@
               "identity_reconciliation_required",
               "authorization_generation_conflict"
             ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -2207,7 +2307,7 @@
             }
           },
           "400": {
-            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -2241,6 +2341,26 @@
           },
           "409": {
             "description": "Purchase state or revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -2720,7 +2840,7 @@
             }
           },
           "400": {
-            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -2751,6 +2871,26 @@
           },
           "409": {
             "description": "Purchase state or revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -2914,7 +3054,7 @@
             }
           },
           "400": {
-            "description": "Invalid strict request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid strict request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -2935,6 +3075,26 @@
           },
           "409": {
             "description": "Scope, authority, identity, state, attestation, operation or snapshot conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -4025,7 +4185,7 @@
             }
           },
           "400": {
-            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -4068,6 +4228,26 @@
             "x-patternly-error-codes": [
               "authorization_generation_conflict"
             ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -4254,7 +4434,7 @@
             }
           },
           "400": {
-            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -4275,6 +4455,26 @@
           },
           "409": {
             "description": "Idempotency key reused with different payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -4346,7 +4546,7 @@
             }
           },
           "400": {
-            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -4357,6 +4557,26 @@
           },
           "404": {
             "description": "Uniform unavailable response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -4428,7 +4648,27 @@
             }
           },
           "400": {
-            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -4490,7 +4730,7 @@
             }
           },
           "400": {
-            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -4501,6 +4741,26 @@
           },
           "404": {
             "description": "Uniform unavailable response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -4546,7 +4806,7 @@
             }
           },
           "400": {
-            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -4590,6 +4850,26 @@
             "x-patternly-error-codes": [
               "authorization_generation_conflict"
             ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -4770,7 +5050,7 @@
             }
           },
           "400": {
-            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -4816,6 +5096,26 @@
             "x-patternly-error-codes": [
               "authorization_generation_conflict"
             ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -4910,7 +5210,7 @@
             }
           },
           "400": {
-            "description": "Invalid sync request, fingerprint, or track bundle; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid sync request, fingerprint, or track bundle; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -4971,7 +5271,17 @@
             }
           },
           "413": {
-            "description": "Canonical UTF-8 sync envelope exceeds 512 KiB",
+            "description": "Canonical UTF-8 sync envelope exceeds 512 KiB; request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -5019,7 +5329,7 @@
             }
           },
           "400": {
-            "description": "Invalid snapshot; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid snapshot; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -5033,6 +5343,26 @@
             "x-patternly-error-codes": [
               "account_not_found"
             ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -5080,7 +5410,7 @@
             }
           },
           "400": {
-            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -5120,6 +5450,26 @@
             "x-patternly-error-codes": [
               "authorization_generation_conflict"
             ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -5167,7 +5517,7 @@
             }
           },
           "400": {
-            "description": "Invalid transfer start; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid transfer start; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -5207,6 +5557,26 @@
           },
           "409": {
             "description": "Authorization-generation, transfer-generation, or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -5258,7 +5628,7 @@
             }
           },
           "400": {
-            "description": "Invalid record, chunk, or fingerprint; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid record, chunk, or fingerprint; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -5307,7 +5677,17 @@
             }
           },
           "413": {
-            "description": "Canonical envelope or record limit exceeded",
+            "description": "Canonical envelope or record limit exceeded; request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -5359,7 +5739,7 @@
             }
           },
           "400": {
-            "description": "Invalid seal; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid seal; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -5399,6 +5779,26 @@
           },
           "409": {
             "description": "Authorization-generation, incomplete, stale, or mismatched seal conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -5450,7 +5850,7 @@
             }
           },
           "400": {
-            "description": "Invalid or unsupported merge; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid or unsupported merge; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -5484,6 +5884,26 @@
           },
           "409": {
             "description": "Preview or generation conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -5535,7 +5955,7 @@
             }
           },
           "400": {
-            "description": "Invalid confirmation; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid confirmation; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -5578,6 +5998,26 @@
             "x-patternly-error-codes": [
               "authorization_generation_conflict"
             ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -5629,7 +6069,7 @@
             }
           },
           "400": {
-            "description": "Invalid apply request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid apply request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -5681,7 +6121,17 @@
             }
           },
           "413": {
-            "description": "A transfer record exceeds the safe transaction budget",
+            "description": "A transfer record exceeds the safe transaction budget; request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -5828,7 +6278,7 @@
             }
           },
           "400": {
-            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -5879,6 +6329,26 @@
               "session_revocation_operation_invalid",
               "security_operation_conflict"
             ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -5964,7 +6434,7 @@
             }
           },
           "400": {
-            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -6014,6 +6484,26 @@
               "account_deletion_conflict",
               "account_deletion_in_progress"
             ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -6146,7 +6636,7 @@
             }
           },
           "400": {
-            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -6157,6 +6647,26 @@
           },
           "404": {
             "description": "Operation unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -6593,7 +7103,7 @@
             }
           },
           "400": {
-            "description": "Invalid report; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid report; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -6639,6 +7149,26 @@
             "x-patternly-error-codes": [
               "authorization_generation_conflict"
             ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -7177,7 +7707,7 @@
             }
           },
           "400": {
-            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -7188,6 +7718,26 @@
           },
           "409": {
             "description": "Revision or lifecycle conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -7330,7 +7880,7 @@
             }
           },
           "400": {
-            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -7341,6 +7891,26 @@
           },
           "409": {
             "description": "Revision or lifecycle conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -7412,7 +7982,7 @@
             }
           },
           "400": {
-            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -7423,6 +7993,26 @@
           },
           "403": {
             "description": "Administrator required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -7545,7 +8135,7 @@
             }
           },
           "400": {
-            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -7556,6 +8146,26 @@
           },
           "409": {
             "description": "Revision or legal-lifecycle conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -8050,7 +8660,7 @@
             }
           },
           "400": {
-            "description": "Invalid status transition request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid status transition request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -8091,6 +8701,26 @@
           },
           "409": {
             "description": "Status transition is not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -8341,7 +8971,7 @@
             }
           },
           "400": {
-            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -8372,6 +9002,26 @@
           },
           "409": {
             "description": "Stale status or unavailable transition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -8752,7 +9402,7 @@
             }
           },
           "400": {
-            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -8783,6 +9433,26 @@
           },
           "409": {
             "description": "Revision, lifecycle, or action availability conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -9055,7 +9725,7 @@
             }
           },
           "400": {
-            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -9086,6 +9756,26 @@
           },
           "409": {
             "description": "Revision, lifecycle, or action availability conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -9263,7 +9953,7 @@
             }
           },
           "400": {
-            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -9284,6 +9974,26 @@
           },
           "409": {
             "description": "Incident ID was already used with different content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {
@@ -9439,7 +10149,7 @@
             }
           },
           "400": {
-            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length",
             "content": {
               "application/json": {
                 "schema": {
@@ -9470,6 +10180,26 @@
           },
           "409": {
             "description": "Revision, lifecycle, or action availability conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large before every guard and handler when the raw body exceeds 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain",
             "content": {
               "application/json": {
                 "schema": {

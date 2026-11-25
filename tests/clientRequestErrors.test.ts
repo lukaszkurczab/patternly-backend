@@ -102,6 +102,54 @@ test("malformed or empty JSON bodies are a bounded 400 invalid_request on public
   }
 });
 
+const OVERSIZED_JSON = JSON.stringify({ padding: "x".repeat(1024 * 1024 + 16) });
+const PARSER_CLIENT_ERROR_DETAIL = /too large|Unsupported Media|Content-Length|did not match|FST_ERR|RangeError/iu;
+
+const parserClientErrors = [
+  { name: "body over the 1 MiB limit", headers: { "content-type": "application/json" }, payload: OVERSIZED_JSON, status: 413, code: "request_too_large" },
+  { name: "text/xml body", headers: { "content-type": "text/xml" }, payload: "<sync/>", status: 415, code: "unsupported_media_type" },
+  { name: "octet-stream body", headers: { "content-type": "application/octet-stream" }, payload: "{}", status: 415, code: "unsupported_media_type" },
+  { name: "form-urlencoded body", headers: { "content-type": "application/x-www-form-urlencoded" }, payload: "records=1", status: 415, code: "unsupported_media_type" },
+  { name: "content-length larger than the body", headers: { "content-type": "application/json", "content-length": "64" }, payload: "{}", status: 400, code: "invalid_request" },
+  { name: "content-length smaller than the body", headers: { "content-type": "application/json", "content-length": "2" }, payload: "{\"mutations\":[]}", status: 400, code: "invalid_request" },
+] as const;
+
+test("oversized, unsupported or length-mismatched bodies are bounded client errors before every guard", async () => {
+  for (const route of routes) {
+    for (const body of parserClientErrors) {
+      for (const credentials of ["with", "without"] as const) {
+        const calls: string[] = [];
+        const logs: string[] = [];
+        const app = application(calls, logs);
+        let response: Awaited<ReturnType<typeof app.inject>>;
+        try {
+          response = await app.inject({
+            method: "POST",
+            url: route.url,
+            headers: { ...(credentials === "with" ? route.headers : {}), ...body.headers },
+            payload: body.payload,
+          });
+        } finally {
+          await app.close();
+        }
+        const label = `${route.name} / ${body.name} / ${credentials} credentials`;
+        assert.equal(response.statusCode, body.status, label);
+        assert.match(String(response.headers["content-type"]), /^application\/json/u, label);
+        assert.deepEqual(response.json(), { error: { code: body.code } }, label);
+        assert.doesNotMatch(response.body, PARSER_CLIENT_ERROR_DETAIL, label);
+        assert.equal(typeof response.headers["x-correlation-id"], "string", label);
+        assert.deepEqual(calls, [], label);
+        const serializedLogs = logs.join("");
+        assert.doesNotMatch(serializedLogs, PARSER_CLIENT_ERROR_DETAIL, label);
+        assert.doesNotMatch(serializedLogs, /"level":50/u, label);
+        const rejected = logs.map((line) => JSON.parse(line) as Readonly<Record<string, unknown>>).filter((entry) => entry.event === "request_rejected");
+        assert.equal(rejected.length, 1, label);
+        assert.equal(rejected[0]?.code, body.code, label);
+      }
+    }
+  }
+});
+
 test("a well-formed body still cannot reach a protected handler without App Check", async () => {
   for (const headers of [{}, { authorization: "Bearer test-token" }, { "x-firebase-appcheck": "invalid", authorization: "Bearer test-token" }]) {
     const calls: string[] = [];
@@ -132,6 +180,21 @@ test("unexpected handler failures remain an opaque 500 internal_error", async ()
   assert.equal(response.statusCode, 500);
   assert.equal(response.json().error.code, "internal_error");
   assert.doesNotMatch(response.body, /private failure detail/u);
+});
+
+test("OpenAPI documents the parser 413 and 415 on every operation with a JSON request body", () => {
+  const missing: string[] = [];
+  for (const [path, pathItem] of Object.entries(OPENAPI_DOCUMENT.paths as unknown as Record<string, Record<string, unknown>>)) {
+    for (const [method, operationValue] of Object.entries(pathItem)) {
+      const operation = operationValue as { requestBody?: unknown; responses?: Record<string, { description?: string; content?: Record<string, { schema?: { $ref?: string } }> }> };
+      if (typeof operation !== "object" || operation === null || operation.requestBody === undefined) continue;
+      for (const [status, code] of [["413", "request_too_large"], ["415", "unsupported_media_type"]] as const) {
+        const response = operation.responses?.[status];
+        if (!response?.description?.includes(code) || response.content?.["application/json"]?.schema?.$ref !== "#/components/schemas/ErrorEnvelope") missing.push(`${method.toUpperCase()} ${path} ${status}`);
+      }
+    }
+  }
+  assert.deepEqual(missing, []);
 });
 
 test("OpenAPI documents the malformed-body 400 on every operation with a JSON request body", () => {

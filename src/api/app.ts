@@ -104,10 +104,17 @@ const authErrorStatus = (error: unknown): number => {
   return 500;
 };
 
-const MALFORMED_JSON_BODY_CODES: ReadonlySet<string> = new Set(["FST_ERR_CTP_EMPTY_JSON_BODY", "FST_ERR_CTP_INVALID_JSON_BODY"]);
+/** Body-parser client errors, raised before every route guard, mapped to bounded public codes. */
+const BODY_PARSER_CLIENT_ERRORS: ReadonlyMap<string, Readonly<{ status: 400 | 413 | 415; code: string }>> = new Map([
+  ["FST_ERR_CTP_EMPTY_JSON_BODY", { status: 400, code: "invalid_request" }],
+  ["FST_ERR_CTP_INVALID_JSON_BODY", { status: 400, code: "invalid_request" }],
+  ["FST_ERR_CTP_INVALID_CONTENT_LENGTH", { status: 400, code: "invalid_request" }],
+  ["FST_ERR_CTP_BODY_TOO_LARGE", { status: 413, code: "request_too_large" }],
+  ["FST_ERR_CTP_INVALID_MEDIA_TYPE", { status: 415, code: "unsupported_media_type" }],
+]);
 
-function isMalformedJsonBody(error: unknown): boolean {
-  return typeof error === "object" && error !== null && MALFORMED_JSON_BODY_CODES.has(String((error as { code?: unknown }).code));
+function bodyParserClientError(error: unknown): Readonly<{ status: 400 | 413 | 415; code: string }> | undefined {
+  return typeof error === "object" && error !== null ? BODY_PARSER_CLIENT_ERRORS.get(String((error as { code?: unknown }).code)) : undefined;
 }
 
 const errorCode = (error: unknown): string => {
@@ -779,13 +786,15 @@ export function buildApplication(dependencies: ApplicationDependencies) {
     }
   });
   app.setErrorHandler((error, request, reply) => {
-    // The JSON parser runs before every route guard, so an empty or malformed
-    // body never reaches App Check, authentication or a handler. Answer it as a
-    // bounded client error without echoing parser details.
-    if (isMalformedJsonBody(error)) {
-      request.log.warn({ event: "request_rejected", code: "invalid_request", correlationId: request.correlationId }, "request_rejected");
+    // The body parser runs before every route guard, so an empty, malformed,
+    // oversized, length-mismatched or unsupported body never reaches App Check,
+    // authentication or a handler. Answer it as a bounded client error without
+    // echoing parser details.
+    const clientError = bodyParserClientError(error);
+    if (clientError !== undefined) {
+      request.log.warn({ event: "request_rejected", code: clientError.code, correlationId: request.correlationId }, "request_rejected");
       if (reply.sent) return;
-      reply.code(400).send({ error: { code: "invalid_request" } });
+      reply.code(clientError.status).send({ error: { code: clientError.code } });
       return;
     }
     request.log.error({ event: "request_failed", code: errorCode(error), correlationId: request.correlationId }, "request_failed");

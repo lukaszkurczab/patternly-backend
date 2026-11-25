@@ -986,14 +986,19 @@ function enrichOpenApiDocument(document: OpenApiRecord): void {
       const responses = (operation.responses as OpenApiRecord | undefined) ?? {};
       operation.responses = responses;
       if (operation.requestBody !== undefined) {
-        // The JSON parser runs before every guard, so an empty or malformed body is rejected first.
-        const malformedBody = "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body";
-        const badRequest = (responses["400"] as OpenApiRecord | undefined) ?? {};
-        const description = typeof badRequest.description === "string" && badRequest.description.length > 0 ? `${badRequest.description}; ${malformedBody}` : malformedBody;
-        const documentedCodes = Array.isArray(badRequest["x-patternly-error-codes"])
-          ? badRequest["x-patternly-error-codes"].filter((value): value is string => typeof value === "string")
-          : undefined;
-        responses["400"] = { ...badRequest, description, ...(documentedCodes === undefined ? {} : { "x-patternly-error-codes": [...new Set([...documentedCodes, "invalid_request"])] }) };
+        // The body parser runs before every guard, so these bodies are rejected first.
+        for (const [status, code, clause] of [
+          ["400", "invalid_request", "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body or a body that does not match Content-Length"],
+          ["413", "request_too_large", "request_too_large before every guard and handler when the raw body exceeds 1 MiB"],
+          ["415", "unsupported_media_type", "unsupported_media_type before every guard and handler when a body carries a content-type other than application/json or text/plain"],
+        ] as const) {
+          const existing = (responses[status] as OpenApiRecord | undefined) ?? {};
+          const description = typeof existing.description === "string" && existing.description.length > 0 ? `${existing.description}; ${clause}` : clause;
+          const documentedCodes = Array.isArray(existing["x-patternly-error-codes"])
+            ? existing["x-patternly-error-codes"].filter((value): value is string => typeof value === "string")
+            : undefined;
+          responses[status] = { ...existing, description, ...(documentedCodes === undefined ? {} : { "x-patternly-error-codes": [...new Set([...documentedCodes, code])] }) };
+        }
       }
       if (securityProfile === "bearer" || securityProfile === "app_check_bearer" || securityProfile === "app_check_optional_bearer") {
         const accountNotFound = (responses["404"] as OpenApiRecord | undefined) ?? {};

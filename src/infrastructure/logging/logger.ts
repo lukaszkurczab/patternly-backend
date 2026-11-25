@@ -12,7 +12,8 @@ const SAFE_CODES = new Set([
   "recent_reauthentication_required", "account_deleted",
   "remote_deletion_pending", "session_revocation_failed", "session_revocation_operation_conflict",
   "app_check_required", "app_check_invalid", "app_check_not_configured", "content_report_not_found",
-  "content_report_transition_invalid", "data_export_rate_limited", "data_export_too_large", "internal_error", "unknown",
+  "content_report_transition_invalid", "data_export_rate_limited", "data_export_too_large", "request_too_large", "unsupported_media_type",
+  "internal_error", "unknown",
 ]);
 const SAFE_MESSAGES = new Set([
   "incoming request", "request completed", "request errored", "account_sync_rejected", "app_check_rejected", "request_rejected", "request_failed",
