@@ -262,7 +262,7 @@
             }
           },
           "400": {
-            "description": "Malformed event",
+            "description": "Malformed event; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -590,7 +590,7 @@
             }
           },
           "400": {
-            "description": "Invalid registration evidence",
+            "description": "Invalid registration evidence; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -704,7 +704,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -1693,7 +1693,7 @@
             }
           },
           "400": {
-            "description": "Invalid acceptance",
+            "description": "Invalid acceptance; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -1828,7 +1828,7 @@
             }
           },
           "400": {
-            "description": "Invalid confirmation",
+            "description": "Invalid confirmation; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -2207,7 +2207,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -2720,7 +2720,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -2914,7 +2914,7 @@
             }
           },
           "400": {
-            "description": "Invalid strict request",
+            "description": "Invalid strict request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -4024,6 +4024,16 @@
               }
             }
           },
+          "400": {
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Authentication, recent reauthentication, or active account required",
             "x-patternly-error-codes": [
@@ -4243,6 +4253,16 @@
               }
             }
           },
+          "400": {
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "401": {
             "description": "App Check required",
             "content": {
@@ -4325,6 +4345,16 @@
               }
             }
           },
+          "400": {
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Uniform unavailable response",
             "content": {
@@ -4397,6 +4427,16 @@
               }
             }
           },
+          "400": {
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Rate limited",
             "content": {
@@ -4449,6 +4489,16 @@
               }
             }
           },
+          "400": {
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Uniform unavailable response",
             "content": {
@@ -4491,6 +4541,16 @@
                       "$ref": "#/components/schemas/LegalRequest"
                     }
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -4709,6 +4769,16 @@
               }
             }
           },
+          "400": {
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Valid App Check required or authenticated account unavailable",
             "x-patternly-error-codes": [
@@ -4840,7 +4910,7 @@
             }
           },
           "400": {
-            "description": "Invalid sync request, fingerprint, or track bundle",
+            "description": "Invalid sync request, fingerprint, or track bundle; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -4949,7 +5019,7 @@
             }
           },
           "400": {
-            "description": "Invalid snapshot",
+            "description": "Invalid snapshot; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -5005,6 +5075,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AdoptionExecutionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -5087,7 +5167,7 @@
             }
           },
           "400": {
-            "description": "Invalid transfer start",
+            "description": "Invalid transfer start; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -5178,7 +5258,7 @@
             }
           },
           "400": {
-            "description": "Invalid record, chunk, or fingerprint",
+            "description": "Invalid record, chunk, or fingerprint; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -5279,7 +5359,7 @@
             }
           },
           "400": {
-            "description": "Invalid seal",
+            "description": "Invalid seal; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -5370,7 +5450,7 @@
             }
           },
           "400": {
-            "description": "Invalid or unsupported merge",
+            "description": "Invalid or unsupported merge; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -5455,7 +5535,7 @@
             }
           },
           "400": {
-            "description": "Invalid confirmation",
+            "description": "Invalid confirmation; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -5549,7 +5629,7 @@
             }
           },
           "400": {
-            "description": "Invalid apply request",
+            "description": "Invalid apply request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -5747,6 +5827,16 @@
               }
             }
           },
+          "400": {
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Account is inactive or authorization generation is missing, invalid, or stale",
             "x-patternly-error-codes": [
@@ -5869,6 +5959,16 @@
                       "minLength": 1
                     }
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -6041,6 +6141,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DeletionOperationStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -6483,7 +6593,7 @@
             }
           },
           "400": {
-            "description": "Invalid report",
+            "description": "Invalid report; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -7066,6 +7176,16 @@
               }
             }
           },
+          "400": {
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
             "description": "Revision or lifecycle conflict",
             "content": {
@@ -7209,6 +7329,16 @@
               }
             }
           },
+          "400": {
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
             "description": "Revision or lifecycle conflict",
             "content": {
@@ -7277,6 +7407,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SecurityIncidentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -7400,6 +7540,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SecurityIncidentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -7900,7 +8050,7 @@
             }
           },
           "400": {
-            "description": "Invalid status transition request",
+            "description": "Invalid status transition request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -8191,7 +8341,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -8602,7 +8752,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -8905,7 +9055,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -9113,7 +9263,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -9289,7 +9439,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request; invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body",
             "content": {
               "application/json": {
                 "schema": {

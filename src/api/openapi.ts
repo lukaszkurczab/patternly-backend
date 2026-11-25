@@ -985,6 +985,16 @@ function enrichOpenApiDocument(document: OpenApiRecord): void {
       }
       const responses = (operation.responses as OpenApiRecord | undefined) ?? {};
       operation.responses = responses;
+      if (operation.requestBody !== undefined) {
+        // The JSON parser runs before every guard, so an empty or malformed body is rejected first.
+        const malformedBody = "invalid_request before every guard and handler when a JSON content-type carries an empty or malformed body";
+        const badRequest = (responses["400"] as OpenApiRecord | undefined) ?? {};
+        const description = typeof badRequest.description === "string" && badRequest.description.length > 0 ? `${badRequest.description}; ${malformedBody}` : malformedBody;
+        const documentedCodes = Array.isArray(badRequest["x-patternly-error-codes"])
+          ? badRequest["x-patternly-error-codes"].filter((value): value is string => typeof value === "string")
+          : undefined;
+        responses["400"] = { ...badRequest, description, ...(documentedCodes === undefined ? {} : { "x-patternly-error-codes": [...new Set([...documentedCodes, "invalid_request"])] }) };
+      }
       if (securityProfile === "bearer" || securityProfile === "app_check_bearer" || securityProfile === "app_check_optional_bearer") {
         const accountNotFound = (responses["404"] as OpenApiRecord | undefined) ?? {};
         const description = typeof accountNotFound.description === "string" && accountNotFound.description.length > 0

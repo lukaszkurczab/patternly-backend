@@ -3,7 +3,7 @@ import type { Environment } from "../../config/environment.js";
 
 const UNMATCHED_ROUTE = "UNMATCHED";
 const SAFE_LOG_FIELDS = new Set(["req", "res", "err", "event", "stage", "code", "correlationId", "signal", "responseTime"]);
-const SAFE_EVENTS = new Set(["account_sync_rejected", "app_check_rejected", "request_failed", "bootstrap_failed", "shutting_down", "shutdown_failed"]);
+const SAFE_EVENTS = new Set(["account_sync_rejected", "app_check_rejected", "request_rejected", "request_failed", "bootstrap_failed", "shutting_down", "shutdown_failed"]);
 const SAFE_STAGES = new Set(["sync", "preview", "confirm"]);
 const SAFE_CODES = new Set([
   "invalid_request", "version_conflict", "account_revision_conflict", "progress_fingerprint_mismatch", "mutation_id_reuse",
@@ -15,7 +15,7 @@ const SAFE_CODES = new Set([
   "content_report_transition_invalid", "data_export_rate_limited", "data_export_too_large", "internal_error", "unknown",
 ]);
 const SAFE_MESSAGES = new Set([
-  "incoming request", "request completed", "request errored", "account_sync_rejected", "app_check_rejected", "request_failed",
+  "incoming request", "request completed", "request errored", "account_sync_rejected", "app_check_rejected", "request_rejected", "request_failed",
   "bootstrap_failed", "shutting_down", "shutdown_failed", "suppressed_log_message",
 ]);
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
