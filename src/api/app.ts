@@ -742,6 +742,13 @@ export function buildApplication(dependencies: ApplicationDependencies) {
   const app = Fastify({
     loggerInstance: createLogger(dependencies.environment, dependencies.logStream),
     genReqId: () => randomUUID(),
+    // SEC-BE-01: on Cloud Run (`*.run.app`, no load balancer) the socket peer is the Google front end
+    // at a link-local address and it appends the real client as the last X-Forwarded-For element,
+    // after the client-supplied ones (sandbox probe 25.11.2026). Trust only that peer, so
+    // `request.ip` is the appended client. `true` would let clients spoof it, and Fastify treats a
+    // numeric hop count as trusting nobody. Every other peer keeps its socket address (fail closed);
+    // an external load balancer in front of Cloud Run would need its own range added here.
+    trustProxy: "169.254.0.0/16",
   });
   const runtimeRoutes: RuntimeRouteDescriptor[] = [];
   app.decorate("patternlyRouteInventory", runtimeRoutes);
